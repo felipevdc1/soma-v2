@@ -1,0 +1,211 @@
+{
+  "schema": "soma-hooks-map/v1",
+  "version": "2.1.0",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_HOME}/hooks/pre-commit-gate.cjs\""
+          },
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_HOME}/hooks/spec-completeness-gate.cjs\""
+          }
+        ]
+      },
+      {
+        "matcher": "Agent|TeamCreate",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_HOME}/hooks/thermal-guard.cjs\""
+          }
+        ]
+      },
+      {
+        "matcher": "Agent",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_HOME}/hooks/agent-mode-gate.cjs\""
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_HOME}/hooks/cognitive-gate.cjs\""
+          },
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_HOME}/hooks/depth-guard.cjs\""
+          }
+        ]
+      },
+      {
+        "matcher": "Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_HOME}/hooks/reuse-gate.cjs\""
+          }
+        ]
+      },
+      {
+        "matcher": "EnterPlanMode",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_HOME}/hooks/cognitive-gate-unlock.cjs\""
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_HOME}/hooks/hyd-gate.cjs\""
+          },
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_HOME}/hooks/cognitive-gate.cjs\""
+          },
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_HOME}/hooks/depth-guard.cjs\""
+          }
+        ]
+      },
+      {
+        "matcher": "Task",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_HOME}/hooks/agent-mode-gate.cjs\""
+          }
+        ]
+      },
+      {
+        "matcher": "EnterPlanMode",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_HOME}/hooks/cognitive-gate-unlock.cjs\""
+          }
+        ]
+      },
+      {
+        "matcher": "Skill",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_HOME}/hooks/discover-before-specify.cjs\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "matcher": "manual|auto",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_HOME}/hooks/write-compact-marker.cjs\""
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_HOME}/hooks/write-compact-marker.cjs\""
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_HOME}/hooks/session-init.cjs\""
+          }
+        ]
+      },
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_HOME}/hooks/session-init.cjs\""
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "matcher": "clear",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_HOME}/hooks/session-end.cjs\""
+          }
+        ]
+      },
+      {
+        "matcher": "clear",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_HOME}/hooks/session-end.cjs\""
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_HOME}/hooks/subagent-init.cjs\""
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_HOME}/hooks/subagent-init.cjs\""
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_HOME}/hooks/capture-defer-gate.cjs\""
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_HOME}/hooks/insight-action-coupling.cjs\""
+          }
+        ]
+      }
+    ]
+  }
+}
