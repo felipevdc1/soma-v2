@@ -1,17 +1,20 @@
 {
   "schema": "soma-manifest/v1",
-  "version": "2.1.0-draft",
+  "version": "2.1.0",
   "release": "soma-v2.1-lab-mvp",
   "files": [
     {
       "id": "core.constitution",
       "path": "docs/constitution.md",
-      "sha256": "db0ddb793fc4132aa69a8a5522c471dca4088cb50c000269f1a2d74ae5d21bea",
-      "sourceMtime": "2026-04-26T13:40:14Z",
-      "sourceSha256": "db0ddb793fc4132aa69a8a5522c471dca4088cb50c000269f1a2d74ae5d21bea",
-      "targets": ["global", "project"],
+      "sha256": "4ba48405dac980928d9154f7212bc191edfa1cd311df9972ba075862fbace6ae",
+      "sourceMtime": "2026-05-05T00:00:00Z",
+      "sourceSha256": "4ba48405dac980928d9154f7212bc191edfa1cd311df9972ba075862fbace6ae",
+      "targets": [
+        "global",
+        "project"
+      ],
       "expansion_owner": null,
-      "status": "draft"
+      "status": "released"
     },
     {
       "id": "core.hyd-v2",
@@ -19,7 +22,10 @@
       "sha256": "883448797220396aa2f8c86aec0277a56e93aef5e806cfefcfa7201bf5268dd4",
       "sourceMtime": "2026-04-24T20:29:13Z",
       "sourceSha256": "3e6a1a8f6c4f0c8dadef714990e292c13b28ae7db16a23701759e8d4e01b384c",
-      "targets": ["global", "project"],
+      "targets": [
+        "global",
+        "project"
+      ],
       "expansion_owner": null,
       "status": "draft",
       "notes": "Extracted from ~/.codex/AGENTS.md via sed marker pattern"
@@ -30,7 +36,10 @@
       "sha256": "c2cec032f33aa554c9b6786d66551d57c099baf4142309de4e5d7ab1024f9601",
       "sourceMtime": "2026-04-24T20:29:13Z",
       "sourceSha256": "3e6a1a8f6c4f0c8dadef714990e292c13b28ae7db16a23701759e8d4e01b384c",
-      "targets": ["global", "project"],
+      "targets": [
+        "global",
+        "project"
+      ],
       "expansion_owner": null,
       "status": "draft",
       "notes": "Extracted from ~/.codex/AGENTS.md via sed marker pattern"
@@ -41,7 +50,10 @@
       "sha256": "956656f47465969431f37b3e982fb4e2f1069a3696e0d90645ac3141dfe80d0a",
       "sourceMtime": null,
       "sourceSha256": null,
-      "targets": ["global", "project"],
+      "targets": [
+        "global",
+        "project"
+      ],
       "expansion_owner": null,
       "status": "draft",
       "notes": "Expanded from soma-stsd block + Recovery Protocol from soma-run.md"
@@ -52,7 +64,9 @@
       "sha256": "0bae837a25a095edf59cbea51ef73615b7830225efdd1454f391f0e32a740b4f",
       "sourceMtime": null,
       "sourceSha256": null,
-      "targets": ["global"],
+      "targets": [
+        "global"
+      ],
       "expansion_owner": null,
       "status": "draft",
       "notes": "New file from template literal in plan"
@@ -63,7 +77,9 @@
       "sha256": "ab352e651e417d7aff9fa1328eaad588ebd95336c06b1e79d66e6893b8306680",
       "sourceMtime": null,
       "sourceSha256": null,
-      "targets": ["global"],
+      "targets": [
+        "global"
+      ],
       "expansion_owner": "phase-2+ or canonical-include",
       "status": "draft",
       "path-refs-pending": true
@@ -74,7 +90,9 @@
       "sha256": "b0b539d376c46132c844e978c75d67a51391aaba87175f0658024bb4ea9b42af",
       "sourceMtime": null,
       "sourceSha256": null,
-      "targets": ["global"],
+      "targets": [
+        "global"
+      ],
       "expansion_owner": "phase-2+ or canonical-include",
       "status": "draft",
       "path-refs-pending": true
@@ -85,7 +103,9 @@
       "sha256": "2fd8fb29c2622ee47626c81975c838239efe3bdaa3eba1bbce1b8e3b6f16ed04",
       "sourceMtime": null,
       "sourceSha256": null,
-      "targets": ["global"],
+      "targets": [
+        "global"
+      ],
       "expansion_owner": "phase-2+ or canonical-include",
       "status": "draft",
       "path-refs-pending": true
@@ -96,7 +116,9 @@
       "sha256": "6dd4d888f5e3adec66205b3e9493dec8e54728307035ee8603a1a75bc380cf1d",
       "sourceMtime": null,
       "sourceSha256": null,
-      "targets": ["global"],
+      "targets": [
+        "global"
+      ],
       "expansion_owner": "phase-4 or canonical-include",
       "status": "draft",
       "path-refs-pending": true
@@ -107,7 +129,9 @@
       "sha256": "26dd1b3c6b5a14171099c107e31ceb2f300d323449cf6a0e40516654f101219b",
       "sourceMtime": null,
       "sourceSha256": null,
-      "targets": ["global"],
+      "targets": [
+        "global"
+      ],
       "expansion_owner": "phase-2+ or canonical-include",
       "status": "draft",
       "path-refs-pending": true
@@ -118,7 +142,10 @@
       "sha256": "76eec24393527aeba3b69ff54262cd8e433032f9b62fe328c5da75bb63eca377",
       "sourceMtime": null,
       "sourceSha256": null,
-      "targets": ["codex.global", "project.AGENTS"],
+      "targets": [
+        "codex.global",
+        "project.AGENTS"
+      ],
       "expansion_owner": null,
       "status": "draft"
     },
@@ -128,7 +155,10 @@
       "sha256": "94494855a8654b25e5ce8be0d8774663886d7ad5a07f00c2d16d6f2405e3592b",
       "sourceMtime": null,
       "sourceSha256": null,
-      "targets": ["claude.global", "project.AGENTS"],
+      "targets": [
+        "claude.global",
+        "project.AGENTS"
+      ],
       "expansion_owner": null,
       "status": "draft"
     },
@@ -138,7 +168,9 @@
       "sha256": "e2491c8581788b16c93ab300f0886da10788f0c0f9789a243dd594850ffc681f",
       "sourceMtime": "2026-04-24T20:29:13Z",
       "sourceSha256": "3e6a1a8f6c4f0c8dadef714990e292c13b28ae7db16a23701759e8d4e01b384c",
-      "targets": ["codex.global"],
+      "targets": [
+        "codex.global"
+      ],
       "expansion_owner": null,
       "status": "draft",
       "notes": "Lab copy with anchored id/version/sha256 attributes added. Source untouched."
@@ -149,7 +181,9 @@
       "sha256": "ac9f5463f1b9c1049ad94400e16d8c2cb6184b30116151ed72b831f95705e960",
       "sourceMtime": "2026-04-24T20:29:13Z",
       "sourceSha256": "58b76bff63bb5f32d5dec5e2157c6a1b600b9ee82f87937ce0f4db4ce931a958",
-      "targets": ["global"],
+      "targets": [
+        "global"
+      ],
       "expansion_owner": null,
       "status": "draft",
       "notes": "Lab copy with DRIFT flag prepended. Source untouched. D1+D2 drift documented."

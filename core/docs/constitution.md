@@ -1,8 +1,8 @@
-# SOMA Constitution v1.0 (DRAFT)
+# SOMA Constitution v1.0.0
 
-**Versão:** 1.0.0-draft
+**Versão:** 1.0.0
 **Data:** 2026-04-19
-**Status:** DRAFT — aguarda aprovação do usuário antes de ratificação
+**Status:** Ratified 2026-05-05
 **Escopo:** Governa toda run do SOMA Executor Autônomo. Aplica-se ao orchestrator (Opus), aos executores (Sonnet/Haiku) e aos auditores SONAR.
 
 ---
@@ -290,7 +290,7 @@ Referência: CLAUDE.md Recovery Protocol; `feedback_agent_teams_workflow.md` R5;
 A Constitution é **versionada** (semver: MAJOR.MINOR.PATCH). Emendas seguem protocolo:
 
 1. **Trigger** — Failure Log ganha entrada nova + the user identifies que regra existente não cobriu. OU canary run (Fase 4) revela gap. OU 3+ runs reais consecutivas falham no mesmo Article.
-2. **Draft** — Claude propõe emenda em `constitution-amendments/{version}-{slug}.md`. Diff explícito dos Articles afetados.
+2. **Proposta** — Claude propõe emenda em `constitution-amendments/{version}-{slug}.md`. Diff explícito dos Articles afetados.
 3. **Human approval** — The user approves or rejects. Gate humano obrigatório (Constitution não muda sozinha).
 4. **Bump** — emenda aprovada:
    - PATCH (ex: 1.0.0 → 1.0.1) — typo, clarification sem mudança normativa.
