@@ -2,6 +2,16 @@
   "schema": "soma-hooks-map/v1",
   "version": "2.1.0",
   "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_HOME}/hooks/hyd-gate.cjs\""
+          }
+        ]
+      }
+    ],
     "PreToolUse": [
       {
         "matcher": "Bash",
@@ -35,6 +45,15 @@
         ]
       },
       {
+        "matcher": "Task",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_HOME}/hooks/agent-mode-gate.cjs\""
+          }
+        ]
+      },
+      {
         "matcher": "Edit|Write",
         "hooks": [
           {
@@ -44,6 +63,10 @@
           {
             "type": "command",
             "command": "node \"${CLAUDE_HOME}/hooks/depth-guard.cjs\""
+          },
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_HOME}/hooks/hyd-gate.cjs\""
           }
         ]
       },
@@ -53,41 +76,6 @@
           {
             "type": "command",
             "command": "node \"${CLAUDE_HOME}/hooks/reuse-gate.cjs\""
-          }
-        ]
-      },
-      {
-        "matcher": "EnterPlanMode",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node \"${CLAUDE_HOME}/hooks/cognitive-gate-unlock.cjs\""
-          }
-        ]
-      },
-      {
-        "matcher": "Edit|Write",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node \"${CLAUDE_HOME}/hooks/hyd-gate.cjs\""
-          },
-          {
-            "type": "command",
-            "command": "node \"${CLAUDE_HOME}/hooks/cognitive-gate.cjs\""
-          },
-          {
-            "type": "command",
-            "command": "node \"${CLAUDE_HOME}/hooks/depth-guard.cjs\""
-          }
-        ]
-      },
-      {
-        "matcher": "Task",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node \"${CLAUDE_HOME}/hooks/agent-mode-gate.cjs\""
           }
         ]
       },
@@ -113,15 +101,6 @@
     ],
     "PreCompact": [
       {
-        "matcher": "manual|auto",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node \"${CLAUDE_HOME}/hooks/write-compact-marker.cjs\""
-          }
-        ]
-      },
-      {
         "hooks": [
           {
             "type": "command",
@@ -131,15 +110,6 @@
       }
     ],
     "SessionStart": [
-      {
-        "matcher": "startup|resume|clear|compact",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node \"${CLAUDE_HOME}/hooks/session-init.cjs\""
-          }
-        ]
-      },
       {
         "matcher": "startup|resume|clear|compact",
         "hooks": [
@@ -159,27 +129,9 @@
             "command": "node \"${CLAUDE_HOME}/hooks/session-end.cjs\""
           }
         ]
-      },
-      {
-        "matcher": "clear",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node \"${CLAUDE_HOME}/hooks/session-end.cjs\""
-          }
-        ]
       }
     ],
     "SubagentStart": [
-      {
-        "matcher": "*",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node \"${CLAUDE_HOME}/hooks/subagent-init.cjs\""
-          }
-        ]
-      },
       {
         "hooks": [
           {
