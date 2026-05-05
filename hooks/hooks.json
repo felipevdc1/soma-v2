@@ -1,0 +1,6 @@
+{
+  "_comment": "Plugin hook manifest. Full event mapping deferred to Phase 6.4 — install.sh + merge-settings.cjs handle hook registration into ~/.claude/settings.json directly. This file is plugin-marketplace-loader-compatible scaffold.",
+  "hooks": {
+    "_TODO_phase_6_4": "Map each of the 17 SOMA hooks to its Claude Code event (PreToolUse/PostToolUse/Stop/SessionStart/etc) when Phase 6.4 install.sh is being designed. Reference: ~/.claude/settings.json shows current event mapping for SOMA hooks on Felipe's machine."
+  }
+}

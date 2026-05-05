@@ -1,0 +1,5 @@
+{
+  "name": "cli-library",
+  "version": "1.0.0",
+  "bin": { "cli": "./dist/index.js" }
+}

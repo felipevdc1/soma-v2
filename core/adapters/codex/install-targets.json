@@ -1,0 +1,36 @@
+{
+  "schema": "soma-install-targets/v1",
+  "tool": "codex",
+  "entries": [
+    {
+      "block_id": "block.codex.AGENTS.codebase-memory-mcp",
+      "source_doc": "docs/hyd-v2.md",
+      "target_path": "~/.codex/AGENTS.md",
+      "target_anchor_id": "block.codex.AGENTS.codebase-memory-mcp"
+    },
+    {
+      "block_id": "block.codex.AGENTS.hyd-v2",
+      "source_doc": "docs/hyd-v2.md",
+      "target_path": "~/.codex/AGENTS.md",
+      "target_anchor_id": "block.codex.AGENTS.hyd-v2"
+    },
+    {
+      "block_id": "block.codex.AGENTS.soma-stsd",
+      "source_doc": "docs/soma-stsd.md",
+      "target_path": "~/.codex/AGENTS.md",
+      "target_anchor_id": "block.codex.AGENTS.soma-stsd"
+    },
+    {
+      "block_id": "block.codex.AGENTS.codebase-memory-mcp",
+      "source_doc": "docs/hyd-v2.md",
+      "target_path": "~/AGENTS.md",
+      "target_anchor_id": "block.codex.AGENTS.codebase-memory-mcp"
+    },
+    {
+      "block_id": "block.codex.AGENTS.soma-stsd",
+      "source_doc": "docs/soma-stsd.md",
+      "target_path": "~/AGENTS.md",
+      "target_anchor_id": "block.codex.AGENTS.soma-stsd"
+    }
+  ]
+}

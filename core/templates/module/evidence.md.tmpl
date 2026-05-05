@@ -1,0 +1,37 @@
+# Evidence: {{YYYY-MM-DD}}-{{TASK_SHORT_NAME}}
+
+<!-- TEMPLATE: soma-v2.1 evidence file. Follows schema from PLAN §6.6. -->
+<!-- expansion_owner: agent (after real work) -->
+
+---
+schema: soma-evidence/v1
+task_id: "{{YYYY-MM-DD-short-name}}"
+modules:
+  - "{{MODULE_NAME}}"
+agent: codex | claude | other
+status: pass | partial | blocked | failed
+commands_run:
+  - "{{COMMAND}}"
+claims:
+  - claim: "{{CLAIM}}"
+    proof: "{{PROOF_REFERENCE}}"
+known_gaps: []
+---
+
+## Summary
+Brief description of what was validated.
+
+## Commands Run
+
+```
+{{COMMAND_OUTPUT_REFERENCE}}
+```
+
+## Claims and Proof
+
+| Claim | Proof | Status |
+|---|---|---|
+| {{CLAIM}} | {{PROOF}} | pass/fail |
+
+## Known Gaps
+None. (Or list explicitly — failed validation is still useful evidence.)

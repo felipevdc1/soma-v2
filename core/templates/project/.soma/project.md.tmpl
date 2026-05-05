@@ -1,0 +1,44 @@
+# {{PROJECT_NAME}} — Project Doc
+
+<!-- TEMPLATE: soma-v2.1 project.md stub. Fill during `soma init`. -->
+<!-- expansion_owner: soma init (Phase 3) -->
+
+---
+schema: soma-project/v1
+project: "{{PROJECT_NAME}}"
+status: hypothesis | active | stale
+soma_version: 2.1.0-draft
+initialized_at: "{{ISO8601_DATE}}"
+---
+
+## Behavioral Baseline (LLM agents working on this project)
+
+Adopted from Karpathy's CLAUDE.md guidelines. Applies before any code change, regardless of agent or tool. Tradeoff: these guidelines bias toward caution over speed; for trivial tasks, use judgment.
+
+1. **Think Before Coding** — State assumptions explicitly. If multiple interpretations exist, present them — don't pick silently. If something is unclear, stop. Name what's confusing. Ask.
+2. **Simplicity First** — Minimum code that solves the problem. No features beyond what was asked. No abstractions for single-use code. No "flexibility" or "configurability" that wasn't requested. Ask: "Would a senior engineer say this is overcomplicated?" If yes, simplify.
+3. **Surgical Changes** — Touch only what you must. Match existing style, even if you'd do it differently. Don't refactor things that aren't broken. Every changed line should trace directly to the user's request.
+4. **Goal-Driven Execution** — Define success criteria. Loop until verified. Transform tasks into verifiable goals: "Add validation" → "Write tests for invalid inputs, then make them pass". Strong success criteria let you loop independently; weak criteria require constant clarification.
+5. **Capture Before Defer** — When proposing to defer any work item ("we'll do X later", "post-Phase Y", "deferred", "out of scope"), name explicitly WHERE X lives durably (handoff bucket name, memory file path, spec section, ADR ID) BEFORE the deferral lands. Conversational acknowledgment is NOT capture. If X is captured nowhere yet, capture it first.
+
+These guidelines are working if: fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.
+
+---
+
+## Purpose
+What this project exists to do.
+
+## Current State
+What is complete, partial, broken, or unknown. Mark inferred content as `[hypothesis]`.
+
+## Stack
+Languages, frameworks, key dependencies.
+
+## Module Index
+- See `.soma/modules/index.md`
+
+## Key Decisions
+- None yet. Document significant decisions as ADRs in `.soma/decisions/`.
+
+## What Not To Do
+Earned anti-patterns only — add after observed mistakes.

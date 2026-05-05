@@ -1,0 +1,47 @@
+# Module: {{MODULE_NAME}}
+
+<!-- TEMPLATE: soma-v2.1 module doc. Follows schema from PLAN §6.5 + §4.4. -->
+<!-- expansion_owner: soma module add (Phase 4) -->
+
+---
+schema: soma-module/v1
+module: "{{MODULE_NAME}}"
+status: hypothesis | active | stale | deprecated
+owners: []
+last_verified: "{{ISO8601_DATE}}"
+verification:
+  - command: "{{TEST_COMMAND}}"
+  - files_checked:
+      - "{{SOURCE_PATH}}"
+source_confidence: low | medium | high
+---
+
+## Purpose
+What this module exists to do.
+
+## Current State
+What is complete, partial, broken, or unknown.
+
+## Main Files
+Important files and why they matter.
+
+## Contracts
+Inputs, outputs, APIs, schemas, data shapes, UX expectations.
+
+## Commands
+Focused tests, builds, linters, smoke checks.
+
+## Routing
+What to load for common task types. What to skip.
+
+## Patterns
+Local conventions that should be preserved.
+
+## Risks
+Known footguns, regressions, edge cases.
+
+## What Not To Do
+Earned anti-patterns only — add after observed mistakes.
+
+## Worklog Index
+Links to relevant past work and lessons.

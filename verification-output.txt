@@ -1,0 +1,12 @@
+=== POST-DECOUPLING VERIFICATION ===
+Cat A — paths remaining:
+(none)
+
+Cat B — username remaining:
+(none)
+
+Cat C — Felipe identity refs remaining:
+(none)
+
+Cat C — project names remaining:
+(none)

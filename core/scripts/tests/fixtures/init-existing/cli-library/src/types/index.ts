@@ -1,0 +1,2 @@
+// stub
+export type Config = {}

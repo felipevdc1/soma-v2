@@ -1,0 +1,21 @@
+{
+  "name": "soma",
+  "version": "2.1.0",
+  "description": "SOMA v2.1 — Spec-Test-Steps-Driven orchestration framework",
+  "license": "MIT",
+  "author": "Felipe Carneiro",
+  "contributors": [
+    "Bruno Moreira (SOMA Voxel theme inspiration)"
+  ],
+  "homepage": "https://github.com/felipevdc/soma-v2",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/felipevdc/soma-v2.git"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node --test core/scripts/__tests__/*.test.cjs"
+  }
+}

@@ -1,0 +1,38 @@
+---
+schema: soma-module/v1
+name: "{{MODULE_NAME}}"
+status: hypothesis
+source_confidence: low
+owners: []
+last_verified: null
+source_path: "{{MODULE_SOURCE_PATH}}"
+verification:
+  command: null
+  files_checked: {{MODULE_FILES_CHECKED}}
+initialized_at: "{{ISO8601_DATE}}"
+---
+
+<!-- Phase 4d optional fields (add to front-matter above when using `soma doctor --foundation-check`):
+  layer: leaves        # Values: roots | trunk | leaves. Default: leaves if absent.
+                       # roots = foundation infra (DB, auth core, config)
+                       # trunk = main app modules (APIs, business logic)
+                       # leaves = expansion/feature modules (reports, analytics, UI)
+  source_files: []     # List of source files for criteria 3/4/5 checks.
+-->
+
+# {{MODULE_NAME}}
+
+<!-- TEMPLATE: soma-v2.1 module stub. Status=hypothesis means agent-inferred, not yet human-verified. -->
+<!-- Promote to active: `soma module promote {{MODULE_NAME}}` (Phase 4c) after verifying files_checked content. -->
+
+## Purpose
+What this module exists to do. [hypothesis — fill after reviewing source files]
+
+## Source Files
+{{MODULE_FILES_CHECKED_LIST}}
+
+## Decisions
+None yet.
+
+## What Not To Do
+Earned anti-patterns only — add after observed mistakes.

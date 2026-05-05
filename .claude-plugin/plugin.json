@@ -1,0 +1,20 @@
+{
+  "name": "soma",
+  "description": "SOMA v2.1 — Spec-Test-Steps-Driven orchestration framework with anti-shallowness gates, traceable execution, and cross-LLM continuity.",
+  "version": "2.1.0",
+  "author": {
+    "name": "Felipe Carneiro",
+    "email": null
+  },
+  "homepage": "https://github.com/felipevdc/soma-v2",
+  "repository": "https://github.com/felipevdc/soma-v2",
+  "license": "MIT",
+  "keywords": [
+    "orchestration",
+    "spec-driven-development",
+    "tdd",
+    "workflow",
+    "agents",
+    "claude-code"
+  ]
+}

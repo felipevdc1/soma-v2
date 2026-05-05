@@ -1,0 +1,30 @@
+{
+  "schema": "soma-install-targets/v1",
+  "tool": "claude",
+  "entries": [
+    {
+      "block_id": "block.claude.CLAUDE_md.cbm",
+      "source_doc": "docs/hyd-v2.md",
+      "target_path": "~/.claude/CLAUDE.md",
+      "target_anchor_id": "block.claude.CLAUDE_md.cbm"
+    },
+    {
+      "block_id": "block.claude.CLAUDE_md.hyd-v2",
+      "source_doc": "docs/hyd-v2.md",
+      "target_path": "~/.claude/CLAUDE.md",
+      "target_anchor_id": "block.claude.CLAUDE_md.hyd-v2"
+    },
+    {
+      "block_id": "block.claude.CLAUDE_md.soma-stsd",
+      "source_doc": "docs/soma-stsd.md",
+      "target_path": "~/.claude/CLAUDE.md",
+      "target_anchor_id": "block.claude.CLAUDE_md.soma-stsd"
+    },
+    {
+      "block_id": "block.claude.CLAUDE_md.soma-voxel",
+      "source_doc": "docs/output-style.md",
+      "target_path": "~/.claude/CLAUDE.md",
+      "target_anchor_id": "block.claude.CLAUDE_md.soma-voxel"
+    }
+  ]
+}
