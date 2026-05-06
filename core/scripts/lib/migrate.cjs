@@ -7,6 +7,7 @@
  */
 
 const fs = require('node:fs');
+const crypto = require('node:crypto');
 
 /**
  * Extract content between <!-- codebase-memory-mcp:start --> and <!-- codebase-memory-mcp:end -->
@@ -101,7 +102,9 @@ exports.createMigrationSnapshot = function(somaHome, files) {
   const fileMap = {};
   for (const file of files) {
     if (fs.existsSync(file)) {
-      const snapshotFile = path.basename(file) + '.snapshot';
+      const absPath = path.resolve(file);
+      const pathHash = crypto.createHash('sha256').update(absPath).digest('hex').slice(0, 8);
+      const snapshotFile = path.basename(file) + '.' + pathHash + '.snapshot';
       const dest = path.join(snapshotDir, snapshotFile);
       fs.copyFileSync(file, dest);
       fileMap[snapshotFile] = file;
