@@ -396,6 +396,71 @@ function runExistingBranch({ targetPath, somaHome, flags, useJson }) {
     renderedModules.push({ mod, content });
   }
 
+  // ---- Handle --dry-run mode (existing branch) ----
+  // Must come BEFORE any filesystem mutation. Compute planned file list from
+  // what would be created, then return without writing anything.
+  if (flags.dryRun) {
+    const plannedFiles = [
+      path.join(targetPath, '.soma', 'project.md'),
+      path.join(targetPath, '.soma', 'CONTEXT.md'),
+      path.join(targetPath, '.soma', 'manifest.json'),
+      path.join(targetPath, '.soma', 'modules', 'index.md'),
+      ...modules.map(m => path.join(targetPath, '.soma', 'modules', `${m.name}.md`))
+    ];
+
+    const modulesOut = modules.map(m => {
+      const out = {
+        name: m.name,
+        files_count: m.files_count,
+        source_path: m.source_path,
+        source_confidence: 'low'
+      };
+      if (m.commit_count_90d !== undefined) out.commit_count_90d = m.commit_count_90d;
+      return out;
+    });
+
+    process.exitCode = 0;
+    if (useJson) {
+      const result = {
+        tool: 'init',
+        branch: 'existing',
+        mode: 'dry-run',
+        soma_home: somaHome,
+        target_path: targetPath,
+        heuristic,
+        summary: {
+          files_planned: plannedFiles.length,
+          modules_detected: modules.length
+        },
+        files_planned: plannedFiles,
+        modules: modulesOut
+      };
+      if (flags.deep) {
+        result.deep_requested = true;
+        result.deep_window_days = 90;
+        result.git_repo_detected = gitRepoDetected;
+      }
+      if (warnings.length > 0) result.warnings = warnings;
+      if (modulesFilteredOut.length > 0) result.modules_filtered_out = modulesFilteredOut;
+      process.stdout.end(JSON.stringify(result, null, 2) + '\n');
+    } else if (!flags.quiet) {
+      process.stdout.write(`${colorize('bold', 'SOMA init --existing')} — ${targetPath} ${colorize('cyan', '[dry-run]')}\n\n`);
+      process.stdout.write(`Heuristic: ${heuristic}${flags.deep ? ` (--deep, ${90}d window)` : ''}\n`);
+      if (warnings.length > 0) {
+        for (const w of warnings) process.stdout.write(`${colorize('yellow', 'WARN')}  ${w}\n`);
+      }
+      process.stdout.write(`${modules.length} modules detected\n\n`);
+      for (const f of plannedFiles) {
+        const rel = path.relative(targetPath, f);
+        process.stdout.write(`${colorize('cyan', 'PLANNED')}  ${rel}\n`);
+      }
+      process.stdout.end(`\n${plannedFiles.length} files would be created.\n`);
+    } else {
+      process.stdout.end();
+    }
+    return;
+  }
+
   // Write all files
   const createdFiles = [];
 
