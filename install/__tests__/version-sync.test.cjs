@@ -6,6 +6,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const crypto = require('node:crypto');
+const { spawnSync } = require('node:child_process');
 
 const { syncVersions, checkDrift } = require('../version-sync.cjs');
 
@@ -125,4 +126,78 @@ test('check: core/manifest.json drift → drift detected', () => {
   assert.ok(!result.ok, 'checkDrift should return ok=false');
   assert.ok(result.drifted.some(d => d.file.includes('manifest.json')),
     'core/manifest.json should be in drifted list');
+});
+
+test('CLI --help: exits 0 with usage output and zero file mutations (purity check)', () => {
+  // This test will FAIL before the --help early-exit patch because running --help
+  // currently invokes syncVersions() which mutates manifest files.
+  const dir = mkTmpDir();
+  createRepoFixture(dir, '2.1.0', {
+    pluginVersion: '1.0.0', // intentional drift — so sync would actually mutate
+    packageVersion: '1.0.0',
+    coreVersion: '1.0.0'
+  });
+
+  const pluginFile = path.join(dir, '.claude-plugin', 'plugin.json');
+  const pkgFile = path.join(dir, 'package.json');
+  const coreFile = path.join(dir, 'core', 'manifest.json');
+  const versionFile = path.join(dir, 'VERSION');
+
+  // Capture pre-run shasums
+  const pre = {
+    plugin: sha256(pluginFile),
+    pkg: sha256(pkgFile),
+    core: sha256(coreFile),
+    version: sha256(versionFile),
+  };
+
+  // Run with --help using the actual CLI entry point
+  const syncScript = path.join(__dirname, '..', 'version-sync.cjs');
+  const result = spawnSync(process.execPath, [syncScript, '--help'], {
+    cwd: dir,
+    env: Object.assign({}, process.env),
+    timeout: 5000,
+  });
+
+  // Must exit 0
+  assert.strictEqual(result.status, 0, `--help must exit 0, got ${result.status}. stderr: ${result.stderr}`);
+
+  // Must print usage block
+  const stdout = result.stdout.toString();
+  assert.ok(stdout.includes('--help'), `--help output should include "--help", got: ${stdout}`);
+  assert.ok(stdout.includes('--check'), `--help output should include "--check", got: ${stdout}`);
+
+  // Capture post-run shasums — must be byte-identical
+  const post = {
+    plugin: sha256(pluginFile),
+    pkg: sha256(pkgFile),
+    core: sha256(coreFile),
+    version: sha256(versionFile),
+  };
+
+  assert.strictEqual(pre.plugin, post.plugin, 'plugin.json must be byte-identical after --help');
+  assert.strictEqual(pre.pkg, post.pkg, 'package.json must be byte-identical after --help');
+  assert.strictEqual(pre.core, post.core, 'core/manifest.json must be byte-identical after --help');
+  assert.strictEqual(pre.version, post.version, 'VERSION must be byte-identical after --help');
+});
+
+test('CLI -h: exits 0 with usage output (alias check)', () => {
+  const dir = mkTmpDir();
+  createRepoFixture(dir, '2.1.0', {
+    pluginVersion: '1.0.0',
+    packageVersion: '1.0.0',
+    coreVersion: '1.0.0'
+  });
+
+  const syncScript = path.join(__dirname, '..', 'version-sync.cjs');
+  const result = spawnSync(process.execPath, [syncScript, '-h'], {
+    cwd: dir,
+    env: Object.assign({}, process.env),
+    timeout: 5000,
+  });
+
+  assert.strictEqual(result.status, 0, `-h must exit 0, got ${result.status}. stderr: ${result.stderr}`);
+
+  const stdout = result.stdout.toString();
+  assert.ok(stdout.includes('--help'), `-h output should include "--help", got: ${stdout}`);
 });

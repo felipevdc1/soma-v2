@@ -159,6 +159,57 @@ test('overall report: 10 pass + 2 fail → blockers list with 2 items', () => {
   assert.ok(report.blockers.some(b => b.includes('gate11')), 'gate11 should be in blockers');
 });
 
+test('gate 11 (constitution): "Draft" in amendment lifecycle prose + Status Ratified → pass (regression: /draft/i was over-aggressive)', () => {
+  // This test fails against the old `/draft/i` regex (which matches any "draft" in prose).
+  // It should PASS with the tightened `/^\*\*Status:\*\*\s*DRAFT/im` regex.
+  const dir = mkTmpDir();
+  const docsDir = path.join(dir, 'docs');
+  fs.mkdirSync(docsDir, { recursive: true });
+
+  // Simulate real constitution.md: Status is Ratified, but amendment lifecycle prose
+  // uses "Draft" / "Proposta" stage labels in body text (line ~293).
+  const content = [
+    '# SOMA Constitution v1.0.0',
+    '',
+    '**Versão:** 1.0.0',
+    '**Status:** Ratified 2026-05-05',
+    '**Escopo:** Governa toda run do SOMA.',
+    '',
+    '## Amendment Protocol',
+    '',
+    '1. **Proposta** — Claude propõe emenda.',
+    '2. **Draft** — rascunho antes de aprovação.',
+    '3. **Ratified** — aprovado pelo Felipe.',
+    '',
+    'Versão v1.0.0 ratificada.',
+  ].join('\n');
+
+  fs.writeFileSync(path.join(docsDir, 'constitution.md'), content);
+
+  const result = GATES.gate11Constitution({ coreRoot: dir });
+  assert.ok(result.pass, `gate11 should PASS when Status header is Ratified even if prose contains "Draft": ${result.detail}`);
+});
+
+test('gate 11 (constitution): Status header explicitly DRAFT → fail (regression: new regex must still catch this)', () => {
+  // Sanity-check that the tightened regex still correctly catches the legitimate fail case.
+  const dir = mkTmpDir();
+  const docsDir = path.join(dir, 'docs');
+  fs.mkdirSync(docsDir, { recursive: true });
+
+  const content = [
+    '# SOMA Constitution v1.0.0',
+    '',
+    '**Status:** DRAFT',
+    '',
+    'Article I...',
+  ].join('\n');
+
+  fs.writeFileSync(path.join(docsDir, 'constitution.md'), content);
+
+  const result = GATES.gate11Constitution({ coreRoot: dir });
+  assert.ok(!result.pass, `gate11 should FAIL when Status header is DRAFT: ${result.detail}`);
+});
+
 test('mode=ci skips live-CLI gates', () => {
   // verifyPortability in ci mode should not error on missing soma CLI
   // It should return a result with live-CLI gates marked as skipped
