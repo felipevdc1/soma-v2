@@ -248,6 +248,28 @@ process.exit(0);
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
+test('migrateCbmDeprecation: G6 fails if frozen libs drift detected', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'g6-test-'));
+  const somaHome = path.join(tmpDir, '.soma-v2');
+  fs.mkdirSync(path.join(somaHome, 'scripts', 'lib'), { recursive: true });
+  // Write frozen libs with WRONG content (drift)
+  fs.writeFileSync(path.join(somaHome, 'scripts', 'lib', 'anchored-blocks.cjs'), '// drifted');
+  fs.writeFileSync(path.join(somaHome, 'scripts', 'lib', 'manifest.cjs'), '// drifted');
+  fs.writeFileSync(path.join(somaHome, 'scripts', 'lib', 'template-engine.cjs'), '// drifted');
+  // Setup minimal lab with cbm anchor to trigger migration path
+  const labClaude = path.join(tmpDir, 'CLAUDE.md');
+  fs.writeFileSync(labClaude, '<!-- soma-v2:start id=block.claude.CLAUDE_md.cbm version=1.0 sha256=x -->\n<!-- soma-v2:end id=block.claude.CLAUDE_md.cbm -->');
+  const result = lib.migrateCbmDeprecation({
+    somaHome,
+    target: { claudeMd: labClaude, codexAgents: null, homeAgents: null },
+    dryRun: false,
+    force: false,
+  });
+  assert.equal(result.action, 'abort', 'must abort when frozen libs drift');
+  assert.ok(result.failures.some(f => /G6/.test(f)));
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
 test('createMigrationSnapshot: handles same-basename files (no collision)', () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'collision-test-'));
   const somaHome = path.join(tmpDir, '.soma-v2');
