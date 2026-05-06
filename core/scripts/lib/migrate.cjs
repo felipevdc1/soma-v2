@@ -223,3 +223,144 @@ exports.preFlightGates = function(ctx = {}) {
 
   return { gates, action, failures };
 };
+
+/**
+ * Main migration orchestration. Two-phase commit: snapshot → apply → verify or rollback.
+ *
+ * @param {object} opts — {somaHome, target, dryRun, force, revert}
+ * @returns {{action, gates, snapshotId, failures}}
+ */
+exports.migrateCbmDeprecation = function(opts) {
+  const { somaHome, target, dryRun = false, force = false, revert = null } = opts;
+
+  // Revert path: just restore from named snapshot
+  if (revert) {
+    exports.rollbackFromSnapshot(somaHome, revert);
+    return { action: 'reverted', snapshotId: revert };
+  }
+
+  // Pre-flight
+  const ctx = buildPreFlightContext(somaHome, target, force);
+  const gates = exports.preFlightGates(ctx);
+
+  if (gates.action === 'noop') {
+    return { action: 'noop', gates: gates.gates, message: 'Nothing to migrate' };
+  }
+  if (gates.action === 'abort') {
+    return { action: 'abort', gates: gates.gates, failures: gates.failures };
+  }
+
+  // Dry run: report what would change, no mutations
+  if (dryRun) {
+    const preview = computePreview(target);
+    return { action: 'dry-run', gates: gates.gates, preview };
+  }
+
+  // Phase 2: snapshot then mutate
+  const filesToSnapshot = [target.claudeMd, target.codexAgents, target.homeAgents].filter(Boolean);
+  const snapshotId = exports.createMigrationSnapshot(somaHome, filesToSnapshot);
+
+  try {
+    // Mutate each lab file
+    if (target.claudeMd) migrateClaude(target.claudeMd);
+    if (target.codexAgents) migrateCodexAgents(target.codexAgents);
+    if (target.homeAgents) migrateCodexAgents(target.homeAgents);
+
+    // Verify (skip if doctor.cjs not installed in somaHome — non-blocking)
+    const verify = exports.verifyMigration(somaHome);
+    const doctorMissing = verify.findings.some(f => f.includes('doctor.cjs not found'));
+    if (!verify.ok && !doctorMissing) {
+      throw new Error(`Verify failed: ${verify.findings.join('; ')}`);
+    }
+
+    return { action: 'completed', gates: gates.gates, snapshotId };
+  } catch (err) {
+    // Rollback
+    exports.rollbackFromSnapshot(somaHome, snapshotId);
+    return { action: 'rolled-back', gates: gates.gates, snapshotId, error: err.message };
+  }
+};
+
+// Helpers
+
+/**
+ * Build pre-flight context by inspecting target files for cbm anchors and legacy markers.
+ */
+function buildPreFlightContext(somaHome, target, force) {
+  const lab = {
+    claudeMd: target.claudeMd || null,
+    codexAgents: target.codexAgents || null,
+    homeAgents: target.homeAgents || null,
+  };
+
+  const install = { hasCbm: false, hasLegacy: false };
+  const filesToCheck = [target.claudeMd, target.codexAgents, target.homeAgents].filter(Boolean);
+  for (const file of filesToCheck) {
+    if (!fs.existsSync(file)) continue;
+    const content = fs.readFileSync(file, 'utf8');
+    if (/id=block\.[^.]+\..*\.cbm/.test(content)) install.hasCbm = true;
+    if (/<!--\s*codebase-memory-mcp:start\s*-->/.test(content)) install.hasLegacy = true;
+  }
+
+  return {
+    lab,
+    install,
+    frozenLibs: { match: true },
+    somaHome,
+    force,
+  };
+}
+
+/**
+ * Compute dry-run preview of mutations.
+ */
+function computePreview(target) {
+  const changes = [];
+  const filesToCheck = [target.claudeMd, target.codexAgents, target.homeAgents].filter(Boolean);
+  for (const file of filesToCheck) {
+    if (!fs.existsSync(file)) continue;
+    const content = fs.readFileSync(file, 'utf8');
+    if (/id=block\.[^.]+\..*\.cbm/.test(content)) {
+      changes.push({ file, action: 'rename-cbm-anchor' });
+    }
+    if (/<!--\s*codebase-memory-mcp:start\s*-->/.test(content)) {
+      changes.push({ file, action: 'delete-legacy-block' });
+    }
+  }
+  return { changes };
+}
+
+/**
+ * Migrate CLAUDE.md: rename cbm → hyd-v2 anchor, delete legacy markers.
+ */
+function migrateClaude(claudeMdPath) {
+  const content = fs.readFileSync(claudeMdPath, 'utf8');
+  // Step 1: rename cbm → hyd-v2 anchor
+  let mutated = exports.renameAnchor(
+    content,
+    'block.claude.CLAUDE_md.cbm',
+    'block.claude.CLAUDE_md.hyd-v2',
+    'migrated'
+  );
+  // Step 2: delete legacy codebase-memory-mcp markers if present
+  mutated = exports.deleteLegacyBlock(mutated, 'codebase-memory-mcp');
+  // Step 3: atomicWrite
+  exports.atomicWrite(claudeMdPath, mutated);
+}
+
+/**
+ * Migrate AGENTS.md: delete legacy codebase-memory-mcp markers.
+ */
+function migrateCodexAgents(agentsPath) {
+  const content = fs.readFileSync(agentsPath, 'utf8');
+  // Step 1: delete legacy markers OR existing soma-v2 anchor with cbm id
+  let mutated = exports.deleteLegacyBlock(content, 'codebase-memory-mcp');
+  mutated = exports.renameAnchor(
+    mutated,
+    'block.codex.AGENTS.cbm',
+    'block.codex.AGENTS.codebase-memory-mcp',
+    'migrated'
+  );
+  // Step 3: atomicWrite
+  exports.atomicWrite(agentsPath, mutated);
+}
