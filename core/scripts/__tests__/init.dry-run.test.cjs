@@ -191,3 +191,105 @@ test('dry-run: files_planned paths point to expected .soma/ locations', (t) => {
     );
   }
 });
+
+// ---- AC-06: --existing --dry-run purity (zero filesystem mutations) ----
+
+function mkExistingFixture(prefix = 'soma-init-existing-dr') {
+  const dir = path.join(os.tmpdir(), `${prefix}-${crypto.randomBytes(4).toString('hex')}`);
+  fs.mkdirSync(dir, { recursive: true });
+  // Create minimal structure so module detection finds something (H2 heuristic)
+  fs.mkdirSync(path.join(dir, 'src', 'api'), { recursive: true });
+  fs.mkdirSync(path.join(dir, 'src', 'ui'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'src', 'api', 'index.ts'), '// stub\n');
+  fs.writeFileSync(path.join(dir, 'src', 'ui', 'App.tsx'), '// stub\n');
+  return dir;
+}
+
+test('dry-run: --existing exits 0 on uninitialized project', (t) => {
+  const target = mkExistingFixture();
+  t.after(() => fs.rmSync(target, { recursive: true, force: true }));
+
+  const result = runInit(['--existing', target, '--dry-run', '--json']);
+  assert.equal(result.status, 0,
+    `Expected exit 0 for --existing --dry-run on uninitialized project, got ${result.status}. stderr: ${result.stderr}`
+  );
+});
+
+test('dry-run: --existing creates ZERO files (no .soma/ after dry-run)', (t) => {
+  const target = mkExistingFixture();
+  t.after(() => fs.rmSync(target, { recursive: true, force: true }));
+
+  const entriesBefore = fs.readdirSync(target).sort();
+  runInit(['--existing', target, '--dry-run']);
+  const entriesAfter = fs.readdirSync(target).sort();
+
+  assert.deepEqual(entriesBefore, entriesAfter,
+    `--existing --dry-run must not create any top-level entries. Before: ${JSON.stringify(entriesBefore)}, After: ${JSON.stringify(entriesAfter)}`
+  );
+  assert.ok(!fs.existsSync(path.join(target, '.soma')),
+    '.soma/ directory must NOT exist after --existing --dry-run'
+  );
+});
+
+test('dry-run: --existing existing files unchanged after dry-run (shasum check)', (t) => {
+  const target = mkExistingFixture();
+  t.after(() => fs.rmSync(target, { recursive: true, force: true }));
+
+  // Capture shasums of all pre-existing files
+  const apiIndex = path.join(target, 'src', 'api', 'index.ts');
+  const uiApp = path.join(target, 'src', 'ui', 'App.tsx');
+  const sha1Before = computeFileSha256(apiIndex);
+  const sha2Before = computeFileSha256(uiApp);
+
+  runInit(['--existing', target, '--dry-run']);
+
+  const sha1After = computeFileSha256(apiIndex);
+  const sha2After = computeFileSha256(uiApp);
+
+  assert.equal(sha1Before, sha1After, 'src/api/index.ts must not be modified after --existing --dry-run');
+  assert.equal(sha2Before, sha2After, 'src/ui/App.tsx must not be modified after --existing --dry-run');
+});
+
+test('dry-run: --existing JSON mode reports action:dry-run with planned files list', (t) => {
+  const target = mkExistingFixture();
+  t.after(() => fs.rmSync(target, { recursive: true, force: true }));
+
+  const result = runInit(['--existing', target, '--dry-run', '--json']);
+  assert.equal(result.status, 0, `exit 0 required. stderr: ${result.stderr}`);
+
+  let parsed;
+  try {
+    parsed = JSON.parse(result.stdout);
+  } catch (e) {
+    assert.fail(`Output must be valid JSON. stdout: ${result.stdout}`);
+  }
+
+  assert.equal(parsed.mode, 'dry-run',
+    `JSON mode must be "dry-run" for --existing --dry-run. Got: ${parsed.mode}`
+  );
+  assert.ok(Array.isArray(parsed.files_planned),
+    'files_planned must be an array'
+  );
+  assert.ok(parsed.files_planned.length > 0,
+    'files_planned must list at least one planned file'
+  );
+  assert.ok(typeof parsed.modules !== 'undefined',
+    'modules field should be present (module detection summary)'
+  );
+});
+
+test('dry-run: --existing --deep also pure-read (zero mutations)', (t) => {
+  const target = mkExistingFixture();
+  t.after(() => fs.rmSync(target, { recursive: true, force: true }));
+
+  const entriesBefore = fs.readdirSync(target).sort();
+  runInit(['--existing', target, '--deep', '--dry-run']);
+  const entriesAfter = fs.readdirSync(target).sort();
+
+  assert.deepEqual(entriesBefore, entriesAfter,
+    `--existing --deep --dry-run must not create any entries. Before: ${JSON.stringify(entriesBefore)}, After: ${JSON.stringify(entriesAfter)}`
+  );
+  assert.ok(!fs.existsSync(path.join(target, '.soma')),
+    '.soma/ must NOT exist after --existing --deep --dry-run'
+  );
+});
