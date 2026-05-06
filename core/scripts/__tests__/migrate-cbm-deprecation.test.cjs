@@ -115,3 +115,22 @@ test('createMigrationSnapshot: creates snapshot dir with files', () => {
   assert.ok(snapshots.length > 0, 'snapshot files written');
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
+
+test('rollbackFromSnapshot: restores files from snapshot', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'migrate-test-'));
+  const somaHome = path.join(tmpDir, '.soma-v2');
+  const snapshotId = '2026-05-06T20:00:00Z-cbm-deprecation';
+  const snapshotDir = path.join(somaHome, '.snapshots', snapshotId);
+  fs.mkdirSync(snapshotDir, { recursive: true });
+  // Create snapshot of CLAUDE.md
+  fs.writeFileSync(path.join(snapshotDir, 'CLAUDE.md.snapshot'), 'original content');
+  const target = path.join(tmpDir, 'CLAUDE.md');
+  fs.writeFileSync(target, 'mutated content');
+  // Manifest mapping snapshot files → restore targets
+  fs.writeFileSync(path.join(snapshotDir, 'manifest.json'), JSON.stringify({
+    files: { 'CLAUDE.md.snapshot': target }
+  }));
+  lib.rollbackFromSnapshot(somaHome, snapshotId);
+  assert.equal(fs.readFileSync(target, 'utf8'), 'original content');
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+});
