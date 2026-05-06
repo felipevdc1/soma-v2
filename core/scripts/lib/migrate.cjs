@@ -60,3 +60,25 @@ exports.renameAnchor = function(content, oldId, newId, newSha) {
     .replace(startPattern, `$1${newId}$2${newSha}$3`)
     .replace(endPattern, `$1${newId}$2`);
 };
+
+/**
+ * Atomic write via tmp file + POSIX rename. Either succeeds entirely or leaves
+ * target file unchanged.
+ *
+ * @param {string} filePath — absolute path
+ * @param {string} content — string content to write
+ * @throws {Error} on write or rename failure
+ */
+exports.atomicWrite = function(filePath, content) {
+  const tmpPath = `${filePath}.tmp.${process.pid}.${Date.now()}`;
+  try {
+    fs.writeFileSync(tmpPath, content);
+    fs.renameSync(tmpPath, filePath);
+  } catch (err) {
+    // Cleanup tmp on failure
+    if (fs.existsSync(tmpPath)) {
+      try { fs.unlinkSync(tmpPath); } catch {}
+    }
+    throw err;
+  }
+};
