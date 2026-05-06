@@ -1,0 +1,35 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.npm/
+
+# SOMA runtime artifacts (per-machine, not for distribution)
+core/.snapshots/
+core/logs/
+core/evidence/
+.snapshots/
+logs/
+evidence/
+
+# Local environment
+.env
+.env.local
+.env.*.local
+
+# Test scratch
+/tmp/soma-v2-docker-test/
+*.test-output
