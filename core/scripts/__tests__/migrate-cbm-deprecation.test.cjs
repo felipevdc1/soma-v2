@@ -64,3 +64,22 @@ test('deleteLegacyBlock: no-op if marker not present', () => {
   const result = lib.deleteLegacyBlock(input, 'codebase-memory-mcp');
   assert.equal(result, input);
 });
+
+test('renameAnchor: changes ID + sha256 in soma-v2 anchor markers', () => {
+  const input = [
+    '<!-- soma-v2:start id=block.claude.CLAUDE_md.cbm version=1.0 sha256=oldhash -->',
+    'block content',
+    '<!-- soma-v2:end id=block.claude.CLAUDE_md.cbm -->',
+  ].join('\n');
+  const result = lib.renameAnchor(input, 'block.claude.CLAUDE_md.cbm', 'block.claude.CLAUDE_md.hyd-v2', 'newhash');
+  assert.match(result, /id=block\.claude\.CLAUDE_md\.hyd-v2/);
+  assert.match(result, /sha256=newhash/);
+  assert.doesNotMatch(result, /id=block\.claude\.CLAUDE_md\.cbm/);
+  assert.match(result, /block content/, 'inner content preserved');
+});
+
+test('renameAnchor: no-op if oldId not present', () => {
+  const input = '# No anchor here\nplain text';
+  const result = lib.renameAnchor(input, 'block.claude.CLAUDE_md.cbm', 'block.claude.CLAUDE_md.hyd-v2', 'newhash');
+  assert.equal(result, input);
+});
