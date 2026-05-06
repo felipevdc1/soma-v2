@@ -99,3 +99,19 @@ test('atomicWrite: writes via tmp + rename', () => {
 test('atomicWrite: throws on permission failure (parent ENOENT)', () => {
   assert.throws(() => lib.atomicWrite('/nonexistent-dir/file.md', 'content'));
 });
+
+test('createMigrationSnapshot: creates snapshot dir with files', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'migrate-test-'));
+  const somaHome = path.join(tmpDir, '.soma-v2');
+  fs.mkdirSync(path.join(somaHome, '.snapshots'), { recursive: true });
+  const file1 = path.join(tmpDir, 'CLAUDE.md');
+  fs.writeFileSync(file1, 'claude content');
+  const snapshotId = lib.createMigrationSnapshot(somaHome, [file1]);
+  assert.match(snapshotId, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z-cbm-deprecation$/);
+  const snapshotDir = path.join(somaHome, '.snapshots', snapshotId);
+  assert.ok(fs.existsSync(snapshotDir));
+  // verify file content snapshot exists
+  const snapshots = fs.readdirSync(snapshotDir);
+  assert.ok(snapshots.length > 0, 'snapshot files written');
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+});
