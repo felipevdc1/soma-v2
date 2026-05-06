@@ -312,7 +312,10 @@ exports.migrateCbmDeprecation = function(opts) {
     return { action: 'dry-run', gates: gates.gates, preview };
   }
 
-  // Phase 2: snapshot then mutate
+  // Phase 2: acquire lock, then snapshot → mutate → verify (lock released in finally)
+  const lockFile = path.join(somaHome, '.migration.lock');
+  fs.writeFileSync(lockFile, JSON.stringify({ pid: process.pid, started: new Date().toISOString() }));
+
   const filesToSnapshot = [target.claudeMd, target.codexAgents, target.homeAgents].filter(Boolean);
   const snapshotId = exports.createMigrationSnapshot(somaHome, filesToSnapshot);
 
@@ -334,6 +337,11 @@ exports.migrateCbmDeprecation = function(opts) {
     // Rollback
     exports.rollbackFromSnapshot(somaHome, snapshotId);
     return { action: 'rolled-back', gates: gates.gates, snapshotId, error: err.message };
+  } finally {
+    // Always release lock (success OR rollback)
+    if (fs.existsSync(lockFile)) {
+      try { fs.unlinkSync(lockFile); } catch {}
+    }
   }
 };
 
