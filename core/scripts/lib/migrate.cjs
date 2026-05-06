@@ -41,3 +41,22 @@ exports.deleteLegacyBlock = function(content, markerName) {
   const pattern = new RegExp(`\\n?<!--\\s*${escaped}:start\\s*-->[\\s\\S]*?<!--\\s*${escaped}:end\\s*-->\\n?`, 'g');
   return content.replace(pattern, '\n');
 };
+
+/**
+ * Rename a soma-v2 anchor: change ID + sha256 in start marker, change ID in end marker.
+ * Inner content untouched.
+ *
+ * @param {string} content
+ * @param {string} oldId
+ * @param {string} newId
+ * @param {string} newSha
+ * @returns {string}
+ */
+exports.renameAnchor = function(content, oldId, newId, newSha) {
+  const escapedOld = oldId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const startPattern = new RegExp(`(<!--\\s*soma-v2:start\\s+id=)${escapedOld}(\\s+version=[^\\s]+\\s+sha256=)[^\\s]+(\\s*-->)`, 'g');
+  const endPattern = new RegExp(`(<!--\\s*soma-v2:end\\s+id=)${escapedOld}(\\s*-->)`, 'g');
+  return content
+    .replace(startPattern, `$1${newId}$2${newSha}$3`)
+    .replace(endPattern, `$1${newId}$2`);
+};
