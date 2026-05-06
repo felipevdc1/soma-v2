@@ -12,7 +12,12 @@ const os = require('node:os');
 
 const SOMA_REPO = path.join(os.homedir(), '.soma-v2');
 const COOKBOOK_PATH = path.join(SOMA_REPO, 'docs/module-cookbook.md');
-const ORIGINAL_BACKUP = '/tmp/module-cookbook-original.md';
+
+// The original 449-byte content of module-cookbook.md before Phase 4c append.
+// Hardcoded to eliminate the external /tmp/module-cookbook-original.md dependency
+// that required external setup (not suitable for self-contained test execution).
+// This content is the canonical stub-redirect that was committed as part of Phase 4c.
+const ORIGINAL_449_BYTES = '# Module Cookbook\n\n**Status:** stub-redirect (v2.1 lab MVP).\n**Canonical source:** PLAN.md §4.4 (module layer schema — Purpose, Current State, Main Files, Contracts, Commands, Routing, Patterns, Risks, What Not To Do, Worklog Index).\n**Why stub:** module doc schema is defined in PLAN §4.4. Phase 4 will implement the full module workflow. Phase 2+ may consolidate here.\n**`expansion_owner`** in manifest.json: `"phase-4 or canonical-include"`.\n';
 
 test('AC-14: module-cookbook.md has Phase 4c section appended', () => {
   const content = fs.readFileSync(COOKBOOK_PATH, 'utf8');
@@ -22,7 +27,7 @@ test('AC-14: module-cookbook.md has Phase 4c section appended', () => {
 
 test('AC-14: original 449 bytes preserved byte-identical', () => {
   const currentContent = Buffer.from(fs.readFileSync(COOKBOOK_PATH, 'utf8'));
-  const originalContent = Buffer.from(fs.readFileSync(ORIGINAL_BACKUP, 'utf8'));
+  const originalContent = Buffer.from(ORIGINAL_449_BYTES);
   assert.ok(currentContent.length > 449,
     `module-cookbook.md must be larger than 449 bytes (it was appended). Got: ${currentContent.length}`);
   // First 449 bytes must be identical to original

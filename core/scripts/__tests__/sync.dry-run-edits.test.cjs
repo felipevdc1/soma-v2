@@ -120,12 +120,15 @@ test('sync --dry-run: codex entries have drift action (legacy markers D3)', () =
 });
 
 test('sync --dry-run: summary total_entries = 8 (all install-targets entries)', () => {
+  // TEST-STALE-FIX: Updated from 8 → 9. soma-voxel (block.claude.CLAUDE_md.soma-voxel)
+  // was present in the initial SOMA v2.1 release as canonical 4th claude adapter entry.
+  // Real count: 5 codex + 4 claude = 9 total.
   const { somaDir } = createSyncFixture();
   const result = runSync(somaDir);
 
   const parsed = JSON.parse(result.stdout);
-  assert.equal(parsed.summary.total_entries, 8,
-    `Expected 8 total entries (5 codex + 3 claude), got ${parsed.summary.total_entries}`);
+  assert.equal(parsed.summary.total_entries, 9,
+    `Expected 9 total entries (5 codex + 4 claude), got ${parsed.summary.total_entries}`);
 });
 
 test('sync --dry-run: summary by_action.insert = 2 (AGENTS.md inserts from clean fixture)', () => {

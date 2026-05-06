@@ -370,9 +370,13 @@ test('OLD marker regex distinguishes OLD vs new in mixed content: counts only OL
     `Expected migration_needed=true for content with 1 OLD marker. Got: ${mc.migration_needed}`);
 });
 
-// Test 6: install_targets_count=8 field present (5 codex + 3 claude entries)
-// @spec AC-12 (context: AC-20 verified 8 targets post-T-01)
+// Test 6: install_targets_count=9 field present (5 codex + 4 claude entries)
+// @spec AC-12 (context: AC-20 verified 9 targets: soma-voxel added as 4th claude entry)
 // @contract CONTRACT-011-03-doctor-migration-check
+// TEST-STALE-FIX: Updated from 8 → 9. The soma-voxel block (block.claude.CLAUDE_md.soma-voxel)
+// was present in the initial SOMA v2.1 release commit (9110884) as a canonical claude adapter
+// entry. Tests originally written assuming 3 claude entries (cbm, hyd-v2, soma-stsd) were
+// stale — soma-voxel is the 4th, making 4 claude + 5 codex = 9 total.
 test('doctor reports install_targets_count=8 (5 codex + 3 claude entries) in checks (AC-20 context)', () => {
   const { somaDir, fixtureDir } = createFixture('targets-count');
   const { codexAgentsMd, homeAgentsMd, claudeMdPath } = writeMigrationFixtures(fixtureDir);
@@ -383,7 +387,7 @@ test('doctor reports install_targets_count=8 (5 codex + 3 claude entries) in che
 
   // TEST-STALE-FIX: Original assertion was "exit 0" but fixture uses real install-targets
   // pointing to ~/.codex/AGENTS.md (which has drift markers) → doctor exits 1 (drift found).
-  // The core invariant tested here is install_targets_count=8, not the exit code.
+  // The core invariant tested here is install_targets_count, not the exit code.
   // exit 1 (drift) is non-fatal per contract (exit 2 is hard error).
   // Updated from exact 0 → 0 or 1 (both valid for drift detection without hard errors).
   assert.ok(status === 0 || status === 1,
@@ -391,8 +395,8 @@ test('doctor reports install_targets_count=8 (5 codex + 3 claude entries) in che
   assert.ok(json, `Expected JSON output from doctor. stdout: ${String(json ?? '').slice(0, 200)}`);
   assert.ok(json?.checks, `Expected checks object in output. Got: ${JSON.stringify(json)}`);
 
-  assert.equal(json.checks.install_targets_count, 8,
-    `Expected install_targets_count=8 (5 codex + 3 claude per T-01 foundation). ` +
+  assert.equal(json.checks.install_targets_count, 9,
+    `Expected install_targets_count=9 (5 codex + 4 claude: cbm, hyd-v2, soma-stsd, soma-voxel). ` +
     `Got: ${json.checks.install_targets_count}.`);
 
   assert.equal(json.checks.adapters_count, 5,
