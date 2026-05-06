@@ -22,7 +22,10 @@
       "sha256": "a233f5675e73e4dd672065cd4c01b5c319ac5dda0630187b3b61e1ccf283f285",
       "sourceMtime": "2026-05-06T19:34:41Z",
       "sourceSha256": "a233f5675e73e4dd672065cd4c01b5c319ac5dda0630187b3b61e1ccf283f285",
-      "targets": ["global", "project"],
+      "targets": [
+        "global",
+        "project"
+      ],
       "expansion_owner": null,
       "status": "released"
     },

@@ -41,4 +41,6 @@ test('AC-04: source docs/codebase-memory-mcp.md exists with valid content', () =
   assert.match(content, /codebase-memory-mcp/, 'must reference the MCP tool name');
   assert.match(content, /search_graph/, 'must document search_graph priority');
   assert.match(content, /trace_call_path/, 'must document trace_call_path');
+  assert.ok(!content.includes('<!-- codebase-memory-mcp:start -->'), 'must not include start marker');
+  assert.ok(!content.includes('<!-- codebase-memory-mcp:end -->'), 'must not include end marker');
 });
