@@ -199,3 +199,36 @@ test('preFlightGates G6: frozen libs baseline mismatch fails', () => {
   });
   assert.equal(result.gates.G6, 'fail');
 });
+
+test('migrateCbmDeprecation: orchestrates full lifecycle (sandbox)', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'migrate-test-'));
+  const somaHome = path.join(tmpDir, '.soma-v2');
+  // Setup minimal SOMA_HOME structure
+  fs.mkdirSync(path.join(somaHome, 'scripts'), { recursive: true });
+  fs.mkdirSync(path.join(somaHome, '.snapshots'), { recursive: true });
+  // Setup lab CLAUDE.md with cbm soma-v2 anchor
+  const claudeMd = path.join(tmpDir, 'CLAUDE.md');
+  fs.writeFileSync(claudeMd, [
+    '# CLAUDE',
+    '<!-- soma-v2:start id=block.claude.CLAUDE_md.cbm version=1.0 sha256=oldhash -->',
+    'cbm block content',
+    '<!-- soma-v2:end id=block.claude.CLAUDE_md.cbm -->',
+    '# After',
+  ].join('\n'));
+  const result = lib.migrateCbmDeprecation({
+    somaHome,
+    target: { claudeMd, codexAgents: null, homeAgents: null },
+    dryRun: false,
+    force: false,
+  });
+  assert.equal(result.action, 'completed');
+  assert.equal(result.gates.G1, 'pass');
+  // Verify post-state: snapshot created
+  assert.ok(result.snapshotId, 'snapshotId returned');
+  const snapshotDir = path.join(somaHome, '.snapshots', result.snapshotId);
+  assert.ok(fs.existsSync(snapshotDir), 'snapshot dir created');
+  // Verify cbm anchor renamed in claudeMd
+  const afterContent = fs.readFileSync(claudeMd, 'utf8');
+  assert.doesNotMatch(afterContent, /id=block\.claude\.CLAUDE_md\.cbm/, 'cbm anchor removed');
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+});
