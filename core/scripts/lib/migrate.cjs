@@ -200,8 +200,30 @@ exports.preFlightGates = function(ctx = {}) {
     gates.G4 = 'pass';
   }
 
-  // G5: snapshot disk space (skip if no somaHome)
-  gates.G5 = 'pass'; // simplified — production should check via fs.statvfs equivalent
+  // G5: snapshot disk space (≥1MB free)
+  const G5_MIN_BYTES = 1024 * 1024; // 1 MB
+  let availableBytes;
+  if (typeof ctx.diskSpaceOverride === 'number') {
+    // Test injection point — allows fail-path testing without filling disk
+    availableBytes = ctx.diskSpaceOverride;
+  } else if (ctx.somaHome && fs.existsSync(ctx.somaHome)) {
+    try {
+      const stats = fs.statfsSync(ctx.somaHome); // Node 18+
+      availableBytes = stats.bavail * stats.bsize;
+    } catch (err) {
+      // statfsSync may not be available on all platforms — fall back to permissive pass
+      availableBytes = G5_MIN_BYTES;
+    }
+  } else {
+    // No somaHome to check — permissive pass (G1/G2 handle missing somaHome scenarios)
+    availableBytes = G5_MIN_BYTES;
+  }
+  if (availableBytes < G5_MIN_BYTES) {
+    gates.G5 = 'fail';
+    failures.push(`G5: insufficient disk space (${availableBytes} bytes available, ${G5_MIN_BYTES} required)`);
+  } else {
+    gates.G5 = 'pass';
+  }
 
   // G6: frozen libs match
   if (ctx.frozenLibs && !ctx.frozenLibs.match) {
