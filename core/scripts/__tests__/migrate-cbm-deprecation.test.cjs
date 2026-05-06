@@ -215,6 +215,39 @@ test('preFlightGates G6: frozen libs baseline mismatch fails', () => {
   assert.equal(result.gates.G6, 'fail');
 });
 
+test('verifyMigration: parses DRIFT findings from real doctor.cjs invocation', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'verify-test-'));
+  const scriptsDir = path.join(tmpDir, 'scripts');
+  fs.mkdirSync(scriptsDir, { recursive: true });
+  // Stub doctor.cjs that produces known DRIFT output
+  fs.writeFileSync(path.join(scriptsDir, 'doctor.cjs'), `#!/usr/bin/env node
+console.log('SOMA doctor — checking');
+console.log('DRIFT: 2 finding(s)');
+console.log('  [drift]   ~/.codex/AGENTS.md <- block.codex.AGENTS.hyd-v2');
+console.log('  [drift]   ~/AGENTS.md <- block.codex.AGENTS.codebase-memory-mcp');
+process.exit(0);
+`);
+  const result = lib.verifyMigration(tmpDir);
+  assert.equal(result.ok, false, 'should fail when DRIFT count > 0');
+  assert.ok(result.findings.some(f => /DRIFT: 2/.test(f)), 'should capture DRIFT count line');
+  assert.ok(result.findings.length >= 2, 'should capture finding lines');
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+test('verifyMigration: returns ok=true when 0 drifts', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'verify-test-'));
+  const scriptsDir = path.join(tmpDir, 'scripts');
+  fs.mkdirSync(scriptsDir, { recursive: true });
+  fs.writeFileSync(path.join(scriptsDir, 'doctor.cjs'), `#!/usr/bin/env node
+console.log('SOMA doctor — checking');
+console.log('OK: 0 drift findings');
+process.exit(0);
+`);
+  const result = lib.verifyMigration(tmpDir);
+  assert.equal(result.ok, true);
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
 test('migrateCbmDeprecation: orchestrates full lifecycle (sandbox)', () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'migrate-test-'));
   const somaHome = path.join(tmpDir, '.soma-v2');
