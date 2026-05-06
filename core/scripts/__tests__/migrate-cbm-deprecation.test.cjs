@@ -193,6 +193,21 @@ test('preFlightGates G4: lock file blocks concurrent runs', () => {
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
+test('preFlightGates G5: pass when disk has space', () => {
+  // Use real /tmp dir which should always have >1MB free
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'g5-test-'));
+  const result = lib.preFlightGates({ somaHome: tmpDir });
+  assert.equal(result.gates.G5, 'pass');
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+test('preFlightGates G5: fail with informative message when disk full', () => {
+  // Test injection point: diskSpaceOverride=0 simulates no space available
+  const result = lib.preFlightGates({ somaHome: '/tmp', diskSpaceOverride: 0 });
+  assert.equal(result.gates.G5, 'fail');
+  assert.ok(result.failures.some(f => /G5/.test(f)));
+});
+
 test('preFlightGates G6: frozen libs baseline mismatch fails', () => {
   const result = lib.preFlightGates({
     frozenLibs: { match: false, drift: ['anchored-blocks.cjs'] }
