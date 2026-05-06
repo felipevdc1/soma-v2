@@ -35,6 +35,8 @@ Flags available:
 | `--no-claude-md` | Skip CLAUDE.md bootloader injection |
 | `--force-overwrite` | Auto-rename any conflicting hooks to `.bak` without prompting |
 
+The `--force-overwrite` flag is also available as an environment variable: `FORCE_OVERWRITE=1 bash install.sh`. Either form is supported.
+
 After install completes, **restart Claude Code** (close and reopen the app) before using any `/soma:*` commands.
 
 ---
@@ -44,8 +46,19 @@ After install completes, **restart Claude Code** (close and reopen the app) befo
 `install.sh` runs 10 phases idempotently. Here is what lands on your machine:
 
 - **`~/.soma-v2/`** — the SOMA framework home: scripts, docs, templates, adapters, benchmarks, specs
-- **`~/.claude/hooks/`** — 16 SOMA-CORE hooks registered in `settings.json` (merged safely with any existing hooks you have)
-- **`~/.claude/commands/soma/`** — 11 slash commands available as `/soma:run`, `/soma:specify`, `/soma:plan-sdd`, `/soma:sonar-audit`, `/soma:dispatch`, `/soma:hyd`, `/soma:quality-check`, `/soma:depth-score`, `/soma:handoff`, `/soma:encerrar`, `/soma:gap-finder`
+- **`~/.claude/hooks/`** — 17 SOMA-CORE hooks registered in `settings.json` (16 event-registered + 1 utility callable; merged safely with any existing hooks you have)
+- **`~/.claude/commands/soma/`** — 11 slash commands:
+  - `/soma:run` — autonomous 10-step state machine
+  - `/soma:specify` — generate `spec.md` from intent
+  - `/soma:plan-sdd` — derive plan, contracts, and tasks from approved spec
+  - `/soma:dispatch` — single Sonnet executor in an isolated worktree
+  - `/soma:sonar-audit` — multi-territory parallel read-only audit
+  - `/soma:hyd` — anti-shallowness loop (HYD v2)
+  - `/soma:quality-check` — post-dispatch scorecard
+  - `/soma:depth-score` — AC → test → implementation traceability score
+  - `/soma:gap-finder` — pre-feature gap analysis
+  - `/soma:handoff` — cross-session handoff with resume prompts
+  - `/soma:encerrar` — end-of-session ritual (handoff + diary + KG)
 - **`~/.claude/output-styles/soma-voxel.md`** — the SOMA Voxel visual theme file
 - **`~/.claude/CLAUDE.md`** — a SOMA bootloader anchored block injected into your existing CLAUDE.md (system rules only; your personal content is preserved)
 - **`~/.claude/templates/`** — 7 essential templates: decision, spec, plan, tasks, handoff, FAMILY_DOC, contracts

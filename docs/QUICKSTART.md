@@ -16,6 +16,8 @@ node install/verify-portability.cjs
 
 If any gate fails, check `docs/TROUBLESHOOTING.md` before proceeding.
 
+> 💡 **Tip:** if you want to preview install behavior before running it for real, use `bash install.sh --dry-run` — it prints every operation without modifying anything.
+
 Restart Claude Code (close and reopen) if you haven't already.
 
 ---
@@ -40,6 +42,8 @@ SOMA generates `specs/001-add-json-output/spec.md` containing:
 
 Open `specs/001-add-json-output/spec.md` and fill in any `[NEEDS CLARIFICATION]` markers before continuing. The next step is blocked until all markers are resolved.
 
+> **Expected output:** terminal prints something like `[SPECIFY] generated specs/001-add-json-output/spec.md (~150 lines, 4 ACs, 2 [NEEDS CLARIFICATION] markers)`.
+
 ### Step 2 — Derive the plan
 
 ```
@@ -49,6 +53,8 @@ Open `specs/001-add-json-output/spec.md` and fill in any `[NEEDS CLARIFICATION]`
 This derives `plan.md`, `contracts/`, `tasks.md`, and `quickstart.md` from the spec. It also runs three Phase -1 gates: Simplicity (≤3 new components), Anti-Abstraction (no speculative futures), and Integration-First (real environments over mocks).
 
 Review the generated `plan.md` to confirm the approach looks right.
+
+> **Expected output:** `plan.md`, `contracts/`, `tasks.md`, and `quickstart.md` all written under `specs/001-add-json-output/`. Phase -1 gates report `Simplicity: PASS`, `Anti-Abstraction: PASS`, `Integration-First: PASS`.
 
 ### Step 3 — Approve the spec (Gate 1)
 
@@ -61,6 +67,8 @@ touch /tmp/soma-spec-approved-<runId>
 
 From this point, SOMA runs autonomously through Steps 2–9 (TEAM → WAVES → VALIDATE → CONSOLIDATE → INTEGRATE → SONAR).
 
+> **Expected output:** terminal streams one line per step transition, e.g. `[TEAM] dispatching wave 1 (3 agents)`, `[WAVES] wave 1 complete (3/3 pass)`, `[VALIDATE] AC-01..AC-04 traceability OK`, `[SONAR] 0 critical findings`.
+
 ### Step 4 — Approve deploy (Gate 2)
 
 When SOMA reaches the final commit and is ready to deploy, it pauses at `AWAITING_DEPLOY_APPROVAL`:
@@ -70,6 +78,8 @@ touch /tmp/soma-deploy-approved-<runId>
 ```
 
 SOMA then finalizes the commit and reports back with SHA, files changed, and test results.
+
+> **Expected output:** a `🤖 Agent Report` block with `STATUS: pass`, the commit SHA, list of files changed, test count (e.g. `12/12 pass, 0 fail`), and any surprises captured during the run.
 
 ---
 

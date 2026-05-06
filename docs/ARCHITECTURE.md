@@ -27,7 +27,7 @@ The **10-step protocol** (STSD) structures every feature:
 9. **INTEGRATE** — wire components and run integration/smoke checks
 10. **SONAR / FIX / COMMIT** — multi-territory audit, fix blocking findings, finalize with evidence
 
-SOMA dogfooded its own workflow during construction: Wave A and Wave B of v2.1 were executed via `TeamCreate` + `addBlockedBy`, producing 838 tests (836 pass, 0 fail, 2 skip) across 16+ Sonnet/Haiku dispatches without a single frozen-lib drift incident.
+SOMA dogfooded its own workflow during construction: Wave A and Wave B of v2.1 were executed via `TeamCreate` + `addBlockedBy`, producing 838 tests (836 pass, 0 fail, 2 skip) across 22+ Sonnet/Haiku dispatches without a single frozen-lib drift incident.
 
 ---
 
@@ -58,7 +58,7 @@ The Constitution is the normative reference read by every dispatched agent. It e
 
 ## Hook chain
 
-SOMA ships **16 SOMA-CORE hooks** installed to `~/.claude/hooks/`. They register in `settings.json` via `install/merge-settings.cjs`.
+SOMA ships **17 SOMA-CORE hooks** installed to `~/.claude/hooks/` — 16 event-registered + 1 utility callable. They register in `settings.json` via `install/merge-settings.cjs`.
 
 | Hook | Event | Role |
 |---|---|---|
@@ -80,7 +80,9 @@ SOMA ships **16 SOMA-CORE hooks** installed to `~/.claude/hooks/`. They register
 | `write-compact-marker.cjs` | PreToolUse (Bash) | Writes compact marker on PreCompact for context continuity |
 | `agent-mode-gate.cjs` | PreToolUse (Agent/TeamCreate) | Enforces dispatch limits (max 3 standalone agents + 3 team agents before requiring override) |
 
-**Dependency note:** `subagent-init.cjs` must execute before other hooks that rely on its context injection. `thermal-guard.cjs` reads agent count from the session state that `subagent-init.cjs` tracks. Installing the full bundle (rather than individual hooks) is the only supported configuration. See Risk #2 in the plan for details.
+**Dependency note:** `subagent-init.cjs` must execute before other hooks that rely on its context injection. `thermal-guard.cjs` reads agent count from the session state that `subagent-init.cjs` tracks. Installing the full bundle (rather than individual hooks) is the only supported configuration.
+
+**Note on `spec-test-traceability.cjs`:** shipped to `~/.claude/hooks/` as a utility callable invoked via the `--check-red-phase` flag or the `SOMA_RED_PHASE_STRICT=1` environment variable, **not** as a Claude Code event hook. This is why it counts toward the "17 SOMA-CORE hooks" total but does not appear in `soma-hooks-map.json` event registrations.
 
 Hooks in `hooks/lib/` are shared utilities: `auto-load-modules.cjs` (module resolution), `context-tracker.cjs` (in-flight agent accounting).
 
@@ -194,7 +196,7 @@ SOMA maintains several layers of memory:
 
 ## Cost profile
 
-Approximate token usage per workflow phase (based on v2.1 empirical data — 16+ Sonnet/Haiku dispatches during Phase 6 construction):
+Approximate token usage per workflow phase (based on v2.1 empirical data — 22+ Sonnet/Haiku dispatches during Phase 6 construction):
 
 | Phase | Agent | Approximate tokens | Notes |
 |---|---|---|---|
@@ -221,7 +223,7 @@ These are frozen because:
 1. Every downstream script depends on their stable API. A mutation in `anchored-blocks.cjs` could corrupt CLAUDE.md or AGENTS.md for any user who re-runs `soma sync`.
 2. Their `sha256` checksums are verified before and after every dispatch as part of the proof-before-done contract. Any drift is immediately detectable and treated as a blocking error.
 
-**Empirical validation:** 16+ Sonnet/Haiku dispatches across Phases 4–6 without a single frozen-lib drift incident. The constraint works because it is enforced structurally (checksum gate), not by convention.
+**Empirical validation:** 22+ Sonnet/Haiku dispatches across Phases 4–6 without a single frozen-lib drift incident. The constraint works because it is enforced structurally (checksum gate), not by convention.
 
 If you need to fix a bug in a frozen lib: open a spec for the change, get Gate 1 approval, implement under TDD in an isolated branch, and verify that downstream scripts all pass before bumping the library version.
 
@@ -257,3 +259,13 @@ Emitted by `insight-action-coupling.cjs` (Stop hook). Tracks whether architectur
 SOMA is part of a broader workflow research family. **JFLOW** ([@zbrunomoreira](https://instagram.com/zbrunomoreira)'s state-driven workflow system in SomaCanvas) takes a complementary approach: a centralized state envelope at `.jflow/state.json` with uniform Era → Phase → Track → Wave → Task decomposition, explicit transitions via JSON edits, and background agents coordinating via state-file polling. Where SOMA emphasizes hooks + constitution + rollback as enforcement primitives, JFLOW emphasizes state envelope + transitions as enforcement. Both systems ship in the same SOMA family aesthetic and inform each other's evolution.
 
 The SOMA Voxel visual theme (18 bar-block types: `🧊 SOMA Insight`, `🤖 Agent Report`, `★ Sprint Pulse`, and 15 others) originated in the SomaCanvas family and is documented in `core/docs/output-style.md`. Install places a copy at `~/.claude/output-styles/soma-voxel.md`.
+
+---
+
+## Where to go next
+
+- **[`docs/INSTALL.md`](./INSTALL.md)** — installation guide, prerequisites, smoke pack verification, uninstall
+- **[`docs/QUICKSTART.md`](./QUICKSTART.md)** — first SOMA workflow walkthrough (~10 minutes)
+- **[`docs/TROUBLESHOOTING.md`](./TROUBLESHOOTING.md)** — symptom → cause → fix entries
+- **`core/docs/constitution.md`** — the 10 constitutional articles governing every run (read-only, ratified v1.0.0)
+- **GitHub Issues** — [github.com/felipevdc1/soma-v2/issues](https://github.com/felipevdc1/soma-v2/issues)

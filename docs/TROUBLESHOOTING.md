@@ -174,7 +174,7 @@ After installing, restart your terminal and run `soma audit` again. If you prefe
 
 ### Symptom: Smoke pack gate N failing
 
-Specific gate diagnostics:
+Common-failure subset of the 12 smoke pack gates (see [`docs/INSTALL.md`](./INSTALL.md) §Verification for the full 12-gate list — the gates not shown here rarely fail in practice):
 
 | Gate | Failing means | Diagnosis command |
 |---|---|---|
@@ -232,7 +232,7 @@ bash install.sh
 
 The installer is idempotent — it safely updates existing installations.
 
-For detailed guidance on maintaining and patching SOMA installations over time, see `core/docs/MAINTENANCE.md` (planned for a future release).
+For upgrade notes between SOMA versions, check the [GitHub releases page](https://github.com/felipevdc1/soma-v2/releases).
 
 ---
 
