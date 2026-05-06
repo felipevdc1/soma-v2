@@ -135,3 +135,26 @@ exports.rollbackFromSnapshot = function(somaHome, snapshotId) {
     }
   }
 };
+
+const { spawnSync } = require('node:child_process');
+
+/**
+ * Verify migration by running doctor.cjs in target somaHome.
+ * Returns {ok: boolean, findings: string[]}.
+ *
+ * @param {string} somaHome
+ * @returns {{ok: boolean, findings: string[]}}
+ */
+exports.verifyMigration = function(somaHome) {
+  const doctorPath = path.join(somaHome, 'scripts', 'doctor.cjs');
+  if (!fs.existsSync(doctorPath)) {
+    return { ok: false, findings: [`doctor.cjs not found at ${doctorPath}`] };
+  }
+  const result = spawnSync('node', [doctorPath], { cwd: somaHome, encoding: 'utf8' });
+  const findings = (result.stdout + result.stderr)
+    .split('\n')
+    .filter(l => l.includes('[drift]') || l.includes('DRIFT:'));
+  const driftCount = findings.find(l => /DRIFT: (\d+) finding/.exec(l));
+  const count = driftCount ? parseInt(/DRIFT: (\d+) finding/.exec(driftCount)[1], 10) : 0;
+  return { ok: count === 0, findings };
+};
