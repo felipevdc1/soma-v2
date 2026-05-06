@@ -145,3 +145,57 @@ test('verifyMigration: invokes doctor.cjs and parses output', () => {
   assert.ok(Array.isArray(result.findings), 'findings is array');
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
+
+test('preFlightGates G1: lab files exist (graceful skip if missing)', () => {
+  const result = lib.preFlightGates({
+    lab: { claudeMd: '/nonexistent', codexAgents: '/nonexistent', homeAgents: '/nonexistent' },
+    install: { /* ... */ },
+    frozenLibs: { /* ... */ },
+  });
+  // G1: skip missing target gracefully — pass if at least one lab exists, else "nothing to migrate"
+  assert.ok(result.gates.G1 !== 'fatal', 'G1 should not fatal-error on missing files');
+});
+
+test('preFlightGates G2: idempotent no-op if nothing to migrate', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'migrate-test-'));
+  const fixture = path.join(tmpDir, 'AGENTS.md');
+  fs.writeFileSync(fixture, '# Clean file, no cbm or legacy markers');
+  const result = lib.preFlightGates({
+    lab: { codexAgents: fixture, claudeMd: null, homeAgents: null },
+    install: { hasCbm: false, hasLegacy: false },
+    frozenLibs: { match: true },
+  });
+  assert.equal(result.action, 'noop', 'G2 returns noop when nothing to migrate');
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+test('preFlightGates G3: content alignment blocks unless --force', () => {
+  // Stubbed: lab MCP doc differs from spec extraction
+  const result = lib.preFlightGates({
+    lab: { /* with content */ },
+    install: { /* ... */ },
+    frozenLibs: { match: true },
+    contentMismatch: true,
+    force: false,
+  });
+  assert.equal(result.gates.G3, 'fail', 'G3 fails on content mismatch without --force');
+  // With --force:
+  const resultForce = lib.preFlightGates({ contentMismatch: true, force: true });
+  assert.notEqual(resultForce.gates.G3, 'fail', 'G3 passes with --force');
+});
+
+test('preFlightGates G4: lock file blocks concurrent runs', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'migrate-test-'));
+  const lockFile = path.join(tmpDir, '.migration.lock');
+  fs.writeFileSync(lockFile, JSON.stringify({ pid: 12345, started: new Date().toISOString() }));
+  const result = lib.preFlightGates({ somaHome: tmpDir });
+  assert.equal(result.gates.G4, 'fail');
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+test('preFlightGates G6: frozen libs baseline mismatch fails', () => {
+  const result = lib.preFlightGates({
+    frozenLibs: { match: false, drift: ['anchored-blocks.cjs'] }
+  });
+  assert.equal(result.gates.G6, 'fail');
+});
