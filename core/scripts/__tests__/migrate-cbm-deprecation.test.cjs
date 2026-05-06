@@ -298,8 +298,16 @@ test('migrateCbmDeprecation: orchestrates full lifecycle (sandbox)', () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'migrate-test-'));
   const somaHome = path.join(tmpDir, '.soma-v2');
   // Setup minimal SOMA_HOME structure
-  fs.mkdirSync(path.join(somaHome, 'scripts'), { recursive: true });
+  fs.mkdirSync(path.join(somaHome, 'scripts', 'lib'), { recursive: true });
   fs.mkdirSync(path.join(somaHome, '.snapshots'), { recursive: true });
+  // Provide real frozen libs so G6 passes
+  const repoRoot = path.resolve(__dirname, '../../..');
+  for (const file of ['anchored-blocks.cjs', 'manifest.cjs', 'template-engine.cjs']) {
+    fs.copyFileSync(
+      path.join(repoRoot, 'core', 'scripts', 'lib', file),
+      path.join(somaHome, 'scripts', 'lib', file)
+    );
+  }
   // Setup lab CLAUDE.md with cbm soma-v2 anchor
   const claudeMd = path.join(tmpDir, 'CLAUDE.md');
   fs.writeFileSync(claudeMd, [

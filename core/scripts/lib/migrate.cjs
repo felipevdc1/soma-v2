@@ -10,6 +10,37 @@ const fs = require('node:fs');
 const crypto = require('node:crypto');
 
 /**
+ * Frozen libs baseline: name → expected SHA256. Must not be modified
+ * without updating the spec and bumping SOMA version.
+ */
+const FROZEN_LIBS_BASELINE = {
+  'anchored-blocks.cjs': '6db9bbcbe811b8b0e338d4bf199b969688744d7267ca2dec9a6f59f20c1a167f',
+  'manifest.cjs':        '08a0f164c16bf6152d57ab737c5471d86439724d2e563abde4b8764944800462',
+  'template-engine.cjs': 'f13ae144e88bb7ef6f2c0ec101eeab8ad7eb778a0eaeb9b960997ca96df14d8b',
+};
+
+/**
+ * Compute frozen libs check: compare each lib against baseline SHA256.
+ * Returns {match: boolean, drift: string[]}.
+ *
+ * @param {string} somaHome
+ * @returns {{match: boolean, drift: string[]}}
+ */
+function computeFrozenLibsCheck(somaHome) {
+  const drift = [];
+  for (const [file, expectedSha] of Object.entries(FROZEN_LIBS_BASELINE)) {
+    const fpath = require('node:path').join(somaHome, 'scripts', 'lib', file);
+    if (!fs.existsSync(fpath)) {
+      drift.push(`${file} missing`);
+      continue;
+    }
+    const actualSha = crypto.createHash('sha256').update(fs.readFileSync(fpath)).digest('hex');
+    if (actualSha !== expectedSha) drift.push(`${file} (${actualSha} != ${expectedSha})`);
+  }
+  return { match: drift.length === 0, drift };
+}
+
+/**
  * Extract content between <!-- codebase-memory-mcp:start --> and <!-- codebase-memory-mcp:end -->
  * markers from a target file. Returns null if file missing or markers not found.
  *
@@ -330,7 +361,7 @@ function buildPreFlightContext(somaHome, target, force) {
   return {
     lab,
     install,
-    frozenLibs: { match: true },
+    frozenLibs: computeFrozenLibsCheck(somaHome),
     somaHome,
     force,
   };
