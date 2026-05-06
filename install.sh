@@ -66,6 +66,29 @@ if ! command -v claude &>/dev/null; then
   echo "[WARN] Claude CLI not found — 'soma audit' will be unavailable"
 fi
 
+# ── Phase 0.7: cbm/legacy marker detection (Spec 013 AC-11) ─────────────────
+LAB_CLAUDE="$HOME/.claude/CLAUDE.md"
+LAB_CODEX="$HOME/.codex/AGENTS.md"
+LAB_HOME="$HOME/AGENTS.md"
+
+NEEDS_MIGRATION=0
+for FILE in "$LAB_CLAUDE" "$LAB_CODEX" "$LAB_HOME"; do
+  if [ -f "$FILE" ]; then
+    if grep -qE 'id=block\.[^\.]+\..*\.cbm|<!-- codebase-memory-mcp:start -->' "$FILE" 2>/dev/null; then
+      NEEDS_MIGRATION=1
+      break
+    fi
+  fi
+done
+
+if [ "$NEEDS_MIGRATION" -eq 1 ]; then
+  echo "[SOMA] cbm/legacy markers detected. Running cbm migration first..."
+  node "${REPO_ROOT}/scripts/migrate-cbm-deprecation.cjs" || {
+    echo "ERROR: cbm migration failed. Aborting install. Inspect snapshot in ${HOME}/.soma-v2/.snapshots/" >&2
+    exit 1
+  }
+fi
+
 # ── Phase 1: Backup ──────────────────────────────────────────────────────────
 echo "[SOMA] Phase 1: Backup..."
 run "mkdir -p \"${BACKUP_DIR}\""
