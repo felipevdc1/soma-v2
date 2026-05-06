@@ -98,11 +98,40 @@ exports.createMigrationSnapshot = function(somaHome, files) {
   const snapshotId = `${ts}-cbm-deprecation`;
   const snapshotDir = path.join(somaHome, '.snapshots', snapshotId);
   fs.mkdirSync(snapshotDir, { recursive: true });
+  const fileMap = {};
   for (const file of files) {
     if (fs.existsSync(file)) {
-      const dest = path.join(snapshotDir, path.basename(file) + '.snapshot');
+      const snapshotFile = path.basename(file) + '.snapshot';
+      const dest = path.join(snapshotDir, snapshotFile);
       fs.copyFileSync(file, dest);
+      fileMap[snapshotFile] = file;
     }
   }
+  fs.writeFileSync(path.join(snapshotDir, 'manifest.json'), JSON.stringify({ files: fileMap }, null, 2));
   return snapshotId;
+};
+
+/**
+ * Restore files from a named snapshot. Reads snapshot/manifest.json for file→target mapping.
+ *
+ * @param {string} somaHome
+ * @param {string} snapshotId
+ * @throws {Error} if snapshot dir or manifest missing
+ */
+exports.rollbackFromSnapshot = function(somaHome, snapshotId) {
+  const snapshotDir = path.join(somaHome, '.snapshots', snapshotId);
+  if (!fs.existsSync(snapshotDir)) {
+    throw new Error(`Snapshot not found: ${snapshotId}`);
+  }
+  const manifestPath = path.join(snapshotDir, 'manifest.json');
+  if (!fs.existsSync(manifestPath)) {
+    throw new Error(`Snapshot manifest missing: ${manifestPath}`);
+  }
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+  for (const [snapshotFile, target] of Object.entries(manifest.files)) {
+    const src = path.join(snapshotDir, snapshotFile);
+    if (fs.existsSync(src)) {
+      exports.atomicWrite(target, fs.readFileSync(src, 'utf8'));
+    }
+  }
 };
