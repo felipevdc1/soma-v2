@@ -248,6 +248,30 @@ process.exit(0);
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
+test('createMigrationSnapshot: handles same-basename files (no collision)', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'collision-test-'));
+  const somaHome = path.join(tmpDir, '.soma-v2');
+  fs.mkdirSync(path.join(somaHome, '.snapshots'), { recursive: true });
+  const dir1 = path.join(tmpDir, 'a');
+  const dir2 = path.join(tmpDir, 'b');
+  fs.mkdirSync(dir1); fs.mkdirSync(dir2);
+  const file1 = path.join(dir1, 'AGENTS.md');
+  const file2 = path.join(dir2, 'AGENTS.md');
+  fs.writeFileSync(file1, 'content from a');
+  fs.writeFileSync(file2, 'content from b');
+  const snapshotId = lib.createMigrationSnapshot(somaHome, [file1, file2]);
+  const snapshotDir = path.join(somaHome, '.snapshots', snapshotId);
+  const snapshots = fs.readdirSync(snapshotDir).filter(f => f.endsWith('.snapshot'));
+  assert.equal(snapshots.length, 2, 'both files should be snapshotted (no collision)');
+  // Verify rollback restores both correctly
+  fs.writeFileSync(file1, 'mutated a');
+  fs.writeFileSync(file2, 'mutated b');
+  lib.rollbackFromSnapshot(somaHome, snapshotId);
+  assert.equal(fs.readFileSync(file1, 'utf8'), 'content from a');
+  assert.equal(fs.readFileSync(file2, 'utf8'), 'content from b');
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
 test('migrateCbmDeprecation: orchestrates full lifecycle (sandbox)', () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'migrate-test-'));
   const somaHome = path.join(tmpDir, '.soma-v2');
