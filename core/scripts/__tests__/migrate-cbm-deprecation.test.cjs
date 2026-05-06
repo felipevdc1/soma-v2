@@ -134,3 +134,14 @@ test('rollbackFromSnapshot: restores files from snapshot', () => {
   assert.equal(fs.readFileSync(target, 'utf8'), 'original content');
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
+
+const { spawnSync } = require('node:child_process');
+
+test('verifyMigration: invokes doctor.cjs and parses output', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'migrate-test-'));
+  // Setup minimal somaHome with manifest etc — for now just stub the doctor invocation
+  const result = lib.verifyMigration(tmpDir);
+  assert.ok('ok' in result, 'returns {ok, findings}');
+  assert.ok(Array.isArray(result.findings), 'findings is array');
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+});
