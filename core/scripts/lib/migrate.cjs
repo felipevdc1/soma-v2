@@ -158,3 +158,68 @@ exports.verifyMigration = function(somaHome) {
   const count = driftCount ? parseInt(/DRIFT: (\d+) finding/.exec(driftCount)[1], 10) : 0;
   return { ok: count === 0, findings };
 };
+
+/**
+ * Run pre-flight gates G1-G6. Returns {gates: {...}, action: 'proceed'|'noop'|'abort', failures: []}.
+ *
+ * @param {object} ctx — { lab, install, frozenLibs, contentMismatch, force, somaHome }
+ * @returns {{gates: object, action: string, failures: string[]}}
+ */
+exports.preFlightGates = function(ctx = {}) {
+  const gates = {};
+  const failures = [];
+
+  // G1: lab files exist (graceful — only fail if ALL three are missing)
+  const labFiles = [ctx.lab?.claudeMd, ctx.lab?.codexAgents, ctx.lab?.homeAgents].filter(Boolean);
+  const existingLabs = labFiles.filter(f => fs.existsSync(f));
+  gates.G1 = existingLabs.length > 0 ? 'pass' : 'noop';
+
+  // G2: idempotency check
+  const hasCbm = ctx.install?.hasCbm ?? false;
+  const hasLegacy = ctx.install?.hasLegacy ?? false;
+  gates.G2 = (hasCbm || hasLegacy) ? 'pass' : 'noop';
+
+  // G3: content alignment
+  if (ctx.contentMismatch && !ctx.force) {
+    gates.G3 = 'fail';
+    failures.push('G3: lab MCP doc differs from spec extraction. Use --force to override.');
+  } else {
+    gates.G3 = 'pass';
+  }
+
+  // G4: lock file
+  if (ctx.somaHome) {
+    const lockFile = path.join(ctx.somaHome, '.migration.lock');
+    if (fs.existsSync(lockFile)) {
+      gates.G4 = 'fail';
+      failures.push(`G4: another migration running (lock at ${lockFile})`);
+    } else {
+      gates.G4 = 'pass';
+    }
+  } else {
+    gates.G4 = 'pass';
+  }
+
+  // G5: snapshot disk space (skip if no somaHome)
+  gates.G5 = 'pass'; // simplified — production should check via fs.statvfs equivalent
+
+  // G6: frozen libs match
+  if (ctx.frozenLibs && !ctx.frozenLibs.match) {
+    gates.G6 = 'fail';
+    failures.push(`G6: frozen libs drifted: ${(ctx.frozenLibs.drift || []).join(', ')}`);
+  } else {
+    gates.G6 = 'pass';
+  }
+
+  // Determine action
+  let action;
+  if (gates.G1 === 'noop' || gates.G2 === 'noop') {
+    action = 'noop';
+  } else if (failures.length > 0) {
+    action = 'abort';
+  } else {
+    action = 'proceed';
+  }
+
+  return { gates, action, failures };
+};
