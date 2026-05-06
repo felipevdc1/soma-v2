@@ -4,7 +4,7 @@
   "entries": [
     {
       "block_id": "block.codex.AGENTS.codebase-memory-mcp",
-      "source_doc": "docs/hyd-v2.md",
+      "source_doc": "docs/codebase-memory-mcp.md",
       "target_path": "~/.codex/AGENTS.md",
       "target_anchor_id": "block.codex.AGENTS.codebase-memory-mcp"
     },
@@ -22,7 +22,7 @@
     },
     {
       "block_id": "block.codex.AGENTS.codebase-memory-mcp",
-      "source_doc": "docs/hyd-v2.md",
+      "source_doc": "docs/codebase-memory-mcp.md",
       "target_path": "~/AGENTS.md",
       "target_anchor_id": "block.codex.AGENTS.codebase-memory-mcp"
     },

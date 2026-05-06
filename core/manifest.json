@@ -17,6 +17,16 @@
       "status": "released"
     },
     {
+      "id": "core.codebase-memory-mcp",
+      "path": "docs/codebase-memory-mcp.md",
+      "sha256": "a233f5675e73e4dd672065cd4c01b5c319ac5dda0630187b3b61e1ccf283f285",
+      "sourceMtime": "2026-05-06T19:34:41Z",
+      "sourceSha256": "a233f5675e73e4dd672065cd4c01b5c319ac5dda0630187b3b61e1ccf283f285",
+      "targets": ["global", "project"],
+      "expansion_owner": null,
+      "status": "released"
+    },
+    {
       "id": "core.hyd-v2",
       "path": "docs/hyd-v2.md",
       "sha256": "883448797220396aa2f8c86aec0277a56e93aef5e806cfefcfa7201bf5268dd4",

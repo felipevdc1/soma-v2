@@ -3,12 +3,6 @@
   "tool": "claude",
   "entries": [
     {
-      "block_id": "block.claude.CLAUDE_md.cbm",
-      "source_doc": "docs/hyd-v2.md",
-      "target_path": "~/.claude/CLAUDE.md",
-      "target_anchor_id": "block.claude.CLAUDE_md.cbm"
-    },
-    {
       "block_id": "block.claude.CLAUDE_md.hyd-v2",
       "source_doc": "docs/hyd-v2.md",
       "target_path": "~/.claude/CLAUDE.md",
