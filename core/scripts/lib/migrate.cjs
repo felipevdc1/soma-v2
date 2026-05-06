@@ -82,3 +82,27 @@ exports.atomicWrite = function(filePath, content) {
     throw err;
   }
 };
+
+const path = require('node:path');
+
+/**
+ * Create migration snapshot at ~/.soma-v2/.snapshots/{ISO-8601-Z}-cbm-deprecation/
+ * Copies each file in `files` array to snapshot dir preserving basename.
+ *
+ * @param {string} somaHome
+ * @param {string[]} files — absolute paths to snapshot
+ * @returns {string} snapshotId
+ */
+exports.createMigrationSnapshot = function(somaHome, files) {
+  const ts = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
+  const snapshotId = `${ts}-cbm-deprecation`;
+  const snapshotDir = path.join(somaHome, '.snapshots', snapshotId);
+  fs.mkdirSync(snapshotDir, { recursive: true });
+  for (const file of files) {
+    if (fs.existsSync(file)) {
+      const dest = path.join(snapshotDir, path.basename(file) + '.snapshot');
+      fs.copyFileSync(file, dest);
+    }
+  }
+  return snapshotId;
+};
