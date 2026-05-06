@@ -71,7 +71,7 @@ exports.extractMcpContentFromLab = function(labAgentsPath) {
 exports.deleteLegacyBlock = function(content, markerName) {
   const escaped = markerName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const pattern = new RegExp(`\\n?<!--\\s*${escaped}:start\\s*-->[\\s\\S]*?<!--\\s*${escaped}:end\\s*-->\\n?`, 'g');
-  return content.replace(pattern, '\n');
+  return content.replace(pattern, '\n').replace(/\n{3,}/g, '\n\n');
 };
 
 /**

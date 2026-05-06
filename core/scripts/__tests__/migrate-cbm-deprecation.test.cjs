@@ -59,6 +59,12 @@ test('deleteLegacyBlock: removes markers + content cleanly', () => {
   assert.match(result, /# After/);
 });
 
+test('deleteLegacyBlock: no triple newlines when surrounded by blank lines', () => {
+  const input = '# Header\n\n<!-- codebase-memory-mcp:start -->\nx\n<!-- codebase-memory-mcp:end -->\n\n# After';
+  const result = lib.deleteLegacyBlock(input, 'codebase-memory-mcp');
+  assert.doesNotMatch(result, /\n{3,}/, 'no triple+ newlines');
+});
+
 test('deleteLegacyBlock: no-op if marker not present', () => {
   const input = '# Header\nNo markers here.';
   const result = lib.deleteLegacyBlock(input, 'codebase-memory-mcp');
