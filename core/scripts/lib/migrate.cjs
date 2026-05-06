@@ -27,3 +27,17 @@ exports.extractMcpContentFromLab = function(labAgentsPath) {
   const endIdx = endMatch.index;
   return content.slice(startIdx, endIdx).replace(/^\n/, '').replace(/\n$/, '');
 };
+
+/**
+ * Remove a legacy `<!-- {markerName}:start -->...<!-- {markerName}:end -->` block from content.
+ * Idempotent: returns content unchanged if marker not present.
+ *
+ * @param {string} content
+ * @param {string} markerName — e.g., "codebase-memory-mcp"
+ * @returns {string}
+ */
+exports.deleteLegacyBlock = function(content, markerName) {
+  const escaped = markerName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const pattern = new RegExp(`\\n?<!--\\s*${escaped}:start\\s*-->[\\s\\S]*?<!--\\s*${escaped}:end\\s*-->\\n?`, 'g');
+  return content.replace(pattern, '\n');
+};
