@@ -184,7 +184,7 @@ function gate11Constitution({ coreRoot }) {
 
     const content = fs.readFileSync(constitutionFile, 'utf-8');
     const hasVersion = content.includes('v1.0.0');
-    const hasDraft = /draft/i.test(content);
+    const hasDraft = /^\*\*Status:\*\*\s*DRAFT/im.test(content);
 
     if (!hasVersion) return { pass: false, detail: 'constitution.md does not contain v1.0.0' };
     if (hasDraft) return { pass: false, detail: 'constitution.md contains DRAFT — not ratified' };

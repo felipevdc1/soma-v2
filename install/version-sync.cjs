@@ -13,6 +13,8 @@
  * CLI:
  *   node version-sync.cjs          — sync (propagate VERSION to all 3 manifests)
  *   node version-sync.cjs --check  — check drift, exit 1 if detected
+ *   node version-sync.cjs --help   — print usage and exit 0 (pure read, no mutations)
+ *   node version-sync.cjs -h       — alias for --help
  */
 
 const fs = require('node:fs');
@@ -139,7 +141,20 @@ function checkDrift(opts) {
 
 if (require.main === module) {
   const args = process.argv.slice(2);
+  const isHelp = args.includes('--help') || args.includes('-h');
   const isCheck = args.includes('--check');
+
+  if (isHelp) {
+    process.stdout.write([
+      'Usage:',
+      '  node version-sync.cjs          — sync (propagate VERSION to all 3 manifests)',
+      '  node version-sync.cjs --check  — check drift, exit 1 if detected',
+      '  node version-sync.cjs --help   — print this usage and exit 0',
+      '  node version-sync.cjs -h       — alias for --help',
+      '',
+    ].join('\n'));
+    process.exit(0);
+  }
 
   try {
     if (isCheck) {
