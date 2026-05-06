@@ -21,7 +21,7 @@ Windows users: install via WSL2 (Ubuntu 22.04+) and run all commands inside the 
 ## Install in one command
 
 ```bash
-git clone https://github.com/felipevdc/soma-v2.git
+git clone https://github.com/felipevdc1/soma-v2.git
 cd soma-v2
 bash install.sh
 ```

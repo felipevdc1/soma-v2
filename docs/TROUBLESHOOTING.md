@@ -69,7 +69,7 @@ node -e "JSON.parse(require('fs').readFileSync('.claude-plugin/plugin.json','utf
 # If invalid, re-clone the repo
 cd ..
 rm -rf soma-v2
-git clone https://github.com/felipevdc/soma-v2.git
+git clone https://github.com/felipevdc1/soma-v2.git
 cd soma-v2
 bash install.sh
 ```
@@ -253,7 +253,7 @@ bash install.sh
 
 ## Where to file bugs
 
-GitHub Issues: https://github.com/felipevdc/soma-v2/issues
+GitHub Issues: https://github.com/felipevdc1/soma-v2/issues
 
 When filing a bug, include:
 - Output of `node install/verify-portability.cjs` (all 12 gates)

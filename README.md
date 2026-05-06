@@ -48,6 +48,6 @@ MIT — see [LICENSE](./LICENSE).
 
 ## Contributing
 
-Issues and PRs welcome at [github.com/felipevdc/soma-v2](https://github.com/felipevdc/soma-v2/issues).
+Issues and PRs welcome at [github.com/felipevdc1/soma-v2](https://github.com/felipevdc1/soma-v2/issues).
 
 Please read the internal design history in `core/specs/README.md` before proposing architectural changes — many decisions have non-obvious rationale baked into the spec history.
