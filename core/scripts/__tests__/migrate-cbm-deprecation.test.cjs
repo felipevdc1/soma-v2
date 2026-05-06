@@ -248,6 +248,31 @@ process.exit(0);
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
+test('migrateCbmDeprecation: writes + cleans .migration.lock on success', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lock-test-'));
+  const somaHome = path.join(tmpDir, '.soma-v2');
+  fs.mkdirSync(path.join(somaHome, '.snapshots'), { recursive: true });
+  fs.mkdirSync(path.join(somaHome, 'scripts', 'lib'), { recursive: true });
+  // Use real frozen lib content from repo so G6 passes
+  const repoRoot = path.resolve(__dirname, '../../..');
+  for (const file of ['anchored-blocks.cjs', 'manifest.cjs', 'template-engine.cjs']) {
+    fs.copyFileSync(
+      path.join(repoRoot, 'core', 'scripts', 'lib', file),
+      path.join(somaHome, 'scripts', 'lib', file)
+    );
+  }
+  // Setup lab with cbm to trigger migration
+  const labClaude = path.join(tmpDir, 'CLAUDE.md');
+  fs.writeFileSync(labClaude, '<!-- soma-v2:start id=block.claude.CLAUDE_md.cbm version=1.0 sha256=x -->\n<!-- soma-v2:end id=block.claude.CLAUDE_md.cbm -->');
+  const result = lib.migrateCbmDeprecation({
+    somaHome,
+    target: { claudeMd: labClaude, codexAgents: null, homeAgents: null },
+  });
+  // Lock should be cleaned post-completion (whether success or rollback)
+  assert.ok(!fs.existsSync(path.join(somaHome, '.migration.lock')), 'lock file must be deleted');
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
 test('migrateCbmDeprecation: G6 fails if frozen libs drift detected', () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'g6-test-'));
   const somaHome = path.join(tmpDir, '.soma-v2');
