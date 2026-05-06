@@ -234,6 +234,17 @@ process.exit(0);
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
+test('verifyMigration: returns ok=false when doctor exits non-zero with no DRIFT output', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'verify-exit-test-'));
+  const scriptsDir = path.join(tmpDir, 'scripts');
+  fs.mkdirSync(scriptsDir, { recursive: true });
+  fs.writeFileSync(path.join(scriptsDir, 'doctor.cjs'), `#!/usr/bin/env node\nconsole.error('crashed'); process.exit(1);\n`);
+  const result = lib.verifyMigration(tmpDir);
+  assert.equal(result.ok, false);
+  assert.ok(result.findings.some(f => /exited with status 1/.test(f)));
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
 test('verifyMigration: returns ok=true when 0 drifts', () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'verify-test-'));
   const scriptsDir = path.join(tmpDir, 'scripts');

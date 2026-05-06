@@ -188,6 +188,10 @@ exports.verifyMigration = function(somaHome) {
   const findings = (result.stdout + result.stderr)
     .split('\n')
     .filter(l => l.includes('[drift]') || l.includes('DRIFT:'));
+  // Detect crashes via exit code — non-zero exit with no DRIFT output means doctor crashed
+  if (result.status !== 0 && findings.length === 0) {
+    return { ok: false, findings: [`doctor.cjs exited with status ${result.status}: ${(result.stderr || result.stdout).trim()}`] };
+  }
   const driftCount = findings.find(l => /DRIFT: (\d+) finding/.exec(l));
   const count = driftCount ? parseInt(/DRIFT: (\d+) finding/.exec(driftCount)[1], 10) : 0;
   return { ok: count === 0, findings };
