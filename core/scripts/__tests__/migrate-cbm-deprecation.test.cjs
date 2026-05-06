@@ -83,3 +83,19 @@ test('renameAnchor: no-op if oldId not present', () => {
   const result = lib.renameAnchor(input, 'block.claude.CLAUDE_md.cbm', 'block.claude.CLAUDE_md.hyd-v2', 'newhash');
   assert.equal(result, input);
 });
+
+test('atomicWrite: writes via tmp + rename', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'migrate-test-'));
+  const target = path.join(tmpDir, 'output.md');
+  fs.writeFileSync(target, 'old content');
+  lib.atomicWrite(target, 'new content');
+  assert.equal(fs.readFileSync(target, 'utf8'), 'new content');
+  // verify no .tmp leftover
+  const leftovers = fs.readdirSync(tmpDir).filter(f => f.endsWith('.tmp'));
+  assert.equal(leftovers.length, 0, 'no .tmp leftover after rename');
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+test('atomicWrite: throws on permission failure (parent ENOENT)', () => {
+  assert.throws(() => lib.atomicWrite('/nonexistent-dir/file.md', 'content'));
+});
