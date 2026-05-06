@@ -40,3 +40,27 @@ test('extractMcpContentFromLab: returns null if file missing', () => {
   const content = lib.extractMcpContentFromLab('/nonexistent/path');
   assert.equal(content, null);
 });
+
+test('deleteLegacyBlock: removes markers + content cleanly', () => {
+  const input = [
+    '# Header',
+    '',
+    '<!-- codebase-memory-mcp:start -->',
+    'Content to delete',
+    '<!-- codebase-memory-mcp:end -->',
+    '',
+    '# After',
+  ].join('\n');
+  const result = lib.deleteLegacyBlock(input, 'codebase-memory-mcp');
+  assert.doesNotMatch(result, /codebase-memory-mcp:start/);
+  assert.doesNotMatch(result, /codebase-memory-mcp:end/);
+  assert.doesNotMatch(result, /Content to delete/);
+  assert.match(result, /# Header/);
+  assert.match(result, /# After/);
+});
+
+test('deleteLegacyBlock: no-op if marker not present', () => {
+  const input = '# Header\nNo markers here.';
+  const result = lib.deleteLegacyBlock(input, 'codebase-memory-mcp');
+  assert.equal(result, input);
+});
