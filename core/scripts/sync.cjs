@@ -273,6 +273,24 @@ function insertWithPosition(existingContent, newBlock, injectionOptions) {
 // ---- Core sync logic ----
 
 /**
+ * Detect cbm anchors or legacy <!-- codebase-memory-mcp:start --> markers
+ * in lab files. Returns { hasCbm: bool, hasLegacy: bool }.
+ *
+ * @param {{ claudeMd: string, codexAgents: string, homeAgents: string }} target
+ * @returns {{ hasCbm: boolean, hasLegacy: boolean }}
+ */
+function detectLegacyMarkers(target) {
+  const result = { hasCbm: false, hasLegacy: false };
+  for (const file of Object.values(target).filter(Boolean)) {
+    if (!fs.existsSync(file)) continue;
+    const content = fs.readFileSync(file, 'utf8');
+    if (/id=block\.[^\.]+\..*\.cbm/.test(content)) result.hasCbm = true;
+    if (/<!--\s*codebase-memory-mcp:start\s*-->/.test(content)) result.hasLegacy = true;
+  }
+  return result;
+}
+
+/**
  * Determine the sync action for a single install-targets entry.
  */
 function computeEntryAction(entry, somaHome) {
@@ -934,6 +952,25 @@ function main() {
       finding.wrapper_section = entry.wrapper_section || null;
       finding.position_before = entry.position_before || null;
       allFindings.push(finding);
+    }
+  }
+
+  // ---- Auto-detect cbm/legacy markers and invoke migration if found (Spec 013, AC-12) ----
+  if (flags.apply) {
+    const migrate = require('./lib/migrate.cjs');
+    const target = {
+      claudeMd: path.join(os.homedir(), '.claude', 'CLAUDE.md'),
+      codexAgents: path.join(os.homedir(), '.codex', 'AGENTS.md'),
+      homeAgents: path.join(os.homedir(), 'AGENTS.md'),
+    };
+    const markers = detectLegacyMarkers(target);
+    if (markers.hasCbm || markers.hasLegacy) {
+      console.log('SOMA: cbm/legacy markers detected, running migration first...');
+      const migrateResult = migrate.migrateCbmDeprecation({ somaHome, target, dryRun: false });
+      if (migrateResult.action !== 'completed' && migrateResult.action !== 'noop') {
+        console.error(`Migration failed: ${migrateResult.error || 'unknown'}`);
+        process.exit(1);
+      }
     }
   }
 
