@@ -108,9 +108,14 @@ test('issue-11: sync --apply upgrades legacy markers to anchored format (start m
   const { somaDir, targetFile, anchorId } = createLegacyUpgradeFixture();
   runSync(['--apply', '--tool=codex', `--soma-home=${somaDir}`, '--json']);
   const content = fs.readFileSync(targetFile, 'utf8');
+  // B2: assert full exact form including version=1.0 — absence of version breaks idempotency
+  // (extractBlock would not classify block as anchored on next run without version attribute)
+  const sha256Pattern = new RegExp(
+    `<!-- soma-v2:start id=${anchorId.replace(/\./g, '\\.')} version=1\\.0 sha256=[0-9a-f]{64} -->`
+  );
   assert.ok(
-    content.includes(`<!-- soma-v2:start id=${anchorId}`),
-    `Expected anchored start marker in target. Got:\n${content}`
+    sha256Pattern.test(content),
+    `Expected anchored start marker with version=1.0 and sha256 in target. Got:\n${content}`
   );
 });
 
@@ -124,13 +129,14 @@ test('issue-11: sync --apply upgrades legacy markers — end marker has anchored
   );
 });
 
-test('issue-11: sync --apply upgrades legacy markers — start marker has sha256 attribute', () => {
+test('issue-11: sync --apply upgrades legacy markers — start marker has version=1.0 and sha256 attribute', () => {
   const { somaDir, targetFile, anchorId } = createLegacyUpgradeFixture();
   runSync(['--apply', '--tool=codex', `--soma-home=${somaDir}`, '--json']);
   const content = fs.readFileSync(targetFile, 'utf8');
+  // B2: must include version=1.0 — a regression that drops 'version' would break idempotency
   assert.ok(
-    /<!-- soma-v2:start id=.+ sha256=[0-9a-f]{64} -->/.test(content),
-    `Expected sha256 attribute in start marker. Got:\n${content}`
+    /<!-- soma-v2:start id=[^\s]+ version=1\.0 sha256=[0-9a-f]{64} -->/.test(content),
+    `Expected version=1.0 and sha256 attribute in start marker. Got:\n${content}`
   );
 });
 
