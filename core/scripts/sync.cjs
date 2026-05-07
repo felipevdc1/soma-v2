@@ -193,6 +193,59 @@ function isLegacyBlockNested(existingContent, anchorId) {
   return false;
 }
 
+/**
+ * Upgrade a top-level legacy marker block (<!-- shortname:start --> / <!-- shortname:end -->)
+ * to the anchored soma-v2 format in-place.
+ *
+ * Called by runApplyMode when action='drift' and message contains 'lacks id/version/sha256 attributes'
+ * (legacy-upgrade drift). Reuses the 'replace' semantic — finds the legacy start/end markers and
+ * rewrites the entire region with the anchored form using source_block_content from the finding.
+ *
+ * @param {string} targetPath - absolute path to target file
+ * @param {string} anchorId - soma-v2 block ID (may be dotted, e.g. 'block.codex.AGENTS.hyd-v2')
+ * @param {string} blockContent - inner content from source (from finding.source_block_content)
+ * @returns {{ action: 'replace', sha256: string }}
+ * @spec Issue #11 / D-013-10
+ */
+function writeLegacyUpgrade(targetPath, anchorId, blockContent) {
+  const sha256 = computeBlockSha256(blockContent);
+  const shortName = anchorId.includes('.') ? anchorId.split('.').pop() : anchorId;
+  const legacyStartPattern = new RegExp(`<!--\\s*${escapeRegex(shortName)}:start\\s*-->`);
+  const legacyEndPattern = new RegExp(`<!--\\s*${escapeRegex(shortName)}:end\\s*-->`);
+
+  const startMarker = `<!-- soma-v2:start id=${anchorId} version=1.0 sha256=${sha256} -->`;
+  const endMarker = `<!-- soma-v2:end id=${anchorId} -->`;
+
+  const existingContent = fs.readFileSync(targetPath, 'utf8');
+  const lines = existingContent.split('\n');
+  const newLines = [];
+  let i = 0;
+  while (i < lines.length) {
+    if (legacyStartPattern.test(lines[i])) {
+      // Replace legacy block region with anchored format
+      newLines.push(startMarker);
+      i++;
+      // Skip all lines until (and including) the legacy end marker
+      while (i < lines.length) {
+        if (legacyEndPattern.test(lines[i])) {
+          for (const cl of blockContent.split('\n')) newLines.push(cl);
+          newLines.push(endMarker);
+          i++;
+          break;
+        }
+        i++;
+      }
+    } else {
+      newLines.push(lines[i]);
+      i++;
+    }
+  }
+
+  fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+  fs.writeFileSync(targetPath, newLines.join('\n'));
+  return { action: 'replace', sha256 };
+}
+
 // ---- BF-01/BF-02: Positional insert with wrapper section support ----
 
 /**
@@ -601,11 +654,14 @@ function runApplyMode(flags, somaHome, allFindings, totalEntries, adapters, useJ
     }
   }
 
-  // Filter actionable: insert, replace, and drift-with-source-mismatch (D4 case: manual edit + source update needed)
-  // drift findings where sha attr mismatch (manual edit) are treated as "replace with LOCAL_EDITS_DETECTED warning"
+  // Filter actionable: insert, replace, and two drift sub-cases:
+  //   (a) D4: manual edit detected (sha attr mismatch) — treated as "replace with LOCAL_EDITS_DETECTED warning"
+  //   (b) Issue #11 / D-013-10: legacy marker upgrade — block exists with legacy markers but lacks
+  //       id/version/sha256 attributes (Phase 3+ upgrade). Reuses 'replace' semantic via writeLegacyUpgrade.
   const actionableFindings = allFindings.filter(f =>
     f.action === 'insert' || f.action === 'replace' ||
-    (f.action === 'drift' && f.message && f.message.includes('manual edit detected'))
+    (f.action === 'drift' && f.message && f.message.includes('manual edit detected')) ||
+    (f.action === 'drift' && f.message && f.message.includes('lacks id/version/sha256 attributes'))
   );
 
   // D2: validate ALL targets pre-write (anchor_error → ANCHOR_PARSE_ERROR)
@@ -764,6 +820,9 @@ function runApplyMode(flags, somaHome, allFindings, totalEntries, adapters, useJ
   for (const f of actionableFindings) {
     // D4: detect local edits before writing (drift = manual edit detected)
     const isDrift = f.action === 'drift' && f.message && f.message.includes('manual edit detected');
+    // Issue #11 / D-013-10: legacy marker upgrade drift
+    const isLegacyUpgrade = f.action === 'drift' && f.message && f.message.includes('lacks id/version/sha256 attributes');
+
     if (isDrift) {
       // D4: drift with manual edit = local edits detected; warn loud + write anyway
       const snapFilePath = snapshotResult
@@ -802,17 +861,26 @@ function runApplyMode(flags, somaHome, allFindings, totalEntries, adapters, useJ
     const blockContent = sourceBlock.found ? sourceBlock.content : fs.readFileSync(sourceDocAbs, 'utf8');
     const version = (sourceBlock.found && sourceBlock.attrs && sourceBlock.attrs.version) ? sourceBlock.attrs.version : '1.0';
 
-    // BF-01/BF-02: determine injection options (per-entry fields override tool defaults)
-    // @spec AC-03 + BF-01 BF-02
-    const toolDefaults = TOOL_DEFAULTS[f.adapter] || {};
-    const injectionOptions = {
-      wrapperSection: f.wrapper_section || toolDefaults.wrapperSection || null,
-      positionBefore: f.position_before || toolDefaults.positionBefore || null
-    };
+    if (isLegacyUpgrade) {
+      // Issue #11 / D-013-10: legacy marker upgrade path.
+      // Uses writeLegacyUpgrade (regex-based replacement of <!-- shortname:start/end --> markers)
+      // rather than writeBlock (which uses parseAnchorAttrs and cannot match legacy format).
+      // source_block_content is already computed on the finding; use it directly for consistency.
+      const upgradeContent = f.source_block_content || blockContent;
+      writeLegacyUpgrade(f.target_path, f.target_anchor_id, upgradeContent);
+    } else {
+      // BF-01/BF-02: determine injection options (per-entry fields override tool defaults)
+      // @spec AC-03 + BF-01 BF-02
+      const toolDefaults = TOOL_DEFAULTS[f.adapter] || {};
+      const injectionOptions = {
+        wrapperSection: f.wrapper_section || toolDefaults.wrapperSection || null,
+        positionBefore: f.position_before || toolDefaults.positionBefore || null
+      };
+      writeBlock(f.target_path, f.target_anchor_id, blockContent, version, injectionOptions);
+    }
 
-    writeBlock(f.target_path, f.target_anchor_id, blockContent, version, injectionOptions);
     // Normalize drift action to 'replace' in summary (it's a write operation)
-    const actionLabel = isDrift ? 'replace' : f.action;
+    const actionLabel = (isDrift || isLegacyUpgrade) ? 'replace' : f.action;
     byAction[actionLabel] = (byAction[actionLabel] || 0) + 1;
     filesTouched.push({ adapter: f.adapter, path: path.basename(f.target_path), action: actionLabel });
 
