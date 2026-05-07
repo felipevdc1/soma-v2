@@ -381,6 +381,16 @@ test('doctor reports install_targets_count=8 (5 codex + 3 claude entries) in che
   const { somaDir, fixtureDir } = createFixture('targets-count');
   const { codexAgentsMd, homeAgentsMd, claudeMdPath } = writeMigrationFixtures(fixtureDir);
 
+  // Patch fixture's claude install-targets: remove legacy cbm entry so count is 8 (5 codex + 3 claude).
+  // The real ~/.soma-v2 may still have cbm during migration rollout; the fixture must reflect
+  // the post-migration canonical state (AC-20: cbm deprecated, 3 claude entries remain).
+  const claudeItPath = path.join(somaDir, 'adapters', 'claude', 'install-targets.json');
+  if (fs.existsSync(claudeItPath)) {
+    const it = JSON.parse(fs.readFileSync(claudeItPath, 'utf8'));
+    it.entries = it.entries.filter(e => e.block_id !== 'block.claude.CLAUDE_md.cbm');
+    fs.writeFileSync(claudeItPath, JSON.stringify(it, null, 2));
+  }
+
   // Run doctor WITHOUT --check-migration to test install_targets_count field
   // This field should be present in normal doctor output per contract Output section
   const { status, json } = runDoctor([`--soma-home=${somaDir}`]);
@@ -395,8 +405,8 @@ test('doctor reports install_targets_count=8 (5 codex + 3 claude entries) in che
   assert.ok(json, `Expected JSON output from doctor. stdout: ${String(json ?? '').slice(0, 200)}`);
   assert.ok(json?.checks, `Expected checks object in output. Got: ${JSON.stringify(json)}`);
 
-  assert.equal(json.checks.install_targets_count, 9,
-    `Expected install_targets_count=9 (5 codex + 4 claude: cbm, hyd-v2, soma-stsd, soma-voxel). ` +
+  assert.equal(json.checks.install_targets_count, 8,
+    `Expected install_targets_count=8 (5 codex + 3 claude: hyd-v2, soma-stsd, soma-voxel). ` +
     `Got: ${json.checks.install_targets_count}.`);
 
   assert.equal(json.checks.adapters_count, 5,
