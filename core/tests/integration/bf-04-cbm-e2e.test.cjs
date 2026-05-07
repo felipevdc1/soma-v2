@@ -368,6 +368,78 @@ test('Scenario 5: --revert restores lab files from snapshot', () => {
   }
 });
 
+// ── Scenario 7: Idempotency ───────────────────────────────────────────────────
+
+test('Scenario 7: double-invoke is idempotent (G2 noop on second run)', () => {
+  const { root, home, somaHome } = setupFixture('s7');
+
+  try {
+    const cliScript = path.join(somaHome, 'scripts', 'migrate-cbm-deprecation.cjs');
+    const env = { ...process.env, HOME: home, SOMA_HOME: somaHome };
+
+    // First migration — must complete
+    const r1 = spawnSync('node', [cliScript], { env, encoding: 'utf8', timeout: 30_000 });
+    let out1;
+    try {
+      out1 = JSON.parse(r1.stdout);
+    } catch {
+      assert.fail(`First migration stdout is not valid JSON: ${r1.stdout}`);
+    }
+    assert.equal(out1.action, 'completed', `First run must complete. Got: ${out1.action}\nstdout: ${r1.stdout}`);
+
+    // Second migration (should noop — nothing left to migrate)
+    const r2 = spawnSync('node', [cliScript], { env, encoding: 'utf8', timeout: 30_000 });
+    let out2;
+    try {
+      out2 = JSON.parse(r2.stdout);
+    } catch {
+      assert.fail(`Second migration stdout is not valid JSON: ${r2.stdout}`);
+    }
+    assert.equal(out2.action, 'noop', `Second run should detect nothing to migrate. Got: ${out2.action}`);
+  } finally {
+    cleanupFixture(root);
+  }
+});
+
+// ── Scenario 8: Asymmetric lab (claude-only) ─────────────────────────────────
+
+test('Scenario 8: asymmetric lab (claude has cbm, codex has nothing)', () => {
+  const { root, home, somaHome } = setupFixture('s8');
+
+  try {
+    // Remove codex AGENTS.md to simulate asymmetric state (only claude has cbm)
+    const codexAgentsMd = path.join(home, '.codex', 'AGENTS.md');
+    if (fs.existsSync(codexAgentsMd)) fs.unlinkSync(codexAgentsMd);
+
+    const cliScript = path.join(somaHome, 'scripts', 'migrate-cbm-deprecation.cjs');
+
+    const result = spawnSync(
+      'node',
+      [cliScript],
+      {
+        env: { ...process.env, HOME: home, SOMA_HOME: somaHome },
+        encoding: 'utf8',
+        timeout: 30_000,
+      }
+    );
+
+    let out;
+    try {
+      out = JSON.parse(result.stdout);
+    } catch {
+      assert.fail(`CLI stdout is not valid JSON: ${result.stdout}`);
+    }
+    assert.equal(out.action, 'completed', `Should migrate claude-only successfully. Got: ${out.action}\nstdout: ${result.stdout}\nstderr: ${result.stderr}`);
+
+    // Verify CLAUDE.md migrated: hyd-v2 anchor present, cbm anchor absent
+    const claudeContent = fs.readFileSync(path.join(home, '.claude', 'CLAUDE.md'), 'utf8');
+    assert.match(claudeContent, /id=block\.claude\.CLAUDE_md\.hyd-v2/);
+    assert.doesNotMatch(claudeContent, /id=block\.claude\.CLAUDE_md\.cbm/);
+  } finally {
+    cleanupFixture(root);
+  }
+});
+
 // ── Scenario 6: Content mismatch aborts without --force ───────────────────────
 
 test('Scenario 6: content mismatch in MCP doc aborts without --force (G3 gate)', () => {
