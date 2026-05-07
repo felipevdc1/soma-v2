@@ -51,10 +51,17 @@ function computeFrozenLibsCheck(somaHome) {
 exports.extractMcpContentFromLab = function(labAgentsPath) {
   if (!fs.existsSync(labAgentsPath)) return null;
   const content = fs.readFileSync(labAgentsPath, 'utf8');
-  const startPattern = /<!--\s*codebase-memory-mcp:start\s*-->/;
-  const endPattern = /<!--\s*codebase-memory-mcp:end\s*-->/;
-  const startMatch = content.match(startPattern);
-  const endMatch = content.match(endPattern);
+  const startPattern = /<!--\s*codebase-memory-mcp:start\s*-->/g;
+  const endPattern = /<!--\s*codebase-memory-mcp:end\s*-->/g;
+  const startMatches = content.match(startPattern) || [];
+  const endMatches = content.match(endPattern) || [];
+  if (startMatches.length === 0 && endMatches.length === 0) return null;
+  if (startMatches.length > 1 || endMatches.length > 1) {
+    throw new Error('Multiple codebase-memory-mcp markers detected — file may be corrupted. Inspect manually.');
+  }
+  // Re-run as non-global to get .index
+  const startMatch = content.match(/<!--\s*codebase-memory-mcp:start\s*-->/);
+  const endMatch = content.match(/<!--\s*codebase-memory-mcp:end\s*-->/);
   if (!startMatch || !endMatch) return null;
   const startIdx = startMatch.index + startMatch[0].length;
   const endIdx = endMatch.index;
