@@ -483,6 +483,30 @@ test('migrateCbmDeprecation: cleans .migration.lock on rollback path', () => {
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
+test('computeFrozenLibsCheck: drift entries have kind field (mismatch vs missing)', () => {
+  // Test via preFlightGates with structured drift entries
+  const result = lib.preFlightGates({ frozenLibs: { match: false, drift: [
+    { file: 'anchored-blocks.cjs', kind: 'mismatch', expected: 'aaa', actual: 'bbb' },
+    { file: 'manifest.cjs', kind: 'missing' },
+  ]}});
+  assert.equal(result.gates.G6, 'fail');
+  assert.ok(result.failures.some(f => /mismatch|missing/.test(f)));
+});
+
+test('verifyMigration: distinguishes doctor-missing from doctor-crashed', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'verify-cat-test-'));
+  // Test 1: doctor missing → category: doctor_missing
+  const r1 = lib.verifyMigration(tmpDir);
+  assert.equal(r1.category, 'doctor_missing');
+  // Test 2: doctor crashes (exit 2) → category: doctor_crashed
+  const scriptsDir = path.join(tmpDir, 'scripts');
+  fs.mkdirSync(scriptsDir, { recursive: true });
+  fs.writeFileSync(path.join(scriptsDir, 'doctor.cjs'), `#!/usr/bin/env node\nprocess.exit(2);\n`);
+  const r2 = lib.verifyMigration(tmpDir);
+  assert.equal(r2.category, 'doctor_crashed');
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
 test('preFlightGates G4: auto-clears stale lock (mtime > 1h)', () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'stale-lock-test-'));
   const lockFile = path.join(tmpDir, '.migration.lock');
