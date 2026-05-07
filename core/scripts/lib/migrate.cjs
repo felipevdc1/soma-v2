@@ -258,12 +258,22 @@ exports.preFlightGates = function(ctx = {}) {
     gates.G3 = 'pass';
   }
 
-  // G4: lock file
+  // G4: lock file (stale locks > 1h auto-cleared)
   if (ctx.somaHome) {
     const lockFile = path.join(ctx.somaHome, '.migration.lock');
     if (fs.existsSync(lockFile)) {
-      gates.G4 = 'fail';
-      failures.push(`G4: another migration running (lock at ${lockFile})`);
+      const STALE_THRESHOLD_MS = 60 * 60 * 1000; // 1 hour
+      const mtimeMs = fs.statSync(lockFile).mtimeMs;
+      if (Date.now() - mtimeMs > STALE_THRESHOLD_MS) {
+        // Stale lock from a crashed previous run — auto-clear with warning
+        try { fs.unlinkSync(lockFile); } catch (e) {
+          console.error(`Warning: failed to clear stale lock at ${lockFile}: ${e.message}`);
+        }
+        gates.G4 = 'pass';
+      } else {
+        gates.G4 = 'fail';
+        failures.push(`G4: another migration running (lock at ${lockFile})`);
+      }
     } else {
       gates.G4 = 'pass';
     }
