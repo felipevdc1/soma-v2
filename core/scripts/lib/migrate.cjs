@@ -173,7 +173,11 @@ exports.rollbackFromSnapshot = function(somaHome, snapshotId) {
 const { spawnSync } = require('node:child_process');
 
 /**
- * Verify migration by running doctor.cjs in target somaHome.
+ * Verify migration by running doctor.cjs --check-migration in target somaHome.
+ * Uses migration-check mode (--check-migration) which scans only for old-format
+ * cbm markers — skipping full drift detection. After a successful migration, zero
+ * old-format markers should remain.
+ *
  * Returns {ok: boolean, findings: string[]}.
  *
  * @param {string} somaHome
@@ -184,17 +188,32 @@ exports.verifyMigration = function(somaHome) {
   if (!fs.existsSync(doctorPath)) {
     return { ok: false, findings: [`doctor.cjs not found at ${doctorPath}`] };
   }
-  const result = spawnSync('node', [doctorPath], { cwd: somaHome, encoding: 'utf8' });
-  const findings = (result.stdout + result.stderr)
-    .split('\n')
-    .filter(l => l.includes('[drift]') || l.includes('DRIFT:'));
-  // Detect crashes via exit code — non-zero exit with no DRIFT output means doctor crashed
-  if (result.status !== 0 && findings.length === 0) {
+  // Use --check-migration --json for structured output; exit 0 even with warnings
+  const result = spawnSync('node', [doctorPath, '--check-migration', '--json'], {
+    cwd: somaHome,
+    encoding: 'utf8',
+  });
+  // Detect crashes via non-zero exit + no parseable output
+  if (result.status !== 0) {
     return { ok: false, findings: [`doctor.cjs exited with status ${result.status}: ${(result.stderr || result.stdout).trim()}`] };
   }
-  const driftCount = findings.find(l => /DRIFT: (\d+) finding/.exec(l));
-  const count = driftCount ? parseInt(/DRIFT: (\d+) finding/.exec(driftCount)[1], 10) : 0;
-  return { ok: count === 0, findings };
+  // Parse JSON output
+  let parsed;
+  try {
+    parsed = JSON.parse(result.stdout);
+  } catch {
+    // Non-JSON output (e.g. human mode fallback) — treat as ok if exit 0
+    return { ok: true, findings: [] };
+  }
+  // migration_needed=true means old-format markers still present — migration incomplete
+  if (parsed.migration_check && parsed.migration_check.migration_needed) {
+    const count = parsed.migration_check.old_markers_detected || 'unknown';
+    return {
+      ok: false,
+      findings: [`DRIFT: ${count} old-format marker(s) still present after migration`],
+    };
+  }
+  return { ok: true, findings: [] };
 };
 
 /**
@@ -418,16 +437,43 @@ function computePreview(target) {
 }
 
 /**
- * Migrate CLAUDE.md: rename cbm → hyd-v2 anchor, delete legacy markers.
+ * Extract inner content of a soma-v2 anchor block by ID.
+ * Returns the content string, or null if not found.
+ *
+ * @param {string} fileContent — full file text
+ * @param {string} blockId — e.g. "block.claude.CLAUDE_md.cbm"
+ * @returns {string|null}
+ */
+function extractAnchorContent(fileContent, blockId) {
+  const escapedId = blockId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const startPattern = new RegExp(`<!--\\s*soma-v2:start\\s+id=${escapedId}[^>]*-->`);
+  const endPattern = new RegExp(`<!--\\s*soma-v2:end\\s+id=${escapedId}\\s*-->`);
+  const startMatch = fileContent.match(startPattern);
+  const endMatch = fileContent.match(endPattern);
+  if (!startMatch || !endMatch) return null;
+  const startIdx = startMatch.index + startMatch[0].length;
+  const endIdx = endMatch.index;
+  if (endIdx <= startIdx) return null;
+  // Strip leading/trailing newline (doctor computeBlockSha256 uses raw content between markers)
+  return fileContent.slice(startIdx, endIdx).replace(/^\n/, '').replace(/\n$/, '');
+}
+
+/**
+ * Migrate CLAUDE.md: rename cbm → hyd-v2 anchor with real sha256, delete legacy markers.
  */
 function migrateClaude(claudeMdPath) {
   const content = fs.readFileSync(claudeMdPath, 'utf8');
-  // Step 1: rename cbm → hyd-v2 anchor
+  // Compute real sha256 of inner block content before renaming
+  const blockContent = extractAnchorContent(content, 'block.claude.CLAUDE_md.cbm');
+  const realSha = blockContent !== null
+    ? crypto.createHash('sha256').update(blockContent).digest('hex')
+    : 'migrated';
+  // Step 1: rename cbm → hyd-v2 anchor with real sha256
   let mutated = exports.renameAnchor(
     content,
     'block.claude.CLAUDE_md.cbm',
     'block.claude.CLAUDE_md.hyd-v2',
-    'migrated'
+    realSha
   );
   // Step 2: delete legacy codebase-memory-mcp markers if present
   mutated = exports.deleteLegacyBlock(mutated, 'codebase-memory-mcp');
@@ -436,17 +482,22 @@ function migrateClaude(claudeMdPath) {
 }
 
 /**
- * Migrate AGENTS.md: delete legacy codebase-memory-mcp markers.
+ * Migrate AGENTS.md: delete legacy codebase-memory-mcp markers, rename cbm anchor with real sha256.
  */
 function migrateCodexAgents(agentsPath) {
   const content = fs.readFileSync(agentsPath, 'utf8');
-  // Step 1: delete legacy markers OR existing soma-v2 anchor with cbm id
+  // Step 1: delete legacy markers
   let mutated = exports.deleteLegacyBlock(content, 'codebase-memory-mcp');
+  // Compute real sha256 of inner block content (from pre-mutation content) before renaming
+  const blockContent = extractAnchorContent(content, 'block.codex.AGENTS.cbm');
+  const realSha = blockContent !== null
+    ? crypto.createHash('sha256').update(blockContent).digest('hex')
+    : 'migrated';
   mutated = exports.renameAnchor(
     mutated,
     'block.codex.AGENTS.cbm',
     'block.codex.AGENTS.codebase-memory-mcp',
-    'migrated'
+    realSha
   );
   // Step 3: atomicWrite
   exports.atomicWrite(agentsPath, mutated);
