@@ -12,9 +12,11 @@
 Every adapter MUST use the convention `block.{tool}.{file}.{section}` for anchored block identifiers, versioned via `~/.soma-v2/manifest.json`.
 
 Examples:
-- Codex: `block.codex.AGENTS.cbm`, `block.codex.AGENTS.hyd-v2`, `block.codex.AGENTS.soma-stsd`
-- Claude: `block.claude.CLAUDE_md.cbm`, `block.claude.CLAUDE_md.hyd-v2`, `block.claude.CLAUDE_md.soma-stsd`
-- Future Cursor: `block.cursor.RULES.cbm` (illustrative)
+- Codex: `block.codex.AGENTS.codebase-memory-mcp`, `block.codex.AGENTS.hyd-v2`, `block.codex.AGENTS.soma-stsd`
+- Claude: `block.claude.CLAUDE_md.hyd-v2`, `block.claude.CLAUDE_md.soma-stsd`, `block.claude.CLAUDE_md.soma-voxel`
+- Future Cursor: `block.cursor.RULES.hyd-v2` (illustrative)
+
+**Note (Spec 013, v2.1.1)**: Legacy `cbm` anchor (claude adapter) deprecated and auto-migrated to `hyd-v2`. Codex `codebase-memory-mcp` source corrected from misroute (`docs/hyd-v2.md` → `docs/codebase-memory-mcp.md`). See `core/specs/013-cbm-deprecation/spec.md`.
 
 Anchor format (frozen rev 2): `<!-- soma-v2:start id={id} version={ver} sha256={hex64} -->` ... `<!-- soma-v2:end id={id} -->`
 
@@ -58,7 +60,7 @@ The integration layer is OPTIONAL — adapters can ship read-only artifact integ
 
 ### Clause E — Claude anchor strategy concretization
 
-Decision (D-C11): Claude adapter uses `~/.claude/CLAUDE.md` as install target with anchor IDs `block.claude.CLAUDE_md.{cbm,hyd-v2,soma-stsd}` parallel to Codex's `block.codex.AGENTS.{cbm,hyd-v2,soma-stsd}` pattern.
+Decision (D-C11, amended Spec 013 v2.1.1): Claude adapter uses `~/.claude/CLAUDE.md` as install target with anchor IDs `block.claude.CLAUDE_md.{hyd-v2,soma-stsd,soma-voxel}`. Codex adapter uses `~/.codex/AGENTS.md` + `~/AGENTS.md` with anchor IDs `block.codex.AGENTS.{codebase-memory-mcp,hyd-v2,soma-stsd}`. Sources: `docs/hyd-v2.md` (HYD discipline), `docs/soma-stsd.md` (operating lens), `docs/output-style.md` (claude soma-voxel theme), `docs/codebase-memory-mcp.md` (codex MCP knowledge graph doc).
 
 This concretization unblocks Phase 5 install: SOMA CLI generates anchored blocks from canonical SOMA_HOME docs, injects into target tool's bootloader file (CLAUDE.md for Claude, AGENTS.md for Codex), preserving existing user content via anchor-based extraction.
 
