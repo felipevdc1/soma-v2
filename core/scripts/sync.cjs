@@ -194,6 +194,38 @@ function isLegacyBlockNested(existingContent, anchorId) {
 }
 
 /**
+ * Detect legacy parse errors in a file: legacy start marker without matching end.
+ * Defense-in-depth pre-flight check — wired into writeLegacyUpgrade before any write.
+ * Returns error message string if broken (orphan start), null if clean.
+ *
+ * @param {string} filepath - absolute path to target file
+ * @param {string} shortName - legacy shortname (e.g. 'hyd-v2' for anchorId 'block.codex.AGENTS.hyd-v2')
+ * @returns {string|null}
+ */
+function detectLegacyParseError(filepath, shortName) {
+  let content;
+  try {
+    content = fs.readFileSync(filepath, 'utf8');
+  } catch (err) {
+    return null;
+  }
+  const lines = content.split('\n');
+  const legacyStartPattern = new RegExp(`<!--\\s*${escapeRegex(shortName)}:start\\s*-->`);
+  const legacyEndPattern = new RegExp(`<!--\\s*${escapeRegex(shortName)}:end\\s*-->`);
+  for (let i = 0; i < lines.length; i++) {
+    if (legacyStartPattern.test(lines[i])) {
+      // Found start — look for matching end
+      for (let j = i + 1; j < lines.length; j++) {
+        if (legacyEndPattern.test(lines[j])) return null; // found end — clean
+      }
+      // Start found but no end: orphan condition
+      return `LEGACY_UPGRADE_MALFORMED: legacy start marker for "${shortName}" found at line ${i + 1} but no matching <!-- ${shortName}:end --> in ${filepath}`;
+    }
+  }
+  return null;
+}
+
+/**
  * Upgrade a top-level legacy marker block (<!-- shortname:start --> / <!-- shortname:end -->)
  * to the anchored soma-v2 format in-place.
  *
@@ -217,6 +249,25 @@ function writeLegacyUpgrade(targetPath, anchorId, blockContent) {
   const endMarker = `<!-- soma-v2:end id=${anchorId} -->`;
 
   const existingContent = fs.readFileSync(targetPath, 'utf8');
+
+  // --- B1: Pre-write guard — detect orphan legacy start marker (no matching end) ---
+  // Must run BEFORE any fs.writeFileSync to prevent file corruption.
+  const legacyParseError = detectLegacyParseError(targetPath, shortName);
+  if (legacyParseError) {
+    throw new Error(legacyParseError);
+  }
+
+  // --- C1: Pre-write uniqueness guard — detect shortname collision (multiple legacy blocks) ---
+  // By design (matches FROZEN extractBlock heuristic), upgrade derives shortname via .split('.').pop().
+  // If a target file contains multiple legacy blocks with colliding shortnames, behavior is undefined.
+  const allLines = existingContent.split('\n');
+  const startMatchCount = allLines.filter(l => legacyStartPattern.test(l)).length;
+  if (startMatchCount > 1) {
+    throw new Error(
+      `LEGACY_UPGRADE_AMBIGUOUS: shortname "${shortName}" matches ${startMatchCount} legacy blocks in ${targetPath}; cannot disambiguate`
+    );
+  }
+
   const lines = existingContent.split('\n');
   const newLines = [];
   let i = 0;
@@ -866,7 +917,12 @@ function runApplyMode(flags, somaHome, allFindings, totalEntries, adapters, useJ
       // Uses writeLegacyUpgrade (regex-based replacement of <!-- shortname:start/end --> markers)
       // rather than writeBlock (which uses parseAnchorAttrs and cannot match legacy format).
       // source_block_content is already computed on the finding; use it directly for consistency.
-      const upgradeContent = f.source_block_content || blockContent;
+      // source_block_content is always populated for legacy-upgrade drift findings
+      // (computeEntryAction:373-385 sets it from the source doc).
+      if (!f.source_block_content) {
+        throw new Error('LEGACY_UPGRADE_INVARIANT: source_block_content missing on legacy drift finding');
+      }
+      const upgradeContent = f.source_block_content;
       writeLegacyUpgrade(f.target_path, f.target_anchor_id, upgradeContent);
     } else {
       // BF-01/BF-02: determine injection options (per-entry fields override tool defaults)
@@ -1089,3 +1145,8 @@ function main() {
 }
 
 main();
+
+// Export internal functions for testing (test harness only — not part of public API)
+if (process.env.SOMA_TEST_EXPORTS === '1') {
+  module.exports = { detectLegacyParseError, writeLegacyUpgrade };
+}
