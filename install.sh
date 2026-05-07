@@ -78,6 +78,11 @@ LAB_HOME="$HOME/AGENTS.md"
 NEEDS_MIGRATION=0
 for FILE in "$LAB_CLAUDE" "$LAB_CODEX" "$LAB_HOME"; do
   if [ -f "$FILE" ]; then
+    # Skip binary files — grep on binary can produce false positives or garbled output
+    case "$(file -b --mime-type "$FILE" 2>/dev/null)" in
+      text/*) ;;
+      *) continue ;;
+    esac
     if grep -qE 'id=block\.[^\.]+\..*\.cbm|<!-- codebase-memory-mcp:start -->' "$FILE" 2>/dev/null; then
       NEEDS_MIGRATION=1
       break
@@ -87,8 +92,10 @@ done
 
 if [ "$NEEDS_MIGRATION" -eq 1 ]; then
   echo "[SOMA] cbm/legacy markers detected. Running cbm migration first..."
-  node "${REPO_ROOT}/core/scripts/migrate-cbm-deprecation.cjs" || {
-    echo "ERROR: cbm migration failed. Aborting install. Inspect snapshot in ${HOME}/.soma-v2/.snapshots/" >&2
+  MIGRATION_OUTPUT=$(node "${REPO_ROOT}/core/scripts/migrate-cbm-deprecation.cjs" 2>&1) || {
+    echo "ERROR: cbm migration failed. Output:" >&2
+    echo "$MIGRATION_OUTPUT" >&2
+    echo "Inspect snapshot in ${HOME}/.soma-v2/.snapshots/" >&2
     exit 1
   }
 fi
