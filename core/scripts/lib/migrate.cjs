@@ -120,7 +120,9 @@ exports.atomicWrite = function(filePath, content) {
   } catch (err) {
     // Cleanup tmp on failure
     if (fs.existsSync(tmpPath)) {
-      try { fs.unlinkSync(tmpPath); } catch {}
+      try { fs.unlinkSync(tmpPath); } catch (cleanupErr) {
+        console.error(`Warning: tmp file cleanup failed: ${tmpPath} (${cleanupErr.message})`);
+      }
     }
     throw err;
   }
