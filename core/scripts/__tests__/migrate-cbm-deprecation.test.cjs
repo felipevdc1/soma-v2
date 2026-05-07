@@ -482,3 +482,18 @@ test('migrateCbmDeprecation: cleans .migration.lock on rollback path', () => {
   assert.ok(!fs.existsSync(path.join(somaHome, '.migration.lock')), 'lock cleaned post-rollback (finally block)');
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
+
+test('verifyMigration: aborts with timeout when doctor.cjs hangs', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'verify-timeout-test-'));
+  const scriptsDir = path.join(tmpDir, 'scripts');
+  fs.mkdirSync(scriptsDir, { recursive: true });
+  // Stub doctor.cjs that hangs (sleep forever)
+  fs.writeFileSync(path.join(scriptsDir, 'doctor.cjs'), `#!/usr/bin/env node\nsetInterval(() => {}, 1000);\n`);
+  const start = Date.now();
+  const result = lib.verifyMigration(tmpDir);
+  const elapsed = Date.now() - start;
+  assert.ok(elapsed < 35000, `should timeout within 35s, took ${elapsed}ms`);
+  assert.equal(result.ok, false);
+  assert.ok(result.findings.some(f => /timeout|killed|hung/i.test(f)));
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+});
