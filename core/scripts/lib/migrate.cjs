@@ -32,11 +32,13 @@ function computeFrozenLibsCheck(somaHome) {
   for (const [file, expectedSha] of Object.entries(FROZEN_LIBS_BASELINE)) {
     const fpath = path.join(somaHome, 'scripts', 'lib', file);
     if (!fs.existsSync(fpath)) {
-      drift.push(`${file} missing`);
+      drift.push({ file, kind: 'missing' });
       continue;
     }
     const actualSha = crypto.createHash('sha256').update(fs.readFileSync(fpath)).digest('hex');
-    if (actualSha !== expectedSha) drift.push(`${file} (${actualSha} != ${expectedSha})`);
+    if (actualSha !== expectedSha) {
+      drift.push({ file, kind: 'mismatch', expected: expectedSha, actual: actualSha });
+    }
   }
   return { match: drift.length === 0, drift };
 }
@@ -194,7 +196,7 @@ const { spawnSync } = require('node:child_process');
 exports.verifyMigration = function(somaHome) {
   const doctorPath = path.join(somaHome, 'scripts', 'doctor.cjs');
   if (!fs.existsSync(doctorPath)) {
-    return { ok: false, findings: [`doctor.cjs not found at ${doctorPath}`] };
+    return { ok: false, findings: [`doctor.cjs not installed at ${doctorPath}`], category: 'doctor_missing' };
   }
   // Use --check-migration --json for structured output; exit 0 even with warnings
   const result = spawnSync('node', [doctorPath, '--check-migration', '--json'], {
@@ -205,11 +207,11 @@ exports.verifyMigration = function(somaHome) {
   });
   // Detect timeout/hang: spawnSync sets signal='SIGTERM' or error.code='ETIMEDOUT'
   if (result.signal === 'SIGTERM' || result.error?.code === 'ETIMEDOUT') {
-    return { ok: false, findings: ['doctor.cjs timeout after 30s (killed)'] };
+    return { ok: false, findings: ['doctor.cjs timeout after 30s (killed)'], category: 'doctor_timeout' };
   }
   // Detect crashes via non-zero exit + no parseable output
   if (result.status !== 0) {
-    return { ok: false, findings: [`doctor.cjs exited with status ${result.status}: ${(result.stderr || result.stdout).trim()}`] };
+    return { ok: false, findings: [`doctor.cjs exited with status ${result.status}: ${(result.stderr || result.stdout).trim()}`], category: 'doctor_crashed' };
   }
   // Parse JSON output
   let parsed;
@@ -217,7 +219,7 @@ exports.verifyMigration = function(somaHome) {
     parsed = JSON.parse(result.stdout);
   } catch {
     // Non-JSON output (e.g. human mode fallback) — treat as ok if exit 0
-    return { ok: true, findings: [] };
+    return { ok: true, findings: [], category: 'ok' };
   }
   // migration_needed=true means old-format markers still present — migration incomplete
   if (parsed.migration_check && parsed.migration_check.migration_needed) {
@@ -225,9 +227,10 @@ exports.verifyMigration = function(somaHome) {
     return {
       ok: false,
       findings: [`DRIFT: ${count} old-format marker(s) still present after migration`],
+      category: 'migration_incomplete',
     };
   }
-  return { ok: true, findings: [] };
+  return { ok: true, findings: [], category: 'ok' };
 };
 
 /**
@@ -309,7 +312,12 @@ exports.preFlightGates = function(ctx = {}) {
   // G6: frozen libs match
   if (ctx.frozenLibs && !ctx.frozenLibs.match) {
     gates.G6 = 'fail';
-    failures.push(`G6: frozen libs drifted: ${(ctx.frozenLibs.drift || []).join(', ')}`);
+    // Handle both structured ({file, kind}) and legacy string drift entries
+    const driftStr = (ctx.frozenLibs.drift || []).map(entry => {
+      if (typeof entry === 'string') return entry;
+      return entry.kind === 'missing' ? `${entry.file} missing` : `${entry.file} mismatch (${entry.actual} != ${entry.expected})`;
+    }).join(', ');
+    failures.push(`G6: frozen libs drifted: ${driftStr}`);
   } else {
     gates.G6 = 'pass';
   }
@@ -374,7 +382,7 @@ exports.migrateCbmDeprecation = function(opts) {
 
     // Verify (skip if doctor.cjs not installed in somaHome — non-blocking)
     const verify = exports.verifyMigration(somaHome);
-    const doctorMissing = verify.findings.some(f => f.includes('doctor.cjs not found'));
+    const doctorMissing = verify.category === 'doctor_missing';
     if (!verify.ok && !doctorMissing) {
       throw new Error(`Verify failed: ${verify.findings.join('; ')}`);
     }
