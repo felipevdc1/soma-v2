@@ -133,6 +133,7 @@ exports.atomicWrite = function(filePath, content) {
  * @returns {string} snapshotId
  */
 exports.createMigrationSnapshot = function(somaHome, files) {
+  if (!files || files.length === 0) return null;
   const ts = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
   const snapshotId = `${ts}-cbm-deprecation`;
   const snapshotDir = path.join(somaHome, '.snapshots', snapshotId);
