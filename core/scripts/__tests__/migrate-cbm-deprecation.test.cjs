@@ -376,3 +376,68 @@ test('migrateCbmDeprecation: orchestrates full lifecycle (sandbox)', () => {
   assert.doesNotMatch(afterContent, /id=block\.claude\.CLAUDE_md\.cbm/, 'cbm anchor removed');
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
+
+test('migrateCbmDeprecation: G3 contentMismatch fires via orchestrator path (RED → W-B-3)', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'g3-orch-test-'));
+  const somaHome = path.join(tmpDir, '.soma-v2');
+  fs.mkdirSync(path.join(somaHome, '.snapshots'), { recursive: true });
+  fs.mkdirSync(path.join(somaHome, 'docs'), { recursive: true });
+  fs.mkdirSync(path.join(somaHome, 'scripts', 'lib'), { recursive: true });
+  // Copy real frozen libs so G6 passes
+  const repoRoot = path.resolve(__dirname, '../../..');
+  for (const file of ['anchored-blocks.cjs', 'manifest.cjs', 'template-engine.cjs']) {
+    fs.copyFileSync(
+      path.join(repoRoot, 'core', 'scripts', 'lib', file),
+      path.join(somaHome, 'scripts', 'lib', file)
+    );
+  }
+  // Write spec source doc with CANONICAL content
+  fs.writeFileSync(path.join(somaHome, 'docs', 'codebase-memory-mcp.md'), '# Canonical MCP doc content');
+  // Setup lab with HAND-EDITED MCP content (drift from canonical)
+  const labCodex = path.join(tmpDir, 'codex-AGENTS.md');
+  fs.writeFileSync(labCodex, [
+    '<!-- codebase-memory-mcp:start -->',
+    '# HAND-EDITED different MCP doc',
+    '<!-- codebase-memory-mcp:end -->',
+  ].join('\n'));
+  const result = lib.migrateCbmDeprecation({
+    somaHome,
+    target: { claudeMd: null, codexAgents: labCodex, homeAgents: null },
+    dryRun: false,
+    force: false,
+  });
+  assert.equal(result.action, 'abort', 'must abort on contentMismatch via orchestrator path');
+  assert.ok(result.failures.some(f => /G3/.test(f)), 'failures must mention G3');
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+test('migrateCbmDeprecation: G3 bypassed with --force (W-B-3)', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'g3-force-test-'));
+  const somaHome = path.join(tmpDir, '.soma-v2');
+  fs.mkdirSync(path.join(somaHome, '.snapshots'), { recursive: true });
+  fs.mkdirSync(path.join(somaHome, 'docs'), { recursive: true });
+  fs.mkdirSync(path.join(somaHome, 'scripts', 'lib'), { recursive: true });
+  const repoRoot = path.resolve(__dirname, '../../..');
+  for (const file of ['anchored-blocks.cjs', 'manifest.cjs', 'template-engine.cjs']) {
+    fs.copyFileSync(
+      path.join(repoRoot, 'core', 'scripts', 'lib', file),
+      path.join(somaHome, 'scripts', 'lib', file)
+    );
+  }
+  fs.writeFileSync(path.join(somaHome, 'docs', 'codebase-memory-mcp.md'), '# Canonical MCP doc content');
+  const labCodex = path.join(tmpDir, 'codex-AGENTS.md');
+  // Legacy marker with DIFFERENT content → would trigger G3
+  fs.writeFileSync(labCodex, [
+    '<!-- codebase-memory-mcp:start -->',
+    '# HAND-EDITED different MCP doc',
+    '<!-- codebase-memory-mcp:end -->',
+  ].join('\n'));
+  const result = lib.migrateCbmDeprecation({
+    somaHome,
+    target: { claudeMd: null, codexAgents: labCodex, homeAgents: null },
+    dryRun: false,
+    force: true,  // --force bypasses G3
+  });
+  assert.notEqual(result.action, 'abort', 'G3 must be bypassed with --force');
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+});
