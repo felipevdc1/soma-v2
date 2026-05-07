@@ -192,7 +192,13 @@ exports.verifyMigration = function(somaHome) {
   const result = spawnSync('node', [doctorPath, '--check-migration', '--json'], {
     cwd: somaHome,
     encoding: 'utf8',
+    timeout: 30000,
+    killSignal: 'SIGTERM',
   });
+  // Detect timeout/hang: spawnSync sets signal='SIGTERM' or error.code='ETIMEDOUT'
+  if (result.signal === 'SIGTERM' || result.error?.code === 'ETIMEDOUT') {
+    return { ok: false, findings: ['doctor.cjs timeout after 30s (killed)'] };
+  }
   // Detect crashes via non-zero exit + no parseable output
   if (result.status !== 0) {
     return { ok: false, findings: [`doctor.cjs exited with status ${result.status}: ${(result.stderr || result.stdout).trim()}`] };
