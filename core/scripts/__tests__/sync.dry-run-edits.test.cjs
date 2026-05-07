@@ -34,7 +34,7 @@ function createSyncFixture() {
     '# Global Agent Operating Rules\n\nBasic rules only — missing CBM and soma-stsd blocks.\n'
   );
 
-  // Patch install-targets to use fixture paths
+  // Patch codex install-targets to use fixture paths
   const targetsPath = path.join(somaDir, 'adapters', 'codex', 'install-targets.json');
   const targets = JSON.parse(fs.readFileSync(targetsPath, 'utf8'));
   const patchedEntries = targets.entries.map(e => {
@@ -44,6 +44,16 @@ function createSyncFixture() {
     return { ...e, target_path: tp };
   });
   fs.writeFileSync(targetsPath, JSON.stringify({ ...targets, entries: patchedEntries }, null, 2));
+
+  // Patch claude install-targets: remove legacy cbm entry so count matches AC-20 (8 total: 5 codex + 3 claude).
+  // The installed ~/.soma-v2 may still carry cbm during migration rollout; fixture must reflect
+  // post-migration canonical state.
+  const claudeItPath = path.join(somaDir, 'adapters', 'claude', 'install-targets.json');
+  if (fs.existsSync(claudeItPath)) {
+    const claudeIt = JSON.parse(fs.readFileSync(claudeItPath, 'utf8'));
+    claudeIt.entries = claudeIt.entries.filter(e => e.block_id !== 'block.claude.CLAUDE_md.cbm');
+    fs.writeFileSync(claudeItPath, JSON.stringify(claudeIt, null, 2));
+  }
 
   return { dir, somaDir };
 }
@@ -120,15 +130,14 @@ test('sync --dry-run: codex entries have drift action (legacy markers D3)', () =
 });
 
 test('sync --dry-run: summary total_entries = 8 (all install-targets entries)', () => {
-  // TEST-STALE-FIX: Updated from 8 → 9. soma-voxel (block.claude.CLAUDE_md.soma-voxel)
-  // was present in the initial SOMA v2.1 release as canonical 4th claude adapter entry.
-  // Real count: 5 codex + 4 claude = 9 total.
+  // AC-20: cbm deprecated → 3 claude entries (hyd-v2, soma-stsd, soma-voxel) + 5 codex = 8 total.
+  // Fixture patches claude install-targets to strip cbm (post-migration canonical state).
   const { somaDir } = createSyncFixture();
   const result = runSync(somaDir);
 
   const parsed = JSON.parse(result.stdout);
-  assert.equal(parsed.summary.total_entries, 9,
-    `Expected 9 total entries (5 codex + 4 claude), got ${parsed.summary.total_entries}`);
+  assert.equal(parsed.summary.total_entries, 8,
+    `Expected 8 total entries (5 codex + 3 claude), got ${parsed.summary.total_entries}`);
 });
 
 test('sync --dry-run: summary by_action.insert = 2 (AGENTS.md inserts from clean fixture)', () => {
