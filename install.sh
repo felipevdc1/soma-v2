@@ -83,7 +83,7 @@ done
 
 if [ "$NEEDS_MIGRATION" -eq 1 ]; then
   echo "[SOMA] cbm/legacy markers detected. Running cbm migration first..."
-  node "${REPO_ROOT}/scripts/migrate-cbm-deprecation.cjs" || {
+  node "${REPO_ROOT}/core/scripts/migrate-cbm-deprecation.cjs" || {
     echo "ERROR: cbm migration failed. Aborting install. Inspect snapshot in ${HOME}/.soma-v2/.snapshots/" >&2
     exit 1
   }
