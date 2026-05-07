@@ -377,10 +377,10 @@ exports.migrateCbmDeprecation = function(opts) {
   const snapshotId = exports.createMigrationSnapshot(somaHome, filesToSnapshot);
 
   try {
-    // Mutate each lab file
-    if (target.claudeMd) migrateClaude(target.claudeMd);
-    if (target.codexAgents) migrateCodexAgents(target.codexAgents);
-    if (target.homeAgents) migrateCodexAgents(target.homeAgents);
+    // Mutate each lab file (only if file exists — asymmetric lab scenarios)
+    if (target.claudeMd && fs.existsSync(target.claudeMd)) migrateClaude(target.claudeMd);
+    if (target.codexAgents && fs.existsSync(target.codexAgents)) migrateCodexAgents(target.codexAgents);
+    if (target.homeAgents && fs.existsSync(target.homeAgents)) migrateCodexAgents(target.homeAgents);
 
     // Verify (skip if doctor.cjs not installed in somaHome — non-blocking)
     const verify = exports.verifyMigration(somaHome);
