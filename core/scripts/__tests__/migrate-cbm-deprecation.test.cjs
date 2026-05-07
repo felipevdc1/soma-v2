@@ -483,6 +483,18 @@ test('migrateCbmDeprecation: cleans .migration.lock on rollback path', () => {
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
+test('createMigrationSnapshot: returns null snapshotId when files array empty', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'empty-snap-test-'));
+  const somaHome = path.join(tmpDir, '.soma-v2');
+  fs.mkdirSync(path.join(somaHome, '.snapshots'), { recursive: true });
+  const result = lib.createMigrationSnapshot(somaHome, []);
+  assert.equal(result, null, 'empty files → null snapshotId');
+  // Verify no snapshot dir created
+  const snapshots = fs.readdirSync(path.join(somaHome, '.snapshots'));
+  assert.equal(snapshots.length, 0);
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
 test('extractMcpContentFromLab: aborts when multiple start markers detected', () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'multi-marker-test-'));
   const fixture = path.join(tmpDir, 'AGENTS.md');
