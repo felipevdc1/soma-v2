@@ -204,3 +204,147 @@ test('issue-11: upgrade preserves surrounding file content outside the legacy bl
   assert.ok(content.includes('# Other content'),
     `Surrounding content after block must be preserved. Got:\n${content}`);
 });
+
+// ─── B2: version=1.0 assertion (regression guard) ────────────────────────────
+
+test('issue-11(B2): upgraded start marker contains exact version=1.0 attribute', () => {
+  const { somaDir, targetFile, anchorId } = createLegacyUpgradeFixture();
+  runSync(['--apply', '--tool=codex', `--soma-home=${somaDir}`, '--json']);
+  const content = fs.readFileSync(targetFile, 'utf8');
+  // Full exact form: <!-- soma-v2:start id=<anchorId> version=1.0 sha256=<HEX> -->
+  const expectedExact = new RegExp(
+    `<!-- soma-v2:start id=${anchorId.replace(/\./g, '\\.')} version=1\\.0 sha256=[0-9a-f]{64} -->`
+  );
+  assert.ok(
+    expectedExact.test(content),
+    `Expected start marker with version=1.0 in exact form. Got:\n${content}`
+  );
+});
+
+test('issue-11(B2): start marker regex includes version=1.0 requirement', () => {
+  const { somaDir, targetFile } = createLegacyUpgradeFixture();
+  runSync(['--apply', '--tool=codex', `--soma-home=${somaDir}`, '--json']);
+  const content = fs.readFileSync(targetFile, 'utf8');
+  // Strict regex matching version=1.0 explicitly
+  assert.ok(
+    /<!-- soma-v2:start id=[^\s]+ version=1\.0 sha256=[0-9a-f]{64} -->/.test(content),
+    `Expected start marker matching strict version=1.0 regex. Got:\n${content}`
+  );
+});
+
+// ─── B1: orphan legacy start marker (no matching end) → detectLegacyParseError ─
+//
+// writeLegacyUpgrade is not exported for general use, but is available for testing
+// via SOMA_TEST_EXPORTS=1. The orphan condition (start without end) cannot be
+// triggered via the integration path because computeEntryAction routes orphans to
+// 'insert' (extractBlock returns found:false when end marker is absent). B1's guard
+// is defense-in-depth for future code paths or race conditions.
+
+const SYNC_WITH_EXPORTS = path.join(os.homedir(), '.soma-v2', 'scripts', 'sync.cjs');
+process.env.SOMA_TEST_EXPORTS = '1';
+const { detectLegacyParseError, writeLegacyUpgrade } = require(SYNC_WITH_EXPORTS);
+delete process.env.SOMA_TEST_EXPORTS;
+
+test('issue-11(B1): detectLegacyParseError returns null when start+end both present', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'soma-b1-clean-'));
+  const f = path.join(dir, 'target.md');
+  fs.writeFileSync(f, '# header\n<!-- hyd-v2:start -->\n# content\n<!-- hyd-v2:end -->\n# footer\n');
+  const result = detectLegacyParseError(f, 'hyd-v2');
+  assert.equal(result, null, `Expected null (no error) for complete start+end pair. Got: ${result}`);
+});
+
+test('issue-11(B1): detectLegacyParseError returns LEGACY_UPGRADE_MALFORMED for orphan start', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'soma-b1-orphan-'));
+  const f = path.join(dir, 'target.md');
+  fs.writeFileSync(f, '# header\n<!-- hyd-v2:start -->\n# content\n# footer\n');  // no end
+  const result = detectLegacyParseError(f, 'hyd-v2');
+  assert.ok(result !== null, 'Expected error string for orphan start marker');
+  assert.ok(result.startsWith('LEGACY_UPGRADE_MALFORMED'),
+    `Expected LEGACY_UPGRADE_MALFORMED prefix. Got: ${result}`);
+  assert.ok(result.includes('"hyd-v2"'),
+    `Expected shortname in error message. Got: ${result}`);
+});
+
+test('issue-11(B1): writeLegacyUpgrade throws LEGACY_UPGRADE_MALFORMED for orphan and file is unchanged', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'soma-b1-write-'));
+  const f = path.join(dir, 'target.md');
+  const orphanContent = '# header\n<!-- hyd-v2:start -->\n# content\n# footer\n';  // no end
+  fs.writeFileSync(f, orphanContent);
+
+  let threw = false;
+  let errorMessage = '';
+  try {
+    writeLegacyUpgrade(f, 'block.codex.AGENTS.hyd-v2', '# New content');
+  } catch (err) {
+    threw = true;
+    errorMessage = err.message;
+  }
+
+  assert.ok(threw, 'writeLegacyUpgrade must throw for orphan start marker');
+  assert.ok(errorMessage.startsWith('LEGACY_UPGRADE_MALFORMED'),
+    `Expected LEGACY_UPGRADE_MALFORMED error. Got: ${errorMessage}`);
+
+  // File must be unchanged on disk (no write occurred)
+  const contentAfter = fs.readFileSync(f, 'utf8');
+  assert.equal(contentAfter, orphanContent,
+    `File must be unchanged after orphan error. Got:\n${contentAfter}`);
+});
+
+// ─── C1: shortname collision (multiple legacy blocks) → reject ────────────────
+//
+// writeLegacyUpgrade is the enforcement point. computeEntryAction with multiple
+// legacy start+end pairs would return 'drift' for the first match only (extractBlock
+// stops at first found block), so the guard lives in the write path itself.
+
+test('issue-11(C1): writeLegacyUpgrade throws LEGACY_UPGRADE_AMBIGUOUS for multiple same-shortname legacy blocks', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'soma-c1-'));
+  const f = path.join(dir, 'AGENTS.md');
+  const shortName = 'hyd-v2';
+  const ambiguousContent = [
+    '# Section A',
+    `<!-- ${shortName}:start -->`,
+    '# First block with hyd-v2',
+    `<!-- ${shortName}:end -->`,
+    '',
+    '# Section B',
+    `<!-- ${shortName}:start -->`,
+    '# Second block also with hyd-v2',
+    `<!-- ${shortName}:end -->`,
+    ''
+  ].join('\n');
+  fs.writeFileSync(f, ambiguousContent);
+
+  let threw = false;
+  let errorMessage = '';
+  try {
+    writeLegacyUpgrade(f, 'block.codex.AGENTS.hyd-v2', '# New content');
+  } catch (err) {
+    threw = true;
+    errorMessage = err.message;
+  }
+
+  assert.ok(threw, 'writeLegacyUpgrade must throw for ambiguous shortname collision');
+  assert.ok(errorMessage.startsWith('LEGACY_UPGRADE_AMBIGUOUS'),
+    `Expected LEGACY_UPGRADE_AMBIGUOUS error. Got: ${errorMessage}`);
+  assert.ok(errorMessage.includes('"hyd-v2"'),
+    `Expected shortname in ambiguity message. Got: ${errorMessage}`);
+
+  // File must be unchanged on disk (no write occurred)
+  const contentAfter = fs.readFileSync(f, 'utf8');
+  assert.equal(contentAfter, ambiguousContent,
+    `File must be unchanged after ambiguity error. Got:\n${contentAfter}`);
+});
+
+// ─── C3: snapshot files_count >= 1 assertion ─────────────────────────────────
+
+test('issue-11(C3): snapshot files_count >= 1 (upgrade target is in snapshot)', () => {
+  const { somaDir } = createLegacyUpgradeFixture();
+  const r = runSync(['--apply', '--tool=codex', `--soma-home=${somaDir}`, '--json']);
+  assert.equal(r.status, 0, `Expected exit 0. stderr: ${r.stderr}`);
+  const out = JSON.parse(r.stdout);
+  assert.ok(out.snapshot !== null, 'Expected snapshot to be created for legacy upgrade');
+  assert.ok(
+    out.snapshot.files_count >= 1,
+    `Expected snapshot files_count >= 1 (upgrade target must be in snapshot). Got: ${out.snapshot.files_count}`
+  );
+});
