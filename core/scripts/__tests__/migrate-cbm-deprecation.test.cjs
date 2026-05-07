@@ -483,6 +483,28 @@ test('migrateCbmDeprecation: cleans .migration.lock on rollback path', () => {
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
+test('preFlightGates G4: auto-clears stale lock (mtime > 1h)', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'stale-lock-test-'));
+  const lockFile = path.join(tmpDir, '.migration.lock');
+  fs.writeFileSync(lockFile, JSON.stringify({ pid: 99999, started: '2020-01-01T00:00:00Z' }));
+  // Backdate mtime to 2h ago
+  const twoHoursAgo = (Date.now() - 2 * 60 * 60 * 1000) / 1000;
+  fs.utimesSync(lockFile, twoHoursAgo, twoHoursAgo);
+  const result = lib.preFlightGates({ somaHome: tmpDir });
+  assert.equal(result.gates.G4, 'pass', 'stale lock should auto-clear, G4 passes');
+  assert.ok(!fs.existsSync(lockFile), 'stale lock file deleted');
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+test('preFlightGates G4: blocks fresh lock (mtime < 1h)', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fresh-lock-test-'));
+  const lockFile = path.join(tmpDir, '.migration.lock');
+  fs.writeFileSync(lockFile, JSON.stringify({ pid: process.pid, started: new Date().toISOString() }));
+  const result = lib.preFlightGates({ somaHome: tmpDir });
+  assert.equal(result.gates.G4, 'fail', 'fresh lock blocks');
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
 test('createMigrationSnapshot: returns null snapshotId when files array empty', () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'empty-snap-test-'));
   const somaHome = path.join(tmpDir, '.soma-v2');
