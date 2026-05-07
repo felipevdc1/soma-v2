@@ -147,7 +147,7 @@ Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
 
 Run:
 ```bash
-LAB_AGENTS="/Users/felipevdc1/.codex/AGENTS.md"
+LAB_AGENTS="${HOME}/.codex/AGENTS.md"
 START_LINE=$(grep -n '<!-- codebase-memory-mcp:start -->' "$LAB_AGENTS" | head -1 | cut -d: -f1)
 END_LINE=$(grep -n '<!-- codebase-memory-mcp:end -->' "$LAB_AGENTS" | head -1 | cut -d: -f1)
 sed -n "$((START_LINE+1)),$((END_LINE-1))p" "$LAB_AGENTS" > /tmp/mcp-content.md
