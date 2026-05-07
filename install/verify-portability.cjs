@@ -131,7 +131,7 @@ function gate8Tests({ somaHome, mode }) {
   try {
     const result = execSync(
       `node --test "${path.join(somaHome, 'scripts', '__tests__')}/*.test.cjs"`,
-      { encoding: 'utf-8', timeout: 120000 }
+      { encoding: 'utf-8', timeout: 120000, stdio: 'pipe' }
     );
     const match = result.match(/# pass (\d+)/);
     const failMatch = result.match(/# fail (\d+)/);

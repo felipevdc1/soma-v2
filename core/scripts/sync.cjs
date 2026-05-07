@@ -111,7 +111,7 @@ function parseArgs(argv) {
 function emitHardError(code, message, useJson) {
   if (useJson) {
     process.exitCode = 2;
-    process.stdout.end(JSON.stringify({ error: code, message }, null, 2) + '\n');
+    process.stdout.write(JSON.stringify({ error: code, message }, null, 2) + '\n');
   } else {
     process.stderr.write(`ERROR [${code}]: ${message}\n`);
     process.exit(2);
@@ -589,7 +589,7 @@ function runApplyMode(flags, somaHome, allFindings, totalEntries, adapters, useJ
       const msg = `SANDBOX_VIOLATION: SOMA_SAFE_PATHS_ONLY=1 but target path(s) are outside ${SANDBOX_SAFE_PREFIX}: ${violatingTargets.slice(0, 3).join(', ')}`;
       if (useJson) {
         process.exitCode = 1;
-        process.stdout.end(JSON.stringify({
+        process.stdout.write(JSON.stringify({
           schema: 'soma-sync-apply/v1', mode: 'apply', snapshot: null, summary: null,
           error: { code: 'SANDBOX_VIOLATION', message: msg, details: { violating_targets: violatingTargets } }
         }, null, 2) + '\n');
@@ -615,7 +615,7 @@ function runApplyMode(flags, somaHome, allFindings, totalEntries, adapters, useJ
     const msg = anchorErrors[0].message;
     if (useJson) {
       process.exitCode = 1;
-      process.stdout.end(JSON.stringify({
+      process.stdout.write(JSON.stringify({
         schema: 'soma-sync-apply/v1', mode: 'apply', snapshot: null, summary: null,
         error: { code: 'ANCHOR_PARSE_ERROR', message: msg, details: null }
       }, null, 2) + '\n');
@@ -636,7 +636,7 @@ function runApplyMode(flags, somaHome, allFindings, totalEntries, adapters, useJ
     };
     if (useJson) {
       process.exitCode = 0;
-      process.stdout.end(JSON.stringify({
+      process.stdout.write(JSON.stringify({
         schema: 'soma-sync-apply/v1',
         mode: 'apply',
         snapshot: null,
@@ -645,7 +645,7 @@ function runApplyMode(flags, somaHome, allFindings, totalEntries, adapters, useJ
       }, null, 2) + '\n');
     } else {
       process.exitCode = 0;
-      process.stdout.end('Already in sync. Nothing to apply.\n');
+      process.stdout.write('Already in sync. Nothing to apply.\n');
     }
     return;
   }
@@ -663,7 +663,7 @@ function runApplyMode(flags, somaHome, allFindings, totalEntries, adapters, useJ
           `User manually edited content inside ${conflict.block_id} in ${conflict.file} between syncs. Aborting before write.`;
         if (useJson) {
           process.exitCode = 1;
-          process.stdout.end(JSON.stringify({
+          process.stdout.write(JSON.stringify({
             schema: 'soma-sync-apply/v1',
             mode: 'apply',
             snapshot: null,
@@ -696,7 +696,7 @@ function runApplyMode(flags, somaHome, allFindings, totalEntries, adapters, useJ
       const msg = `Source file ${injectStalePath} changed between dry-run and apply phase (stale detection)`;
       if (useJson) {
         process.exitCode = 1;
-        process.stdout.end(JSON.stringify({
+        process.stdout.write(JSON.stringify({
           schema: 'soma-sync-apply/v1', mode: 'apply', snapshot: null, summary: null,
           error: { code: 'SOURCE_STALE', message: msg, details: null }
         }, null, 2) + '\n');
@@ -743,7 +743,7 @@ function runApplyMode(flags, somaHome, allFindings, totalEntries, adapters, useJ
     if (err.code === 'SNAPSHOT_CREATE_FAILED') {
       if (useJson) {
         process.exitCode = 1;
-        process.stdout.end(JSON.stringify({
+        process.stdout.write(JSON.stringify({
           schema: 'soma-sync-apply/v1', mode: 'apply', snapshot: null, summary: null,
           error: { code: 'SNAPSHOT_CREATE_FAILED', message: err.message, details: null }
         }, null, 2) + '\n');
@@ -875,7 +875,7 @@ function runApplyMode(flags, somaHome, allFindings, totalEntries, adapters, useJ
 
   process.exitCode = 0;
   if (useJson) {
-    process.stdout.end(JSON.stringify({
+    process.stdout.write(JSON.stringify({
       schema: 'soma-sync-apply/v1',
       mode: 'apply',
       snapshot: snapshotOut,
@@ -889,7 +889,6 @@ function runApplyMode(flags, somaHome, allFindings, totalEntries, adapters, useJ
         process.stdout.write(`  WARNING [${w.code}]: ${w.message}\n`);
       }
     }
-    process.stdout.end();
   }
 }
 
@@ -902,7 +901,7 @@ function main() {
   if (errors.length > 0) {
     if (useJson) {
       process.exitCode = 2;
-      process.stdout.end(JSON.stringify({
+      process.stdout.write(JSON.stringify({
         schema: 'soma-sync-apply/v1',
         mode: flags.apply ? 'apply' : 'dry-run',
         snapshot: null,
@@ -995,7 +994,7 @@ function main() {
       summary,
       findings: allFindings
     };
-    process.stdout.end(JSON.stringify(output, null, 2) + '\n');
+    process.stdout.write(JSON.stringify(output, null, 2) + '\n');
   } else {
     process.stdout.write(`SOMA sync --dry-run — previewing edits per anchored block\n\n`);
 
@@ -1018,7 +1017,6 @@ function main() {
       }
       process.stdout.write('\nRun with --apply to write changes.\n');
     }
-    process.stdout.end();
   }
 }
 

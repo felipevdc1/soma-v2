@@ -221,26 +221,30 @@ test('preFlightGates G6: frozen libs baseline mismatch fails', () => {
   assert.equal(result.gates.G6, 'fail');
 });
 
-test('verifyMigration: parses DRIFT findings from real doctor.cjs invocation', () => {
+test('verifyMigration: parses migration_needed=true from doctor --check-migration JSON', () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'verify-test-'));
   const scriptsDir = path.join(tmpDir, 'scripts');
   fs.mkdirSync(scriptsDir, { recursive: true });
-  // Stub doctor.cjs that produces known DRIFT output
+  // Stub doctor.cjs that returns migration_needed=true via JSON (--check-migration --json interface)
   fs.writeFileSync(path.join(scriptsDir, 'doctor.cjs'), `#!/usr/bin/env node
-console.log('SOMA doctor — checking');
-console.log('DRIFT: 2 finding(s)');
-console.log('  [drift]   ~/.codex/AGENTS.md <- block.codex.AGENTS.hyd-v2');
-console.log('  [drift]   ~/AGENTS.md <- block.codex.AGENTS.codebase-memory-mcp');
+const out = {
+  status: 'warning',
+  migration_check: {
+    migration_needed: true,
+    old_markers_detected: 2,
+    scanned_files: []
+  }
+};
+process.stdout.write(JSON.stringify(out) + '\\n');
 process.exit(0);
 `);
   const result = lib.verifyMigration(tmpDir);
-  assert.equal(result.ok, false, 'should fail when DRIFT count > 0');
-  assert.ok(result.findings.some(f => /DRIFT: 2/.test(f)), 'should capture DRIFT count line');
-  assert.ok(result.findings.length >= 2, 'should capture finding lines');
+  assert.equal(result.ok, false, 'should fail when migration_needed=true');
+  assert.ok(result.findings.some(f => /2.*old-format/.test(f)), 'should report old-format count');
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
-test('verifyMigration: returns ok=false when doctor exits non-zero with no DRIFT output', () => {
+test('verifyMigration: returns ok=false when doctor exits non-zero', () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'verify-exit-test-'));
   const scriptsDir = path.join(tmpDir, 'scripts');
   fs.mkdirSync(scriptsDir, { recursive: true });
@@ -251,13 +255,21 @@ test('verifyMigration: returns ok=false when doctor exits non-zero with no DRIFT
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
-test('verifyMigration: returns ok=true when 0 drifts', () => {
+test('verifyMigration: returns ok=true when migration_needed=false', () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'verify-test-'));
   const scriptsDir = path.join(tmpDir, 'scripts');
   fs.mkdirSync(scriptsDir, { recursive: true });
+  // Stub doctor.cjs that returns migration_needed=false (clean state)
   fs.writeFileSync(path.join(scriptsDir, 'doctor.cjs'), `#!/usr/bin/env node
-console.log('SOMA doctor — checking');
-console.log('OK: 0 drift findings');
+const out = {
+  status: 'ok',
+  migration_check: {
+    migration_needed: false,
+    old_markers_detected: 0,
+    scanned_files: []
+  }
+};
+process.stdout.write(JSON.stringify(out) + '\\n');
 process.exit(0);
 `);
   const result = lib.verifyMigration(tmpDir);

@@ -9,6 +9,10 @@
 #   NO_CLAUDE_MD=1     — skip CLAUDE.md bootloader injection
 
 set -euo pipefail
+# Ignore SIGPIPE: prevents bash 3.2 (macOS) from propagating SIGPIPE (exit 141)
+# from child processes that use stdio:inherit (e.g. soma.cjs spawnSync) to the
+# shell itself. Bash 4+ handles this correctly; bash 3.2 requires explicit trap.
+trap '' PIPE
 
 REPO_ROOT="$(cd "$(dirname "$0")" && pwd)"
 TS=$(date +%s)
@@ -187,7 +191,8 @@ if [[ "${NO_CODEX}" != "1" && -d "${HOME}/.codex" && "${DRY_RUN}" != "1" ]]; the
 fi
 
 # ── Phase 9: Verify ──────────────────────────────────────────────────────────
-if [[ "${DRY_RUN}" != "1" ]]; then
+SOMA_NO_PHASE9=${SOMA_NO_PHASE9:-0}
+if [[ "${DRY_RUN}" != "1" && "${SOMA_NO_PHASE9}" != "1" ]]; then
   echo "[SOMA] Phase 9: Verification..."
   node "${HOME}/.soma-v2/scripts/soma.cjs" doctor 2>/dev/null || \
     echo "[WARN] doctor non-zero (expected in fresh install without live Claude Code)"
