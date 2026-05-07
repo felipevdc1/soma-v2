@@ -370,12 +370,31 @@ function buildPreFlightContext(somaHome, target, force) {
     if (/<!--\s*codebase-memory-mcp:start\s*-->/.test(content)) install.hasLegacy = true;
   }
 
+  // G3: compute contentMismatch by comparing lab MCP section against spec source doc.
+  // If the user has hand-edited the MCP section, it may differ from what the migration
+  // would extract — abort unless --force is set.
+  let contentMismatch = false;
+  const codexAgentsPath = target.codexAgents || null;
+  if (codexAgentsPath) {
+    const labContent = exports.extractMcpContentFromLab(codexAgentsPath);
+    if (labContent !== null) {
+      const sourceDocPath = path.join(somaHome, 'docs', 'codebase-memory-mcp.md');
+      if (fs.existsSync(sourceDocPath)) {
+        const sourceContent = fs.readFileSync(sourceDocPath, 'utf8').trim();
+        if (labContent.trim() !== sourceContent) {
+          contentMismatch = true;
+        }
+      }
+    }
+  }
+
   return {
     lab,
     install,
     frozenLibs: computeFrozenLibsCheck(somaHome),
     somaHome,
     force,
+    contentMismatch,
   };
 }
 
