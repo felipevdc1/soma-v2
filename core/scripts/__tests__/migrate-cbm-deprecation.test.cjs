@@ -483,6 +483,22 @@ test('migrateCbmDeprecation: cleans .migration.lock on rollback path', () => {
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
+test('extractMcpContentFromLab: aborts when multiple start markers detected', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'multi-marker-test-'));
+  const fixture = path.join(tmpDir, 'AGENTS.md');
+  fs.writeFileSync(fixture, [
+    '<!-- codebase-memory-mcp:start -->',
+    'first content',
+    '<!-- codebase-memory-mcp:end -->',
+    '<!-- codebase-memory-mcp:start -->',
+    'second content',
+    '<!-- codebase-memory-mcp:end -->',
+  ].join('\n'));
+  // Should throw with explicit error indicator
+  assert.throws(() => lib.extractMcpContentFromLab(fixture), /multiple|duplicate/i);
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
 test('verifyMigration: aborts with timeout when doctor.cjs hangs', () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'verify-timeout-test-'));
   const scriptsDir = path.join(tmpDir, 'scripts');
