@@ -7,6 +7,7 @@
  */
 
 const fs = require('node:fs');
+const path = require('node:path');
 const crypto = require('node:crypto');
 
 /**
@@ -29,7 +30,7 @@ const FROZEN_LIBS_BASELINE = {
 function computeFrozenLibsCheck(somaHome) {
   const drift = [];
   for (const [file, expectedSha] of Object.entries(FROZEN_LIBS_BASELINE)) {
-    const fpath = require('node:path').join(somaHome, 'scripts', 'lib', file);
+    const fpath = path.join(somaHome, 'scripts', 'lib', file);
     if (!fs.existsSync(fpath)) {
       drift.push(`${file} missing`);
       continue;
@@ -62,7 +63,8 @@ exports.extractMcpContentFromLab = function(labAgentsPath) {
 
 /**
  * Remove a legacy `<!-- {markerName}:start -->...<!-- {markerName}:end -->` block from content.
- * Idempotent: returns content unchanged if marker not present.
+ * Returns content with the block removed AND triple+ newline runs collapsed to double newlines.
+ * No-op for inputs with no markers AND no triple-newline runs.
  *
  * @param {string} content
  * @param {string} markerName — e.g., "codebase-memory-mcp"
@@ -114,8 +116,6 @@ exports.atomicWrite = function(filePath, content) {
     throw err;
   }
 };
-
-const path = require('node:path');
 
 /**
  * Create migration snapshot at ~/.soma-v2/.snapshots/{ISO-8601-Z}-cbm-deprecation/

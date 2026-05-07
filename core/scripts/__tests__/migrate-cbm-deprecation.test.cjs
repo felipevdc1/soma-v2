@@ -453,3 +453,32 @@ test('migrateCbmDeprecation: G3 bypassed with --force (W-B-3)', () => {
   assert.notEqual(result.action, 'abort', 'G3 must be bypassed with --force');
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
+
+test('migrateCbmDeprecation: cleans .migration.lock on rollback path', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lock-rollback-test-'));
+  const somaHome = path.join(tmpDir, '.soma-v2');
+  fs.mkdirSync(path.join(somaHome, '.snapshots'), { recursive: true });
+  fs.mkdirSync(path.join(somaHome, 'scripts', 'lib'), { recursive: true });
+  // Real frozen libs so G6 passes
+  const repoRoot = path.resolve(__dirname, '../../..');
+  for (const file of ['anchored-blocks.cjs', 'manifest.cjs', 'template-engine.cjs']) {
+    fs.copyFileSync(path.join(repoRoot, 'core', 'scripts', 'lib', file), path.join(somaHome, 'scripts', 'lib', file));
+  }
+  // Setup minimal lab with cbm anchor to trigger migration path
+  const labClaude = path.join(tmpDir, 'CLAUDE.md');
+  fs.writeFileSync(labClaude, '<!-- soma-v2:start id=block.claude.CLAUDE_md.cbm version=1.0 sha256=x -->\nbody\n<!-- soma-v2:end id=block.claude.CLAUDE_md.cbm -->');
+  // Force verifyMigration to throw by installing a doctor.cjs that exits non-zero
+  fs.mkdirSync(path.join(somaHome, 'scripts'), { recursive: true });
+  fs.writeFileSync(path.join(somaHome, 'scripts', 'doctor.cjs'), [
+    '#!/usr/bin/env node',
+    "console.error('forced crash for N3 rollback test');",
+    'process.exit(2);',
+  ].join('\n'));
+  const result = lib.migrateCbmDeprecation({
+    somaHome,
+    target: { claudeMd: labClaude, codexAgents: null, homeAgents: null },
+  });
+  assert.equal(result.action, 'rolled-back', 'should rollback on verify failure');
+  assert.ok(!fs.existsSync(path.join(somaHome, '.migration.lock')), 'lock cleaned post-rollback (finally block)');
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+});
