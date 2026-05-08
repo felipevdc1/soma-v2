@@ -22,6 +22,7 @@ const os      = require('node:os');
 const crypto  = require('node:crypto');
 
 const { loadManifest } = require('./lib/manifest.cjs');
+const { createSnapshot } = require('./lib/snapshot.cjs');
 
 // ── Arg parsing ───────────────────────────────────────────────────────────────
 
@@ -177,8 +178,29 @@ function runBaseline({ somaHome, mode, json, filter, isDefaultMode }) {
     }
   }
 
-  // Apply mode: atomic write iff there are stale entries (idempotency: skip write if none)
+  // Apply mode: snapshot + atomic write iff there are stale entries (idempotency: skip if none)
+  let snapshotPath = null;
   if (mode === 'apply' && entriesRebaseled.length > 0) {
+    // AC-09: create snapshot of manifest.json BEFORE atomic write (D-013-8 lock — reuse lib/snapshot.cjs)
+    const snapshotsBase = path.join(somaHome, '.snapshots');
+    try {
+      const snapshotResult = createSnapshot({
+        snapshotsBase,
+        files: [{
+          adapter: 'manifest',
+          targetPath: manifestPath,
+          relativePath: 'manifest.json',
+        }],
+      });
+      snapshotPath = snapshotResult.path;
+    } catch (err) {
+      if (err.code === 'SNAPSHOT_CREATE_FAILED') {
+        process.stderr.write(JSON.stringify({ error: 'SNAPSHOT_FAILURE', message: err.message }) + '\n');
+        process.exit(1);
+      }
+      throw err;
+    }
+
     const rebaseledById = Object.fromEntries(
       entriesRebaseled.map(e => [e.id, e.new_sha256])
     );
@@ -206,7 +228,7 @@ function runBaseline({ somaHome, mode, json, filter, isDefaultMode }) {
     schema:               'soma-manifest-baseline/v1',
     mode,
     manifest_path:        manifestPath,
-    snapshot_path:        null,              // T-06 will wire createSnapshot()
+    snapshot_path:        snapshotPath,      // non-null when apply changed ≥1 entry (AC-09)
     entries_considered:   entriesToProcess.length,
     entries_rebaseled:    entriesRebaseled,
     entries_skipped:      entriesSkipped,
