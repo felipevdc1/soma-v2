@@ -140,11 +140,19 @@ function runBaseline({ somaHome, mode, json, filter, isDefaultMode }) {
   }
 
   const files = manifest.files || [];
+
+  // Apply filter: exact-match against entry.id OR entry.path (D-014-2 lock — no glob/regex).
+  // A glob-like value such as 'adapters/*' is treated as a LITERAL string and will match 0 entries
+  // unless some entry has that exact id or path.
+  const entriesToProcess = (filter !== null && filter !== undefined && filter !== '')
+    ? files.filter(e => e.id === filter || e.path === filter)
+    : files;
+
   const entriesRebaseled = [];
   const entriesSkipped   = [];
   let entriesClean = 0;
 
-  for (const entry of files) {
+  for (const entry of entriesToProcess) {
     const labPath = path.join(somaHome, entry.path);
     let actualBuf;
     try {
@@ -199,7 +207,7 @@ function runBaseline({ somaHome, mode, json, filter, isDefaultMode }) {
     mode,
     manifest_path:        manifestPath,
     snapshot_path:        null,              // T-06 will wire createSnapshot()
-    entries_considered:   files.length,
+    entries_considered:   entriesToProcess.length,
     entries_rebaseled:    entriesRebaseled,
     entries_skipped:      entriesSkipped,
     entries_clean:        entriesClean,
