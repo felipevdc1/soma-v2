@@ -13,6 +13,10 @@ const crypto = require('node:crypto');
 const SOMA_HOME = path.join(os.homedir(), '.soma-v2');
 const HOOKS_DIR = path.join(os.homedir(), '.claude', 'hooks');
 
+// Resolve node binary explicitly — bun sets process.execPath to itself, which
+// breaks the wrapper + inner runner pattern (bun --test has recursive detection).
+const NODE_BIN = spawnSync('which', ['node'], { encoding: 'utf8' }).stdout.trim() || 'node';
+
 function sha256file(filepath) {
   try {
     const content = fs.readFileSync(filepath);
@@ -68,7 +72,7 @@ const fs = require('node:fs');
 const files = ${JSON.stringify(hookTestFiles)};
 const outFile = ${JSON.stringify(outFile)};
 
-const result = spawnSync(process.execPath, ['--test', ...files], {
+const result = spawnSync(${JSON.stringify(NODE_BIN)}, ['--test', ...files], {
   encoding: 'utf8',
   timeout: 60000,
   env: { ...process.env, FORCE_COLOR: '0', NODE_TEST_CONTEXT: undefined }
@@ -82,7 +86,7 @@ process.exit(result.status || 0);
   fs.writeFileSync(wrapperPath, wrapperCode);
 
   try {
-    spawnSync(process.execPath, [wrapperPath], {
+    spawnSync(NODE_BIN, [wrapperPath], {
       encoding: 'utf8',
       timeout: 60000,
       stdio: ['pipe', 'pipe', 'pipe']
