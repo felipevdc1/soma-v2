@@ -246,8 +246,15 @@ test('issue-11(B2): start marker regex includes version=1.0 requirement', () => 
 // 'insert' (extractBlock returns found:false when end marker is absent). B1's guard
 // is defense-in-depth for future code paths or race conditions.
 
-const SYNC_WITH_EXPORTS = path.join(os.homedir(), '.soma-v2', 'scripts', 'sync.cjs');
+// When SOMA_TEST_EXPORTS is set, target the local build so tests run against the
+// source under edit rather than the installed copy in ~/.soma-v2/scripts/sync.cjs.
+// The env var must remain set during require so that sync.cjs exposes its exports
+// (guarded by `if (process.env.SOMA_TEST_EXPORTS === '1')` at the bottom of the file).
+const _savedTestExports = process.env.SOMA_TEST_EXPORTS;
 process.env.SOMA_TEST_EXPORTS = '1';
+const SYNC_WITH_EXPORTS = _savedTestExports
+  ? path.join(__dirname, '../sync.cjs')
+  : path.join(os.homedir(), '.soma-v2', 'scripts', 'sync.cjs');
 const { detectLegacyParseError, writeLegacyUpgrade } = require(SYNC_WITH_EXPORTS);
 delete process.env.SOMA_TEST_EXPORTS;
 

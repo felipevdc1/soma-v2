@@ -202,12 +202,16 @@ function isLegacyBlockNested(existingContent, anchorId) {
  * @param {string} shortName - legacy shortname (e.g. 'hyd-v2' for anchorId 'block.codex.AGENTS.hyd-v2')
  * @returns {string|null}
  */
-function detectLegacyParseError(filepath, shortName) {
+function detectLegacyParseError(filepath, shortName, existingContent = null) {
   let content;
-  try {
-    content = fs.readFileSync(filepath, 'utf8');
-  } catch (err) {
-    return null;
+  if (existingContent !== null) {
+    content = existingContent;
+  } else {
+    try {
+      content = fs.readFileSync(filepath, 'utf8');
+    } catch (err) {
+      return null;
+    }
   }
   const lines = content.split('\n');
   const legacyStartPattern = new RegExp(`<!--\\s*${escapeRegex(shortName)}:start\\s*-->`);
@@ -252,7 +256,8 @@ function writeLegacyUpgrade(targetPath, anchorId, blockContent) {
 
   // --- B1: Pre-write guard — detect orphan legacy start marker (no matching end) ---
   // Must run BEFORE any fs.writeFileSync to prevent file corruption.
-  const legacyParseError = detectLegacyParseError(targetPath, shortName);
+  // Pass existingContent to avoid a second fs.readFileSync on the same file.
+  const legacyParseError = detectLegacyParseError(targetPath, shortName, existingContent);
   if (legacyParseError) {
     throw new Error(legacyParseError);
   }
@@ -918,7 +923,7 @@ function runApplyMode(flags, somaHome, allFindings, totalEntries, adapters, useJ
       // rather than writeBlock (which uses parseAnchorAttrs and cannot match legacy format).
       // source_block_content is already computed on the finding; use it directly for consistency.
       // source_block_content is always populated for legacy-upgrade drift findings
-      // (computeEntryAction:373-385 sets it from the source doc).
+      // (computeEntryAction:413-416 sets it from the source doc).
       if (!f.source_block_content) {
         throw new Error('LEGACY_UPGRADE_INVARIANT: source_block_content missing on legacy drift finding');
       }
