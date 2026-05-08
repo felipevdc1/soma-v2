@@ -42,6 +42,7 @@ const SUBCOMMANDS = [
   { name: 'doctor',    script: 'doctor.cjs',     desc: 'Detect drift, stale entries, and migration status' },
   { name: 'sync',      script: 'sync.cjs',       desc: 'Sync anchored blocks to target files (dry-run or --apply)' },
   { name: 'rollback',  script: 'rollback.cjs',   desc: 'Restore files from a pre-write snapshot' },
+  { name: 'manifest',  script: 'manifest.cjs',   desc: 'Manage manifest baseline + future verbs' },
   { name: 'module',    script: 'module.cjs',     desc: 'Manage SOMA modules (add, remove, deprecate)' },
   { name: 'audit',     script: 'audit.cjs',      desc: 'Run audit checks across SOMA contexts' },
 ];
