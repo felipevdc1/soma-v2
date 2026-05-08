@@ -15,6 +15,7 @@ const assert = require('node:assert/strict');
 const { spawnSync } = require('node:child_process');
 const path = require('node:path');
 const os = require('node:os');
+const fs = require('node:fs');
 
 const SOMA_HOME = path.join(os.homedir(), '.soma-v2');
 const SOMA_CLI = path.join(SOMA_HOME, 'scripts', 'soma.cjs');
@@ -176,4 +177,159 @@ test('T-14-10: multi-arg passthrough: soma sync --dry-run --tool=claude delegate
   assert.ok(r.status !== null, 'Command should complete');
   // sync.cjs produces JSON or text output even on error
   assert.ok(output.length > 0, `Expected output from sync.cjs. Got nothing.`);
+});
+
+// ── T-09: manifest baseline dispatcher integration ─────────────────────────────
+//
+// Validates end-to-end wiring: soma.cjs routes `soma manifest baseline [flags]`
+// through spawnSync to scripts/manifest.cjs.  Uses the CORE working-copy CLI
+// (core/scripts/soma.cjs) so the current branch is tested directly.
+//
+// Dispatcher functional behaviour is unchanged — T-01 SUBCOMMANDS registration
+// plus manifest.cjs positional parsing handle nested-verb routing.  These tests
+// confirm the wiring with explicit assertions.
+//
+// Article III HARD: real fs fixtures, real child_process — zero mocks.
+//
+// @spec [SPEC:AC-10] [WIRING] [T-09] [run-260508-0841-fb4dce]
+
+const CORE_SOMA_CLI = path.resolve(__dirname, '..', 'soma.cjs');
+
+/** Run the CORE working-copy soma CLI (not installed ~/.soma-v2 copy). */
+function runCoreSoma(args = [], env = {}) {
+  return spawnSync('node', [CORE_SOMA_CLI, ...args], {
+    env:     { ...process.env, ...env },
+    encoding: 'utf8',
+    timeout:  15_000,
+  });
+}
+
+/**
+ * Minimal SOMA_HOME fixture for dispatcher integration tests.
+ * Creates a real temp dir with manifest.json + one stale lab file.
+ * Returns { somaHome, cleanup }.
+ */
+function makeBaselineFixture() {
+  const somaHome = fs.mkdtempSync(
+    path.join(os.tmpdir(), `soma-disp-t09-${process.pid}-`)
+  );
+  const labDir = path.join(somaHome, 'lab');
+  fs.mkdirSync(labDir, { recursive: true });
+
+  const labContent = '# Dispatcher integration test file\nContent for wiring validation.\n';
+  fs.writeFileSync(path.join(labDir, 'test-file.md'), labContent);
+
+  const manifest = {
+    schema:      'soma-manifest/v1',
+    version:     '1.0',
+    generatedAt: new Date().toISOString(),
+    files: [{
+      id:           'test.dispatcher.entry',
+      path:         'lab/test-file.md',
+      sha256:       'a'.repeat(64),   // deliberately stale sha — will be detected
+      sourceSha256: 'source-original',
+    }],
+  };
+  fs.writeFileSync(
+    path.join(somaHome, 'manifest.json'),
+    JSON.stringify(manifest, null, 2) + '\n'
+  );
+
+  return {
+    somaHome,
+    cleanup: () => {
+      try { fs.rmSync(somaHome, { recursive: true, force: true }); } catch (_) {}
+    },
+  };
+}
+
+// T-09-01: soma --help (core copy) lists "manifest" in subcommands table
+test('T-09-01: soma --help (core copy) lists "manifest" in subcommands table', () => {
+  const r = runCoreSoma(['--help']);
+  assert.equal(r.status, 0, `Expected exit 0, got ${r.status}. stderr: ${r.stderr}`);
+  const output = r.stdout + r.stderr;
+  assert.ok(
+    /\bmanifest\b/.test(output),
+    `--help output must list "manifest" subcommand. Got:\n${output}`
+  );
+});
+
+// T-09-02: soma manifest (no subverb) → manifest.cjs receives no positional → shows usage, exits 0
+// (manifest.cjs treats no-args as usage request, not an error — consistent with SOMA CLI convention)
+test('T-09-02: soma manifest (no subverb) routes to manifest.cjs and exits 0 with usage', () => {
+  const r = runCoreSoma(['manifest']);
+  // manifest.cjs treats no-args as usage display → exit 0
+  assert.equal(
+    r.status, 0,
+    `Expected exit 0 (manifest.cjs usage display), got ${r.status}. stdout: ${r.stdout} stderr: ${r.stderr}`
+  );
+  // Must NOT be soma.cjs UNKNOWN_SUBCOMMAND — "manifest" IS a registered subcommand
+  assert.ok(
+    !r.stderr.includes('UNKNOWN_SUBCOMMAND'),
+    `Should not emit UNKNOWN_SUBCOMMAND — manifest is registered in SUBCOMMANDS. stderr: ${r.stderr}`
+  );
+  // Delegation proof: output must come from manifest.cjs (mentions "baseline" subverb)
+  const output = r.stdout + r.stderr;
+  assert.ok(
+    output.includes('baseline'),
+    `Delegation proof: manifest.cjs usage must mention "baseline" subverb. Got:\n${output}`
+  );
+});
+
+// T-09-03: soma manifest baseline --help exits 0 and documents all four flags
+test('T-09-03: soma manifest baseline --help exits 0 with --dry-run --apply --filter --json', () => {
+  const r = runCoreSoma(['manifest', 'baseline', '--help']);
+  assert.equal(r.status, 0, `Expected exit 0, got ${r.status}. stderr: ${r.stderr}`);
+  const output = r.stdout + r.stderr;
+  for (const flag of ['--dry-run', '--apply', '--filter', '--json']) {
+    assert.ok(
+      output.includes(flag),
+      `manifest baseline --help must document flag "${flag}". Output:\n${output}`
+    );
+  }
+});
+
+// T-09-04: soma manifest baseline --bogus exits 2 (INVALID_ARGS passthrough from manifest.cjs)
+test('T-09-04: soma manifest baseline --bogus exits 2 (INVALID_ARGS passthrough)', () => {
+  const r = runCoreSoma(['manifest', 'baseline', '--bogus']);
+  assert.equal(
+    r.status, 2,
+    `Expected exit 2 (INVALID_ARGS from manifest.cjs), got ${r.status}. stdout: ${r.stdout} stderr: ${r.stderr}`
+  );
+  // Must NOT be soma.cjs UNKNOWN_SUBCOMMAND — manifest is a known subcommand
+  assert.ok(
+    !r.stderr.includes('UNKNOWN_SUBCOMMAND'),
+    `Should not emit UNKNOWN_SUBCOMMAND from dispatcher. stderr: ${r.stderr}`
+  );
+});
+
+// T-09-05: soma manifest baseline --json (with real fixture) emits valid soma-manifest-baseline/v1 JSON
+test('T-09-05: soma manifest baseline --json emits valid soma-manifest-baseline/v1 JSON', () => {
+  const { somaHome, cleanup } = makeBaselineFixture();
+  try {
+    const r = runCoreSoma(
+      ['manifest', 'baseline', '--dry-run', '--json'],
+      { SOMA_HOME: somaHome }
+    );
+    assert.equal(r.status, 0, `Expected exit 0, got ${r.status}. stderr: ${r.stderr}`);
+
+    let out;
+    try {
+      out = JSON.parse(r.stdout.trim());
+    } catch (e) {
+      assert.fail(
+        `stdout must be parseable JSON. Got: ${r.stdout.slice(0, 300)}\nParseError: ${e.message}`
+      );
+    }
+
+    assert.equal(
+      out.schema, 'soma-manifest-baseline/v1',
+      `schema must be "soma-manifest-baseline/v1". Got: ${out.schema}`
+    );
+    assert.ok(typeof out.mode === 'string',               'mode field must be present and string');
+    assert.ok(Array.isArray(out.entries_rebaseled),       'entries_rebaseled must be array');
+    assert.ok(typeof out.entries_considered === 'number', 'entries_considered must be number');
+  } finally {
+    cleanup();
+  }
 });
