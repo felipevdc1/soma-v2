@@ -381,6 +381,15 @@ test('doctor reports install_targets_count=8 (5 codex + 3 claude entries) in che
   const { somaDir, fixtureDir } = createFixture('targets-count');
   const { codexAgentsMd, homeAgentsMd, claudeMdPath } = writeMigrationFixtures(fixtureDir);
 
+  // Patch fixture: rename EXPERIMENTAL → _EXPERIMENTAL so listAdapters filters it via _ prefix.
+  // The real lab may still have EXPERIMENTAL until next sync apply; fixture must reflect
+  // the post-rename canonical state (D-F-1: _EXPERIMENTAL is filtered by universal _ prefix skip).
+  const expDir = path.join(somaDir, 'adapters', 'EXPERIMENTAL');
+  const expNewDir = path.join(somaDir, 'adapters', '_EXPERIMENTAL');
+  if (fs.existsSync(expDir)) {
+    fs.renameSync(expDir, expNewDir);
+  }
+
   // Patch fixture's claude install-targets: remove legacy cbm entry so count is 8 (5 codex + 3 claude).
   // The real ~/.soma-v2 may still have cbm during migration rollout; the fixture must reflect
   // the post-migration canonical state (AC-20: cbm deprecated, 3 claude entries remain).
