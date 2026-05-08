@@ -18,6 +18,10 @@ const SOMA_HOME = path.join(os.homedir(), '.soma-v2');
 const HOOKS_DIR = path.join(os.homedir(), '.claude', 'hooks');
 const INIT = path.join(SOMA_HOME, 'scripts', 'init.cjs');
 
+// Resolve node binary explicitly — bun sets process.execPath to itself, which
+// breaks the wrapper + inner runner pattern (bun --test has recursive detection).
+const NODE_BIN = spawnSync('which', ['node'], { encoding: 'utf8' }).stdout.trim() || 'node';
+
 // ---- Canonical sources to protect ----
 const CANONICAL_SOURCES = [
   path.join(os.homedir(), '.codex', 'AGENTS.md'),
@@ -161,7 +165,7 @@ const outFile = ${JSON.stringify(outFile)};
 const env = Object.assign({}, process.env);
 delete env.NODE_TEST_CONTEXT;
 env.FORCE_COLOR = '0';
-const result = spawnSync(process.execPath, ['--test', ...files], {
+const result = spawnSync(${JSON.stringify(NODE_BIN)}, ['--test', ...files], {
   encoding: 'utf8', timeout: 60000, env
 });
 fs.writeFileSync(outFile, (result.stdout || '') + (result.stderr || ''));
@@ -170,7 +174,7 @@ process.exit(result.status || 0);
   fs.writeFileSync(wrapperPath, wrapperCode);
 
   try {
-    spawnSync(process.execPath, [wrapperPath], { encoding: 'utf8', timeout: 60000 });
+    spawnSync(NODE_BIN, [wrapperPath], { encoding: 'utf8', timeout: 60000 });
     if (!fs.existsSync(outFile)) return { tests: null, pass: null, fail: null, raw: '' };
     const raw = fs.readFileSync(outFile, 'utf8');
     const testsMatch = raw.match(/# tests (\d+)/);

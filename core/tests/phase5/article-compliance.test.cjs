@@ -213,7 +213,7 @@ fs.mkdirSync(RUN_DIR, { recursive: true });
 test('AC-21 / Article IV: sync --apply emits soma_apply_evidence JSON line when SOMA_EMIT_EVIDENCE=1', () => {
   const { somaDir, targetFile } = createSandboxedFixture('sync-evidence');
 
-  const proc = spawnSync('node', [SYNC_CJS, '--apply', `--soma-home=${somaDir}`, '--json'], {
+  const proc = spawnSync('node', [SYNC_CJS, '--apply', '--tool=claude', `--soma-home=${somaDir}`, '--json'], {
     encoding: 'utf8',
     timeout:  20000,
     env: {
@@ -514,7 +514,7 @@ test('AC-21 regression: sync --apply --json last-JSON-line still parseable when 
   // sync.cjs stdout as JSON. The main apply JSON should still be parseable.
   const { somaDir } = createSandboxedFixture('regression-check');
 
-  const proc = spawnSync('node', [SYNC_CJS, '--apply', `--soma-home=${somaDir}`, '--json'], {
+  const proc = spawnSync('node', [SYNC_CJS, '--apply', '--tool=claude', `--soma-home=${somaDir}`, '--json'], {
     encoding: 'utf8',
     timeout:  20000,
     env: {

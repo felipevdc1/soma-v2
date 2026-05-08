@@ -17,6 +17,10 @@ const SOMA_HOME = path.join(os.homedir(), '.soma-v2');
 const TESTS_DIR = path.join(SOMA_HOME, 'scripts', '__tests__');
 const HOOKS_DIR = path.join(os.homedir(), '.claude', 'hooks');
 
+// Resolve node binary explicitly — bun sets process.execPath to itself, which
+// breaks the wrapper + inner runner pattern (bun --test has recursive detection).
+const NODE_BIN = spawnSync('which', ['node'], { encoding: 'utf8' }).stdout.trim() || 'node';
+
 // Phase 4a test files (do NOT include this regression file itself to avoid recursion)
 const PHASE4A_TEST_FILES = [
   'init-existing.contract.test.cjs',
@@ -48,7 +52,7 @@ const outFile = ${JSON.stringify(outFile)};
 const env = Object.assign({}, process.env);
 delete env.NODE_TEST_CONTEXT;
 env.FORCE_COLOR = '0';
-const result = spawnSync(process.execPath, ['--test', ...files], {
+const result = spawnSync(${JSON.stringify(NODE_BIN)}, ['--test', ...files], {
   encoding: 'utf8', timeout: 120000, env
 });
 fs.writeFileSync(outFile, (result.stdout || '') + (result.stderr || ''));
@@ -57,7 +61,7 @@ process.exit(result.status || 0);
   fs.writeFileSync(wrapperPath, wrapperCode);
 
   try {
-    spawnSync(process.execPath, [wrapperPath], { encoding: 'utf8', timeout: 120000 });
+    spawnSync(NODE_BIN, [wrapperPath], { encoding: 'utf8', timeout: 120000 });
     if (!fs.existsSync(outFile)) return { tests: null, pass: null, fail: null, raw: '' };
     const raw = fs.readFileSync(outFile, 'utf8');
     const testsMatch = raw.match(/# tests (\d+)/);
@@ -93,7 +97,7 @@ function getHooksTestFiles() {
 
 // ---- Phase 4a test suite all pass ----
 
-test('phase4a-regression: all Phase 4a tests pass (AC-08, CONTRACT-INIT-EXISTING-01)', () => {
+test('phase4a-regression: all Phase 4a tests pass (AC-08, CONTRACT-INIT-EXISTING-01)', { timeout: 180000 }, () => {
   const existingFiles = PHASE4A_TEST_FILES.filter(f => fs.existsSync(f));
   assert.ok(existingFiles.length > 0, 'Phase 4a test files must exist');
 
@@ -176,7 +180,7 @@ const REAL_INSTALL_SENSITIVE_FILES = new Set([
   'sync.contract.test.cjs',       // fixture-based but JSON output >8192 chars when many entries
 ]);
 
-test('phase4a-regression: Phase 2+3 baseline (238 tests) still pass', () => {
+test('phase4a-regression: Phase 2+3 baseline (238 tests) still pass', { timeout: 180000 }, () => {
   const p23Files = fs.readdirSync(TESTS_DIR)
     .filter(f =>
       f.endsWith('.test.cjs') &&

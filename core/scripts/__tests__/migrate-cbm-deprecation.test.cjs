@@ -557,7 +557,7 @@ test('extractMcpContentFromLab: aborts when multiple start markers detected', ()
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
-test('verifyMigration: aborts with timeout when doctor.cjs hangs', () => {
+test('verifyMigration: aborts with timeout when doctor.cjs hangs', { timeout: 32000 }, () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'verify-timeout-test-'));
   const scriptsDir = path.join(tmpDir, 'scripts');
   fs.mkdirSync(scriptsDir, { recursive: true });
