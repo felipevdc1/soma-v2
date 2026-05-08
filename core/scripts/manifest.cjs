@@ -12,8 +12,8 @@
  *   0 — ok / help / dry-run / apply success
  *   2 — invalid args (INVALID_ARGS, UNKNOWN_SUBVERB) or manifest error (MANIFEST_MISSING, MANIFEST_INVALID)
  *
- * @spec [SPEC:AC-01] [SPEC:AC-02] [SPEC:AC-10] [SPEC:AC-13] [SPEC:AC-14] [SPEC:AC-15]
- * @task T-03
+ * @spec [SPEC:AC-01] [SPEC:AC-02] [SPEC:AC-10] [SPEC:AC-13] [SPEC:AC-14] [SPEC:AC-15] [SPEC:AC-16]
+ * @task T-03 T-07
  */
 
 const fs      = require('node:fs');
@@ -159,9 +159,20 @@ function runBaseline({ somaHome, mode, json, filter, isDefaultMode }) {
     try {
       actualBuf = fs.readFileSync(labPath);
     } catch (err) {
-      // T-07 will handle ENOENT gracefully (skip + warn + exit 0).
-      // For now, propagate so the process exits non-zero.
-      throw err;
+      if (err.code === 'ENOENT') {
+        // D-014-1 lock: missing lab file is skip-with-warn, not fatal.
+        // Mirrors doctor.cjs detectSourceStaleness:298-308 pattern.
+        entriesSkipped.push({
+          id:     entry.id,
+          path:   entry.path,
+          reason: 'lab_file_missing',
+        });
+        if (!json) {
+          process.stderr.write(`Warning: lab file missing: ${entry.path} (skipped)\n`);
+        }
+        continue; // proceed to next entry
+      }
+      throw err; // non-ENOENT errors still propagate (AC-11, AC-12 preserved)
     }
 
     const actualSha = sha256hex(actualBuf);
