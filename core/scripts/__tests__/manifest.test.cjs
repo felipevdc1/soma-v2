@@ -49,11 +49,11 @@ test('manifest.cjs baseline + --dry-run AND --apply mutually exclusive', () => {
   assert.strictEqual(r.status, 2);
 });
 
-test('manifest.cjs baseline stub returns 0 with stub message', () => {
-  const r = spawnSync('node', [SCRIPT, 'baseline']);
-  assert.strictEqual(r.status, 0);
-  assert.match(r.stdout.toString(), /T-01 foundation|stub/i);
-});
+// NOTE: T-01 scaffold test 5 ("stub returns 0 with stub message") removed at T-13
+// closure. It was env-dependent — passed accidentally because real ~/.soma-v2/manifest.json
+// happened to have an entry with "stub" in id (core.module-cookbook-stub). Stub itself
+// was replaced by real impl in T-03; AC-15 (default mode is dry-run + hint emission)
+// covers the equivalent assertion via controlled fixture without env dependency.
 
 // ── Fixture helpers (T-02) ────────────────────────────────────────────────────
 
