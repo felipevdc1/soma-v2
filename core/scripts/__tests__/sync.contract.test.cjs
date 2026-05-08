@@ -14,11 +14,32 @@ const path = require('node:path');
 const SOMA_HOME = path.join(os.homedir(), '.soma-v2');
 const SYNC = path.join(SOMA_HOME, 'scripts', 'sync.cjs');
 
+// Synthetic ~/AGENTS.md fixture WITHOUT soma-v2 blocks → guarantees insert actions.
+// Replacing real ~/AGENTS.md dependency: real file may be fully in-sync (all blocks present),
+// which would produce exit 0 and break the "exit 1 when actionable" contract test.
+const EMPTY_AGENTS_MD = '# Global Agent Operating Rules\n\nBasic rules only — missing CBM and soma-stsd blocks.\n';
+
 // Helper: create fixture soma_home for testing
 function createFixture() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'soma-sync-fixture-'));
   const somaDir = path.join(dir, '.soma-v2');
   spawnSync('cp', ['-R', SOMA_HOME + '/.', somaDir], { stdio: 'pipe' });
+
+  // Patch codex install-targets to point ~/AGENTS.md entries at a fixture file WITHOUT blocks.
+  // Guarantees insert actions regardless of real ~/AGENTS.md state.
+  const targetsPath = path.join(somaDir, 'adapters', 'codex', 'install-targets.json');
+  if (fs.existsSync(targetsPath)) {
+    const targets = JSON.parse(fs.readFileSync(targetsPath, 'utf8'));
+    // Write empty AGENTS.md fixture
+    const fixtureAgentsMd = path.join(dir, 'fixture-AGENTS.md');
+    fs.writeFileSync(fixtureAgentsMd, EMPTY_AGENTS_MD, 'utf8');
+    const patchedEntries = targets.entries.map(e => {
+      if (e.target_path === '~/AGENTS.md') return { ...e, target_path: fixtureAgentsMd };
+      return e;
+    });
+    fs.writeFileSync(targetsPath, JSON.stringify({ ...targets, entries: patchedEntries }, null, 2));
+  }
+
   return { dir, somaDir };
 }
 

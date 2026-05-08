@@ -12,6 +12,29 @@ const path = require('node:path');
 
 const SOMA_HOME = path.join(os.homedir(), '.soma-v2');
 
+// Synthetic legacy-marker AGENTS.md content.
+// Uses OLD format (no version=/sha256= attrs) so doctor detects D3 drift.
+// Hand-crafted: does not depend on real ~/.codex/AGENTS.md state (which may be upgraded).
+const LEGACY_CODEX_AGENTS_MD = [
+  '# Codex AGENTS.md — legacy format (D3 fixture)',
+  '',
+  '<!-- hyd-v2:start -->',
+  '# HYD v2 Cognitive Discipline',
+  'Legacy content for hyd-v2 block.',
+  '<!-- hyd-v2:end -->',
+  '',
+  '<!-- soma-stsd:start -->',
+  '# SOMA / STSD Operating Lens',
+  'Legacy content for soma-stsd block.',
+  '<!-- soma-stsd:end -->',
+  '',
+  '<!-- codebase-memory-mcp:start -->',
+  '# Codebase Memory MCP',
+  'Legacy content for codebase-memory-mcp block.',
+  '<!-- codebase-memory-mcp:end -->',
+  ''
+].join('\n');
+
 /**
  * Create a fixture by copying real ~/.soma-v2 and setting up target files.
  * The fixture replicates:
@@ -26,12 +49,21 @@ function createDriftFixture() {
   // Copy real soma-v2 lab structure
   spawnSync('cp', ['-R', SOMA_HOME + '/.', somaDir], { stdio: 'pipe' });
 
-  // Create .codex/ with real AGENTS.md (has legacy markers — D3)
-  fs.mkdirSync(path.join(dir, '.codex'), { recursive: true });
-  const realCodexAgents = path.join(os.homedir(), '.codex', 'AGENTS.md');
-  if (fs.existsSync(realCodexAgents)) {
-    fs.copyFileSync(realCodexAgents, path.join(dir, '.codex', 'AGENTS.md'));
+  // Patch fixture: rename EXPERIMENTAL → _EXPERIMENTAL so listAdapters filters it via _ prefix.
+  // Real lab may still carry EXPERIMENTAL until next sync apply; fixture reflects post-rename state
+  // (D-F-1: _EXPERIMENTAL filtered by universal _ prefix skip). Prevents error finding with
+  // source_doc=null that breaks the source_doc contract test.
+  const expDir = path.join(somaDir, 'adapters', 'EXPERIMENTAL');
+  const expNewDir = path.join(somaDir, 'adapters', '_EXPERIMENTAL');
+  if (fs.existsSync(expDir)) {
+    fs.renameSync(expDir, expNewDir);
   }
+
+  // Create .codex/ with SYNTHETIC legacy-marker AGENTS.md (D3 fixture).
+  // Does NOT copy real ~/.codex/AGENTS.md — that file was upgraded by PR #12 and no longer
+  // has legacy markers. The synthetic content preserves D3 detection coverage permanently.
+  fs.mkdirSync(path.join(dir, '.codex'), { recursive: true });
+  fs.writeFileSync(path.join(dir, '.codex', 'AGENTS.md'), LEGACY_CODEX_AGENTS_MD, 'utf8');
 
   // Create ~/AGENTS.md WITHOUT soma-stsd or CBM blocks (D1+D2 present)
   fs.writeFileSync(path.join(dir, 'AGENTS.md'),

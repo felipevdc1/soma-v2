@@ -11,6 +11,29 @@ const path = require('node:path');
 
 const SOMA_HOME = path.join(os.homedir(), '.soma-v2');
 
+// Synthetic legacy-marker AGENTS.md content for .codex/ fixture.
+// Uses OLD format (no version=/sha256= attrs) so sync reports drift action for codex entries.
+// Hand-crafted: does not depend on real ~/.codex/AGENTS.md state (which may be upgraded post-PR #12).
+const LEGACY_CODEX_AGENTS_MD = [
+  '# Codex AGENTS.md — legacy format (D3 fixture)',
+  '',
+  '<!-- hyd-v2:start -->',
+  '# HYD v2 Cognitive Discipline',
+  'Legacy content for hyd-v2 block.',
+  '<!-- hyd-v2:end -->',
+  '',
+  '<!-- soma-stsd:start -->',
+  '# SOMA / STSD Operating Lens',
+  'Legacy content for soma-stsd block.',
+  '<!-- soma-stsd:end -->',
+  '',
+  '<!-- codebase-memory-mcp:start -->',
+  '# Codebase Memory MCP',
+  'Legacy content for codebase-memory-mcp block.',
+  '<!-- codebase-memory-mcp:end -->',
+  ''
+].join('\n');
+
 /**
  * Create fixture for sync dry-run testing.
  * Replicates: real soma-v2 + real ~/.codex/AGENTS.md (legacy markers) + ~/AGENTS.md without CBM/stsd blocks.
@@ -22,12 +45,11 @@ function createSyncFixture() {
   // Copy real soma-v2 lab
   spawnSync('cp', ['-R', SOMA_HOME + '/.', somaDir], { stdio: 'pipe' });
 
-  // Set up .codex/AGENTS.md with legacy markers (D3 — lacks new attrs)
+  // Set up .codex/AGENTS.md with SYNTHETIC legacy markers (D3 fixture — lacks new attrs).
+  // Does NOT copy real ~/.codex/AGENTS.md — that file was upgraded by PR #12 and no longer has
+  // legacy markers, making detection tests vacuously pass. Synthetic content preserves D3 coverage.
   fs.mkdirSync(path.join(dir, '.codex'), { recursive: true });
-  const realCodexAgents = path.join(os.homedir(), '.codex', 'AGENTS.md');
-  if (fs.existsSync(realCodexAgents)) {
-    fs.copyFileSync(realCodexAgents, path.join(dir, '.codex', 'AGENTS.md'));
-  }
+  fs.writeFileSync(path.join(dir, '.codex', 'AGENTS.md'), LEGACY_CODEX_AGENTS_MD, 'utf8');
 
   // ~/AGENTS.md WITHOUT CBM or soma-stsd blocks → 2 inserts expected
   fs.writeFileSync(path.join(dir, 'AGENTS.md'),
