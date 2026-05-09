@@ -39,6 +39,7 @@ const VERSION = 'soma-v2.1';
 const SUBCOMMANDS = [
   { name: 'bootstrap', script: 'bootstrap.cjs', desc: 'Validate current project against SOMA schema' },
   { name: 'init',      script: 'init.cjs',      desc: 'Initialize a new SOMA project or extend existing' },
+  { name: 'install',   script: 'install.cjs',   desc: 'Install SOMA into a target project (init + baseline + sync)' },
   { name: 'doctor',    script: 'doctor.cjs',     desc: 'Detect drift, stale entries, and migration status' },
   { name: 'sync',      script: 'sync.cjs',       desc: 'Sync anchored blocks to target files (dry-run or --apply)' },
   { name: 'rollback',  script: 'rollback.cjs',   desc: 'Restore files from a pre-write snapshot' },
