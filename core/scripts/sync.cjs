@@ -55,7 +55,8 @@ function parseArgs(argv) {
     verbose: false,
     somaHome: null,
     tool: null,
-    allowLocalEdits: false  // BF-06: opt-in to warn-and-write; default OFF = abort on conflict
+    allowLocalEdits: false,  // BF-06: opt-in to warn-and-write; default OFF = abort on conflict
+    targetsFile: null        // --targets-file=<path>: load adapter from explicit path, resolve relative target_path vs cwd
   };
   const errors = [];
 
@@ -72,6 +73,7 @@ function parseArgs(argv) {
     else if (arg.startsWith('--tool=')) flags.tool = arg.slice('--tool='.length);
     else if (arg === '--tool' && i + 1 < argv.length) flags.tool = argv[++i];
     else if (arg === '--allow-local-edits') flags.allowLocalEdits = true;  // BF-06 opt-in
+    else if (arg.startsWith('--targets-file=')) flags.targetsFile = arg.slice('--targets-file='.length);
     else if (arg.startsWith('--')) errors.push(`Unknown flag: ${arg}`);
   }
 
@@ -914,8 +916,36 @@ function runApplyMode(flags, somaHome, allFindings, totalEntries, adapters, useJ
 
     const sourceDocAbs = path.join(somaHome, f.source_doc);
     const sourceBlock = extractBlock(sourceDocAbs, f.target_anchor_id);
-    const blockContent = sourceBlock.found ? sourceBlock.content : fs.readFileSync(sourceDocAbs, 'utf8');
+    let blockContent = sourceBlock.found ? sourceBlock.content : fs.readFileSync(sourceDocAbs, 'utf8');
     const version = (sourceBlock.found && sourceBlock.attrs && sourceBlock.attrs.version) ? sourceBlock.attrs.version : '1.0';
+
+    // ---- SOMA_TEMPLATE_VARS: render {{KEY}} placeholders in block content ----
+    // When SOMA_TEMPLATE_VARS env var is set (JSON string), apply template rendering
+    // to block content before writing. Used by install.cjs to inject per-project vars
+    // (version, harness, install_timestamp, soma_home, manifest_sha_short, snapshot_id)
+    // into project-bootloader.md. renderTemplate throws on unresolved placeholders.
+    // @spec D1 D5 (T-08bis)
+    if (process.env.SOMA_TEMPLATE_VARS && blockContent.includes('{{')) {
+      try {
+        const templateVars = JSON.parse(process.env.SOMA_TEMPLATE_VARS);
+        const { renderTemplate } = require('./lib/template-engine.cjs');
+        blockContent = renderTemplate(blockContent, templateVars);
+      } catch (err) {
+        // TEMPLATE_PARSE_ERROR or JSON parse error — abort with clear message
+        const msg = `TEMPLATE_RENDER_FAILED for ${f.source_doc}: ${err.message}`;
+        if (useJson) {
+          process.exitCode = 1;
+          process.stdout.write(JSON.stringify({
+            schema: 'soma-sync-apply/v1', mode: 'apply', snapshot: null, summary: null,
+            error: { code: 'TEMPLATE_RENDER_FAILED', message: msg, details: null }
+          }, null, 2) + '\n');
+        } else {
+          process.stderr.write(`ERROR [TEMPLATE_RENDER_FAILED]: ${msg}\n`);
+          process.exit(1);
+        }
+        return;
+      }
+    }
 
     if (isLegacyUpgrade) {
       // Issue #11 / D-013-10: legacy marker upgrade path.
@@ -1063,23 +1093,83 @@ function main() {
   const allFindings = [];
   let totalEntries = 0;
 
-  for (const adapter of adapters) {
+  // ---- --targets-file= mode: load adapter from explicit path, resolve relative target_path vs cwd ----
+  // When --targets-file=<path> is provided, load the adapter JSON from that path (resolved against cwd)
+  // instead of the default install-targets.json from somaHome/adapters/<tool>/.
+  // Relative target_path entries are resolved against process.cwd() (the project dir).
+  // This enables per-project sync: e.g. --targets-file=install-targets.project.json with cwd=<projectDir>
+  // writes CLAUDE.md relative to the project dir, not ~/ or somaHome.
+  // @spec D4 (T-08bis)
+  if (flags.targetsFile) {
+    // Resolve --targets-file path against cwd (so relative paths like
+    // 'core/adapters/claude/install-targets.project.json' work from repo root)
+    const targetsFileAbs = path.resolve(process.cwd(), flags.targetsFile);
     let targetsData;
     try {
-      targetsData = loadInstallTargets(somaHome, adapter);
+      const raw = fs.readFileSync(targetsFileAbs, 'utf8');
+      const stripped = raw.replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
+      targetsData = JSON.parse(stripped);
     } catch (err) {
-      continue;
+      emitHardError('TARGETS_FILE_INVALID', `Failed to load --targets-file="${flags.targetsFile}": ${err.message}`, useJson);
+      return;
     }
 
+    // Validate schema (same as loadInstallTargets)
+    if (!targetsData || typeof targetsData !== 'object' ||
+        targetsData.schema !== 'soma-install-targets/v1' ||
+        !Array.isArray(targetsData.entries)) {
+      emitHardError('TARGETS_FILE_INVALID',
+        `--targets-file="${flags.targetsFile}" has invalid schema (expected soma-install-targets/v1 with entries[])`,
+        useJson);
+      return;
+    }
+
+    const adapterName = flags.tool || targetsData.tool || 'unknown';
     totalEntries += targetsData.entries.length;
 
     for (const entry of targetsData.entries) {
-      const finding = computeEntryAction(entry, somaHome);
-      finding.adapter = adapter;
-      // BF-01/BF-02: propagate per-entry injection options (optional fields in install-targets entries)
+      // Resolve relative target_path against cwd (critical contract for project-level sync).
+      // Absolute paths and ~ paths use existing expansion logic (expandHome).
+      // Relative paths (e.g. "CLAUDE.md") are resolved against process.cwd().
+      let resolvedTargetPath = entry.target_path;
+      if (typeof resolvedTargetPath === 'string') {
+        if (resolvedTargetPath === '~') {
+          resolvedTargetPath = os.homedir();
+        } else if (resolvedTargetPath.startsWith('~/')) {
+          resolvedTargetPath = path.join(os.homedir(), resolvedTargetPath.slice(2));
+        } else if (!path.isAbsolute(resolvedTargetPath)) {
+          // Relative path — resolve against cwd (the project directory)
+          resolvedTargetPath = path.resolve(process.cwd(), resolvedTargetPath);
+        }
+      }
+
+      const resolvedEntry = { ...entry, target_path: resolvedTargetPath };
+      const finding = computeEntryAction(resolvedEntry, somaHome);
+      finding.adapter = adapterName;
       finding.wrapper_section = entry.wrapper_section || null;
       finding.position_before = entry.position_before || null;
       allFindings.push(finding);
+    }
+  } else {
+    // ---- Default mode: load adapter from somaHome/adapters/<tool>/install-targets.json ----
+    for (const adapter of adapters) {
+      let targetsData;
+      try {
+        targetsData = loadInstallTargets(somaHome, adapter);
+      } catch (err) {
+        continue;
+      }
+
+      totalEntries += targetsData.entries.length;
+
+      for (const entry of targetsData.entries) {
+        const finding = computeEntryAction(entry, somaHome);
+        finding.adapter = adapter;
+        // BF-01/BF-02: propagate per-entry injection options (optional fields in install-targets entries)
+        finding.wrapper_section = entry.wrapper_section || null;
+        finding.position_before = entry.position_before || null;
+        allFindings.push(finding);
+      }
     }
   }
 

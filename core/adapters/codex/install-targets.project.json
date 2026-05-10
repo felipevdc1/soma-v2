@@ -1,0 +1,12 @@
+{
+  "schema": "soma-install-targets/v1",
+  "tool": "codex",
+  "entries": [
+    {
+      "block_id": "block.codex.AGENTS.project-bootloader",
+      "source_doc": "docs/project-bootloader.md",
+      "target_path": "AGENTS.md",
+      "target_anchor_id": "block.codex.AGENTS.project-bootloader"
+    }
+  ]
+}

@@ -46,12 +46,14 @@ const { spawnSync } = require('node:child_process');
 
 /**
  * SOMA version string installed by this build.
- * Hardcoded as "2.2.0" (simplest approach per T-09 spec).
- * Rationale: package.json shows 2.1.0 (not yet bumped for v2.2 release);
- * reading it dynamically adds fragility with no benefit for state-file consumers.
- * T-09 design choice: hardcode. If bumped later, update here.
+ * Read from package.json — single source of truth post v2.2 bump.
+ * Rationale: v2.2.0 introduces the project-bootloader block which embeds the version
+ * string in <project>/CLAUDE.md at install time. A single hardcoded string would
+ * diverge from package.json on future bumps. Reading dynamically prevents drift.
+ * package.json lives at repo root (2 levels up from core/scripts/).
  */
-const SOMA_INSTALLED_VERSION = '2.2.0';
+const _pkg = JSON.parse(fs.readFileSync(path.resolve(__dirname, '..', '..', 'package.json'), 'utf8'));
+const SOMA_INSTALLED_VERSION = _pkg.version;
 
 /** Stale lock threshold: 60 minutes in milliseconds. */
 const STALE_LOCK_THRESHOLD_MS = 60 * 60 * 1000;
@@ -672,18 +674,90 @@ function orchestrate(projectPathAbs, flags) {
     lastSyncStdout = syncResult.stdout;
   }
 
+  // ── Step 3b: sync.cjs --apply --targets-file=install-targets.project.json ────
+  // T-08bis: Inject project-bootloader block into <projectPathAbs>/CLAUDE.md (or AGENTS.md).
+  // Runs AFTER user-globals sync (Step 3) with cwd=projectPathAbs so relative
+  // target_path="CLAUDE.md" resolves to <projectPathAbs>/CLAUDE.md.
+  // Passes SOMA_TEMPLATE_VARS env so project-bootloader.md {{placeholders}} are rendered.
+  // @spec D5 (T-08bis) AC-01
+  const projectSyncSnapshotId = buildSnapshotId(lastSyncStdout) || now;
+  const manifestShaShort = (() => {
+    // Compute short sha256 of <projectPathAbs>/.soma/manifest.json for {{manifest_sha_short}}
+    const manifestPath = path.join(projectPathAbs, '.soma', 'manifest.json');
+    try {
+      const crypto = require('node:crypto');
+      const buf = fs.readFileSync(manifestPath);
+      return crypto.createHash('sha256').update(buf).digest('hex').slice(0, 8);
+    } catch (_) {
+      return '(unknown)';
+    }
+  })();
+
+  const templateVars = {
+    version: SOMA_INSTALLED_VERSION,
+    soma_home: SOURCE_CORE,
+    harness: flags.tool === 'both' ? 'claude+codex' : flags.tool,
+    install_timestamp: now,
+    manifest_sha_short: manifestShaShort,
+    snapshot_id: projectSyncSnapshotId,
+  };
+
+  let lastProjectSyncStdout = '';
+  for (const tool of toolsToSync) {
+    const projectAdapterPath = path.join(SOURCE_CORE, 'adapters', tool, 'install-targets.project.json');
+    if (!fs.existsSync(projectAdapterPath)) {
+      // No project adapter for this tool — skip silently (codex may not have one yet)
+      continue;
+    }
+
+    const projectSyncArgs = [
+      SYNC_CJS,
+      '--apply',
+      `--tool=${tool}`,
+      `--soma-home=${SOURCE_CORE}`,
+      `--targets-file=${projectAdapterPath}`,
+    ];
+    if (flags.allowLocalEdits) projectSyncArgs.push('--allow-local-edits');
+
+    const projectSyncResult = runStep(`project-sync-${tool}`, projectSyncArgs, {
+      cwd: projectPathAbs,
+      env: { ...process.env, SOMA_TEMPLATE_VARS: JSON.stringify(templateVars) },
+    });
+    if (!projectSyncResult.ok) {
+      const errSummary = `project-sync-${tool}: ${(projectSyncResult.stderr || projectSyncResult.stdout || '').trim().slice(0, 200) || 'no output'}`;
+      process.stderr.write(
+        `soma install: project sync --apply --tool=${tool} failed (exit ${projectSyncResult.status}) — ${errSummary}\n`
+      );
+      // Non-fatal: project-level sync failure doesn't abort the install.
+      // The user-globals sync (Step 3) already succeeded; report warning and continue.
+      process.stderr.write(`soma install: WARNING project-level CLAUDE.md injection failed — install state will be partial-failed\n`);
+      try {
+        writeInstallState(projectPathAbs, {
+          $schema: 'soma-install-state/v1',
+          status: 'partial-failed',
+          timestamp: now,
+          snapshotId: projectSyncSnapshotId,
+          harness: flags.tool,
+          installedVersion: SOMA_INSTALLED_VERSION,
+          lastError: errSummary,
+        });
+      } catch (_) {}
+      return 2;
+    }
+    lastProjectSyncStdout = projectSyncResult.stdout;
+  }
+
   // ── Step 4: Write success state + emit output (CONTRACT-01 format) ─────────
   const harnessLabel = flags.tool === 'both' ? 'claude + codex' : flags.tool;
-  const blockId = parseSyncBlockId(lastSyncStdout);
-  const allBlockIds = parseSyncBlockIds(lastSyncStdout);
+  // Parse block IDs from both user-globals sync and project sync combined
+  const combinedSyncStdout = lastSyncStdout + '\n' + lastProjectSyncStdout;
+  const blockId = parseSyncBlockId(combinedSyncStdout);
+  const allBlockIds = parseSyncBlockIds(combinedSyncStdout);
   const snapshotPath = parseSyncSnapshotPath(lastSyncStdout);
   const snapshotId = buildSnapshotId(lastSyncStdout);
 
   // T-09: Write state file (status=complete).
-  // If blockIds is empty (AC-01 gap — sync targets ~/.claude/CLAUDE.md, not project),
-  // use a placeholder block_id so the contract invariant (non-empty blockIds) is satisfied.
-  // T-08bis will fix sync target to <project>/CLAUDE.md, producing real blockIds.
-  // Design decision: accurate reflection of pipeline behavior, not idealized AC-01.
+  // T-08bis: blockIds now includes project-bootloader block.
   const effectiveBlockIds = allBlockIds.length > 0 ? allBlockIds : ['(injected)'];
   try {
     writeInstallState(projectPathAbs, {
