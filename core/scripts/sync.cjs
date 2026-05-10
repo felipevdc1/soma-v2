@@ -764,11 +764,11 @@ function runApplyMode(flags, somaHome, allFindings, totalEntries, adapters, useJ
     return;
   }
 
-  // BF-06: Pre-write conflict scan — abort on sha256 mismatch when --allow-local-edits not set.
+  // BF-06: Pre-write conflict scan — abort (exit 2) on sha256 mismatch when --allow-local-edits not set.
   // Scans ALL actionable findings for anchor sha256 mismatch (manual edit inside block).
-  // If any conflict found and --allow-local-edits is OFF: emit BLOCK_CONFLICT, exit 1, ZERO writes.
+  // If any conflict found and --allow-local-edits is OFF: emit 5-element BLOCK_CONFLICT msg, exit 2, ZERO writes.
   // If --allow-local-edits is ON: skip this gate (warn-and-write behavior preserved below).
-  // @spec AC-13 AC-14
+  // @spec AC-13 AC-14 AC-19 [CONTRACT:03]
   if (!flags.allowLocalEdits) {
     for (const f of actionableFindings) {
       const conflict = detectConflictInfo(f.target_path, f.target_anchor_id);
@@ -776,7 +776,7 @@ function runApplyMode(flags, somaHome, allFindings, totalEntries, adapters, useJ
         const errorMsg =
           `User manually edited content inside ${conflict.block_id} in ${conflict.file} between syncs. Aborting before write.`;
         if (useJson) {
-          process.exitCode = 1;
+          process.exitCode = 2;
           process.stdout.write(JSON.stringify({
             schema: 'soma-sync-apply/v1',
             mode: 'apply',
@@ -789,13 +789,24 @@ function runApplyMode(flags, somaHome, allFindings, totalEntries, adapters, useJ
             }
           }, null, 2) + '\n');
         } else {
-          process.stderr.write(`ERROR [BLOCK_CONFLICT]: ${errorMsg}\n`);
-          process.stderr.write(`  block_id:        ${conflict.block_id}\n`);
-          process.stderr.write(`  file:            ${conflict.file}\n`);
-          process.stderr.write(`  expected_sha256: ${conflict.expected_sha256}\n`);
-          process.stderr.write(`  actual_sha256:   ${conflict.actual_sha256}\n`);
-          process.stderr.write(`  resolution:      ${conflict.resolution_guidance}\n`);
-          process.exit(1);
+          // AC-19: 5-element error message format (CONTRACT-03)
+          process.stderr.write(`BF-06 ABORT: anchored block sha256 mismatch detected.\n`);
+          process.stderr.write(`\n`);
+          process.stderr.write(`  File:        ${conflict.file}\n`);
+          process.stderr.write(`  Block ID:    ${conflict.block_id}\n`);
+          process.stderr.write(`  Expected:    ${conflict.expected_sha256}\n`);
+          process.stderr.write(`  Actual:      ${conflict.actual_sha256}\n`);
+          process.stderr.write(`\n`);
+          process.stderr.write(`  Recovery options:\n`);
+          process.stderr.write(`    (1) Rollback to pre-edit state:\n`);
+          process.stderr.write(`        soma rollback --snapshot-id <prev-id>\n`);
+          process.stderr.write(`\n`);
+          process.stderr.write(`    (2) Re-extract your edits to source doc + re-sync:\n`);
+          process.stderr.write(`        Inspect block content, decide what to keep, re-run soma sync --apply\n`);
+          process.stderr.write(`\n`);
+          process.stderr.write(`    (3) Force overwrite (loses in-block edits):\n`);
+          process.stderr.write(`        soma sync --apply --force-resync OR --allow-local-edits\n`);
+          process.exit(2);
         }
         return;
       }
