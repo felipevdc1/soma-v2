@@ -738,3 +738,95 @@ test('T-08-S3: pre-existing .soma/ causes init redirect → install resumes pipe
     try { fs.rmSync(freshDir, { recursive: true, force: true }); } catch (_) {}
   }
 });
+
+// ── T-10 tests: idempotent re-run clean (AC-02) ───────────────────────────────
+// @spec [SPEC:AC-02]
+// @task T-10
+// Article II HARD: RED phase — T-10-S1 written BEFORE implementation.
+// Must FAIL until T-10 GREEN phase adds early-exit detection in install.cjs.
+
+/**
+ * T-10-S1: AC-02 idempotent re-run clean.
+ *
+ * Given a project full-installed (1st run exit 0, install-state.json status=complete,
+ * CLAUDE.md with exactly 1 soma-v2:start anchor), when `soma install . --tool=claude`
+ * runs AGAIN (2nd run), then:
+ *   1. exit code is 0
+ *   2. grep -c '<!-- soma-v2:start' CLAUDE.md returns exactly 1 (no duplicate block)
+ *   3. stdout contains literal "no changes"
+ *   4. install-state.json content is unchanged (status still "complete", same blockIds)
+ *
+ * @spec AC-02 (idempotent re-run clean)
+ * @task T-10
+ */
+test('T-10-S1: AC-02 idempotent re-run clean — 2nd install run exits 0 + no duplicate block + "no changes"', async (t) => {
+  const freshDir = fs.mkdtempSync(path.join(os.tmpdir(), 'soma-t10-s1-'));
+  try {
+    // ── 1st run: greenfield install ──────────────────────────────────────────
+    const r1 = spawnSync('node', [INSTALL_CJS, freshDir, '--tool=claude'], {
+      encoding: 'utf8',
+      timeout: 30000,
+    });
+
+    assert.equal(r1.status, 0,
+      `T-10-S1: 1st install must exit 0. Got ${r1.status}. stderr: ${r1.stderr} stdout: ${r1.stdout}`);
+
+    // Verify 1st run created CLAUDE.md with exactly 1 anchor
+    const claudeMdPath = path.join(freshDir, 'CLAUDE.md');
+    assert.ok(
+      fs.existsSync(claudeMdPath),
+      `T-10-S1: CLAUDE.md must exist after 1st install. Not found at ${claudeMdPath}`
+    );
+    const afterFirst = fs.readFileSync(claudeMdPath, 'utf8');
+    const countAfterFirst = (afterFirst.match(/<!-- soma-v2:start/g) || []).length;
+    assert.equal(countAfterFirst, 1,
+      `T-10-S1: CLAUDE.md must have exactly 1 anchor after 1st install. Got ${countAfterFirst}`
+    );
+
+    // Capture install-state.json after 1st run
+    const stateFilePath = path.join(freshDir, '.soma', 'install-state.json');
+    assert.ok(
+      fs.existsSync(stateFilePath),
+      `T-10-S1: install-state.json must exist after 1st install. Not found at ${stateFilePath}`
+    );
+    const stateAfterFirst = JSON.parse(fs.readFileSync(stateFilePath, 'utf8'));
+    assert.equal(stateAfterFirst.status, 'complete',
+      `T-10-S1: install-state.json must have status=complete after 1st install. Got: ${stateAfterFirst.status}`
+    );
+
+    // ── 2nd run: re-install on already-complete project ──────────────────────
+    const r2 = spawnSync('node', [INSTALL_CJS, freshDir, '--tool=claude'], {
+      encoding: 'utf8',
+      timeout: 30000,
+    });
+
+    // AC-02 contract assertions:
+
+    // 1. exit code must be 0
+    assert.equal(r2.status, 0,
+      `[RED — T-10] AC-02: 2nd install must exit 0. Got ${r2.status}. stderr: ${r2.stderr} stdout: ${r2.stdout}`
+    );
+
+    // 2. grep -c '<!-- soma-v2:start' CLAUDE.md must return exactly 1 (no duplicate)
+    const afterSecond = fs.readFileSync(claudeMdPath, 'utf8');
+    const countAfterSecond = (afterSecond.match(/<!-- soma-v2:start/g) || []).length;
+    assert.equal(countAfterSecond, 1,
+      `[RED — T-10] AC-02: grep -c '<!-- soma-v2:start' CLAUDE.md must return 1 after 2nd install. Got ${countAfterSecond}.\n` +
+      `Content: ${afterSecond.slice(0, 400)}`
+    );
+
+    // 3. stdout must contain literal "no changes"
+    assert.ok(
+      r2.stdout.includes('no changes'),
+      `[RED — T-10] AC-02: 2nd install stdout must contain "no changes". Got stdout: ${r2.stdout}`
+    );
+
+    // 4. install-state.json status still "complete" (unchanged)
+    const stateAfterSecond = JSON.parse(fs.readFileSync(stateFilePath, 'utf8'));
+    assert.equal(stateAfterSecond.status, 'complete',
+      `[RED — T-10] AC-02: install-state.json must still have status=complete after 2nd install. Got: ${stateAfterSecond.status}`
+    );
+  } finally {
+    try { fs.rmSync(freshDir, { recursive: true, force: true }); } catch (_) {}
+  }
+});
