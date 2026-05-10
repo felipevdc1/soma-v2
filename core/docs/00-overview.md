@@ -7,11 +7,11 @@ SOMA is a 10-step Spec+Test+Steps Driven (STSD) execution discipline for autonom
 - `docs/` — canonical references (constitution, hyd-v2, soma-stsd, 10-step-protocol, plus 5 stubs)
 - `templates/` — project + module + contracts
 - `adapters/` — codex / claude / _global
-- `scripts/` — Phase 2 CLI (currently empty)
+- `scripts/` — install CLI (soma install, soma sync, soma doctor, soma bootstrap)
 - `benchmarks/` — REPORT.md copies from Codex workspace
 
 ## Status
-Lab MVP (Phase 0+1 of v2.1 evolution). Read-only structural exhibit; not yet executable.
+SOMA v2.2 — install pipeline operational. Executable: `node scripts/install.cjs <project> --tool=claude` instruments a target project with SOMA discipline.
 
 ## Index
 - Constitution → `docs/constitution.md`
