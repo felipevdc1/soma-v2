@@ -218,23 +218,23 @@ v2.2 **adds** a new project-scoped block (`block.claude.CLAUDE_md.project-bootlo
 | AC-01 | `core/scripts/__tests__/install.test.js` | integration (greenfield) |
 | AC-01b | `core/scripts/__tests__/install.test.cjs` (T-08bis-S1) | integration (bootloader content) |
 | AC-02 | `core/scripts/__tests__/install.test.cjs` (T-10-S1) | integration (re-run) |
-| AC-03 | `core/scripts/__tests__/install.test.js` + `sync-bf06-abort.test.js` | integration (drift) |
+| AC-03 | `core/scripts/__tests__/install.test.cjs` (T-11-S1) + `core/scripts/__tests__/sync-bf06-abort.test.cjs` | integration (drift) + contract (sync abort) |
 | AC-04 | `core/scripts/__tests__/install.test.cjs` (T-12-S1) | integration (partial) |
 | AC-05 | `core/scripts/__tests__/install.test.cjs` (T-13-S1) | integration (mid-failure) |
 | AC-06 | `core/scripts/__tests__/install.test.js` | integration (path edge) |
-| AC-07 | `core/scripts/__tests__/install.test.js` | integration (--merge-claude-md) |
-| AC-08 | `core/scripts/__tests__/install.test.js` | integration (--replace-claude-md) |
-| AC-09 | `core/scripts/__tests__/install.test.js` | integration (abort default) |
+| AC-07 | `core/scripts/__tests__/install.test.cjs` (T-14-S1) | integration (--merge-claude-md) |
+| AC-08 | `core/scripts/__tests__/install.test.cjs` (T-15-S1) | integration (--replace-claude-md) |
+| AC-09 | `core/scripts/__tests__/install.test.cjs` (T-16-S1) | integration (abort default) |
 | AC-10 | manual + transcript inspection (or future hook test) | smoke (Claude skill) |
 | AC-11 | manual Codex session OR stubbed | smoke (Codex skill) — pending NEEDS_CLARIFICATION-1 |
 | AC-12 | `core/scripts/__tests__/slash-prereq-guard.test.js` (new) | integration |
 | AC-13 | repo grep CI check | static |
-| AC-14 | `core/scripts/__tests__/sync-bf06-abort.test.js` (new) | integration (BF-06 abort) |
+| AC-14 | `core/scripts/__tests__/sync-bf06-abort.test.cjs` (T-17 closes) | contract (BF-06 abort) |
 | AC-15 | `core/scripts/__tests__/cross-harness-parity.test.js` (new) | contract |
 | AC-16 | `core/scripts/__tests__/install.test.js` | integration (state file) |
 | AC-17 | `core/scripts/__tests__/frozen-libs-invariant.test.js` (existing per v2.1.4) | invariant |
 | AC-18 | `core/scripts/__tests__/discovery-traceability.test.js` (new, optional) | static |
-| AC-19 | `core/scripts/__tests__/sync-bf06-abort.test.js` (extended) | integration (conflict error msg) |
+| AC-19 | `core/scripts/__tests__/sync-bf06-abort.test.cjs` (T-17 closes — 5-element msg) | contract (BF-06 msg) |
 
 ---
 

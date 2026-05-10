@@ -40,6 +40,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
+const crypto = require('node:crypto');
 const { spawnSync } = require('node:child_process');
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -74,6 +75,99 @@ const SEMVER_RE = /^\d+\.\d+\.\d+/;
 const ALLOWED_STATE_FIELDS = new Set([
   '$schema', 'status', 'timestamp', 'snapshotId', 'harness', 'installedVersion', 'lastError', 'blockIds',
 ]);
+
+// ── CLAUDE.md detection helpers (T-14, T-15, T-16) ──────────────────────────
+
+/**
+ * Classify the state of a CLAUDE.md file for the custom-handling branch.
+ *
+ * Returns one of:
+ *   'absent'      — file does not exist (greenfield)
+ *   'anchor-only' — file exists and contains only soma-v2 anchor markers (no free-text before anchor)
+ *   'free-text'   — file exists and has content WITHOUT soma-v2 anchor markers
+ *   'mixed'       — file exists and has both free-text AND anchor markers (prior merge run)
+ *
+ * @param {string} claudeMdPath  Absolute path to CLAUDE.md
+ * @returns {'absent' | 'anchor-only' | 'free-text' | 'mixed'}
+ * @task T-14 T-15 T-16
+ * @spec [SPEC:AC-07] [SPEC:AC-08] [SPEC:AC-09]
+ */
+function classifyClaudeMd(claudeMdPath) {
+  if (!fs.existsSync(claudeMdPath)) {
+    return 'absent';
+  }
+
+  let content;
+  try {
+    content = fs.readFileSync(claudeMdPath, 'utf8');
+  } catch (_) {
+    return 'absent';
+  }
+
+  const hasAnchor = content.includes('<!-- soma-v2:start');
+
+  // "free-text" = has content AND no anchors at all
+  if (!hasAnchor && content.trim().length > 0) {
+    return 'free-text';
+  }
+
+  if (hasAnchor) {
+    // Check if there's meaningful free-text BEFORE the first anchor marker.
+    // If the file starts with the anchor (possibly preceded only by whitespace), it's anchor-only.
+    const firstAnchorIdx = content.indexOf('<!-- soma-v2:start');
+    const beforeAnchor = content.slice(0, firstAnchorIdx).trim();
+    return beforeAnchor.length > 0 ? 'mixed' : 'anchor-only';
+  }
+
+  // File exists but is empty — treat as absent (greenfield)
+  return 'absent';
+}
+
+/**
+ * Snapshot the original CLAUDE.md file before replacement (AC-08).
+ *
+ * Creates a snapshot directory at `~/.soma-v2/.snapshots/<ISO-timestamp>/`
+ * and writes the original content as `CLAUDE.md.original`.
+ * Emits "Original preserved at <snapDir>/" to stdout.
+ *
+ * @param {string} claudeMdPath  Absolute path to CLAUDE.md to snapshot
+ * @returns {string}             Snapshot directory path
+ * @throws {Error}               If snapshot directory or file cannot be created
+ * @task T-15
+ * @spec [SPEC:AC-08]
+ */
+function snapshotClaudeMd(claudeMdPath) {
+  const somaHome = process.env.SOMA_HOME
+    ? path.resolve(process.env.SOMA_HOME, '..')
+    : path.join(os.homedir(), '.soma-v2');
+  const snapshotsBase = path.join(somaHome, '.snapshots');
+
+  // Generate ISO-8601 UTC timestamp for snapshot dir name
+  const now = new Date();
+  const pad = (n, len = 2) => String(n).padStart(len, '0');
+  const baseTs = `${now.getUTCFullYear()}-${pad(now.getUTCMonth() + 1)}-${pad(now.getUTCDate())}` +
+    `T${pad(now.getUTCHours())}:${pad(now.getUTCMinutes())}:${pad(now.getUTCSeconds())}Z`;
+
+  // Collision-safe: append -{N} suffix if needed
+  let ts = baseTs;
+  let n = 2;
+  while (fs.existsSync(path.join(snapshotsBase, ts))) {
+    ts = `${baseTs}-${n}`;
+    n++;
+  }
+
+  const snapDir = path.join(snapshotsBase, ts);
+  fs.mkdirSync(snapDir, { recursive: true, mode: 0o700 });
+
+  // Copy original CLAUDE.md as CLAUDE.md.original
+  const originalContent = fs.readFileSync(claudeMdPath, 'utf8');
+  const destFile = path.join(snapDir, 'CLAUDE.md.original');
+  fs.writeFileSync(destFile, originalContent, 'utf8');
+
+  process.stdout.write(`  Original preserved at ${snapDir}/\n`);
+
+  return snapDir;
+}
 
 // ── Path helpers ──────────────────────────────────────────────────────────────
 
@@ -564,6 +658,78 @@ function buildSnapshotId(syncStdout) {
 function orchestrate(projectPathAbs, flags) {
   // Shared snapshotId fallback (computed once, used in state file on any path)
   const now = new Date().toISOString().replace(/\.\d+Z$/, 'Z');
+
+  // ── Step 0: CLAUDE.md free-text detection + branching (T-14, T-15, T-16) ──
+  // Detect if <project>/CLAUDE.md has free-text content (no anchor markers).
+  // This MUST happen before any pipeline mutation so we can abort early (AC-09)
+  // or snapshot before replacement (AC-08) with zero side-effects.
+  //
+  // Branch logic (only when claudeMdClass === 'free-text'):
+  //   --replace-claude-md → snapshot + clear CLAUDE.md (sync will re-write anchor only)
+  //   --merge-claude-md   → proceed normally (sync appends anchor after free-text)
+  //   no flag             → exit 2 + stderr names both flags (AC-09)
+  //
+  // For 'absent', 'anchor-only', 'mixed' → proceed normally (existing paths).
+  //
+  // IMPORTANT: Only applies when install-state.json does NOT exist (first-time install
+  // on a project with existing CLAUDE.md). If install-state.json exists, we're in a
+  // partial-recovery or idempotent re-run path — proceed normally regardless of CLAUDE.md content.
+  // This prevents false-positive "free-text" detection on SOMA-generated headings that remain
+  // after the anchored block is stripped (e.g., "## SOMA Bootloader (managed by soma sync)").
+  //
+  // @task T-14 T-15 T-16
+  // @spec [SPEC:AC-07] [SPEC:AC-08] [SPEC:AC-09]
+  const claudeMdPath = path.join(projectPathAbs, 'CLAUDE.md');
+  // Only apply free-text detection when SOMA has NOT run before.
+  // If .soma/ directory OR install-state.json exists, this is a re-run / recovery scenario.
+  // In re-run scenarios, CLAUDE.md content may appear as free-text (SOMA heading without anchor)
+  // due to partial strip — treat as 'anchor-only' (normal pipeline handles recovery).
+  const somaDirExistsForStep0 = fs.existsSync(path.join(projectPathAbs, '.soma'));
+  const stateFilePathForStep0 = path.join(projectPathAbs, '.soma', 'install-state.json');
+  const hasSomaPriorState = somaDirExistsForStep0;
+  const claudeMdClass = hasSomaPriorState ? 'anchor-only' : classifyClaudeMd(claudeMdPath);
+
+  if (claudeMdClass === 'free-text') {
+    if (flags.replaceClaudioMd) {
+      // AC-08: snapshot original, then clear CLAUDE.md so sync writes anchor-only content.
+      // sync.cjs will create a fresh CLAUDE.md with just the anchored block.
+      try {
+        snapshotClaudeMd(claudeMdPath);
+      } catch (snapErr) {
+        process.stderr.write(
+          `soma install: failed to snapshot CLAUDE.md before replacement: ${snapErr.message}\n`
+        );
+        return 2;
+      }
+      // Delete the free-text CLAUDE.md so sync treats it as a fresh greenfield write.
+      try {
+        fs.rmSync(claudeMdPath, { force: true });
+      } catch (rmErr) {
+        process.stderr.write(
+          `soma install: failed to remove CLAUDE.md before replacement: ${rmErr.message}\n`
+        );
+        return 2;
+      }
+      // Fall through to normal pipeline (sync will create CLAUDE.md with anchor block).
+
+    } else if (flags.mergeClaudioMd) {
+      // AC-07: proceed normally — sync.cjs appends anchored block after existing content.
+      // No special handling needed; the existing pipeline handles this correctly.
+
+    } else {
+      // AC-09: no flag provided — abort with clear error naming both flags.
+      // Same behavior whether TTY or not: operator must explicitly choose their intent.
+      process.stderr.write(
+        `soma install: CLAUDE.md exists with free-text content (no SOMA anchor markers).\n` +
+        `  To preserve and append: soma install <path> --merge-claude-md\n` +
+        `  To snapshot and replace: soma install <path> --replace-claude-md\n` +
+        `  Use --merge-claude-md to keep existing content and append the SOMA block.\n` +
+        `  Use --replace-claude-md to snapshot the original and replace with SOMA block only.\n`
+      );
+      return 2;
+    }
+  }
+  // For 'absent', 'anchor-only', 'mixed', or prior-install → proceed normally (no special handling needed).
 
   // ── Step 1: init.cjs ───────────────────────────────────────────────────────
   const initResult = runStep('init', [INIT_CJS, projectPathAbs]);
