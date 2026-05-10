@@ -611,6 +611,11 @@ function orchestrate(projectPathAbs, flags) {
     process.stderr.write(
       `soma install: manifest baseline failed (exit ${manifestResult.status}) — ${errSummary}\n`
     );
+    // T-13: surface snapshot-id to stderr (AC-05 contract).
+    // `now` is the ISO-8601 UTC timestamp computed at orchestrate() entry — this is the
+    // snapshotId that will be written to install-state.json. Surfacing it to stderr lets
+    // the caller (human or CI) reference this run when investigating partial-failed state.
+    process.stderr.write(`soma install: partial-failed snapshot-id: ${now}\n`);
     // T-09: write state=partial-failed
     try {
       writeInstallState(projectPathAbs, {
