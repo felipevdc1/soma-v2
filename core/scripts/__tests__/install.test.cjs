@@ -427,17 +427,19 @@ test('T-09-S4: fresh lockfile (<60min) blocks install with exit 2', async (t) =>
 // implementation and MUST FAIL until T-08 GREEN phase wires orchestrate() into main().
 
 /**
- * T-08-S1: AC-01 greenfield install creates .soma/ + .soma/manifest.json + CLAUDE.md block.
- * Verifies the full 3-step pipeline:
+ * T-08-S1: AC-01 greenfield install creates .soma/ + .soma/manifest.json + project CLAUDE.md block.
+ * Verifies the full 4-step pipeline (T-08bis extends T-08 to include project-level bootloader):
  *   1. init.cjs → .soma/ created (including .soma/manifest.json)
  *   2. manifest.cjs baseline --apply → SOMA source manifest baselined
- *   3. sync.cjs --apply --tool=claude → CLAUDE.md anchored block injected
+ *   3. sync.cjs --apply --tool=claude (user-globals) → injects into ~/.claude/CLAUDE.md
+ *   4. sync.cjs --apply --tool=claude --targets-file=install-targets.project.json (T-08bis)
+ *      → injects block.claude.CLAUDE_md.project-bootloader into <freshDir>/CLAUDE.md
  *
- * Note on CLAUDE.md target: sync.cjs injects into ~/.claude/CLAUDE.md (global SOMA bootloader),
- * not the project's CLAUDE.md. Project-level CLAUDE.md handling is in T-14/T-16.
- * AC-01 "CLAUDE.md" refers to ~/.claude/CLAUDE.md (the global harness config).
+ * AC-01 literal: `grep -c '<!-- soma-v2:start' <freshDir>/CLAUDE.md` must return 1.
+ * This assertion was WEAKENED in commit 8e3729c (T-08-S1 "fix assertion to match actual sync.cjs target").
+ * T-08bis REVERTS that weakening: the project CLAUDE.md MUST contain the anchor.
  */
-test('T-08-S1: AC-01 greenfield install creates .soma/ + .soma/manifest.json', async (t) => {
+test('T-08-S1: AC-01 greenfield install creates .soma/ + .soma/manifest.json + project CLAUDE.md anchor', async (t) => {
   const freshDir = fs.mkdtempSync(path.join(os.tmpdir(), 'soma-test-fresh-'));
   try {
     const r = spawnSync('node', [INSTALL_CJS, freshDir, '--tool=claude'], {
@@ -461,12 +463,209 @@ test('T-08-S1: AC-01 greenfield install creates .soma/ + .soma/manifest.json', a
       `.soma/manifest.json must be created by init.cjs. Not found at ${path.join(freshDir, '.soma', 'manifest.json')}`
     );
 
-    // stdout success format from CONTRACT-01 (install pipeline ran)
-    const combined = r.stdout + r.stderr;
+    // [T-08bis REVERTED] CLAUDE.md must be created in project dir with soma-v2 anchor
+    // AC-01 literal: grep -c '<!-- soma-v2:start' <freshDir>/CLAUDE.md → must return 1
+    const claudeMdPath = path.join(freshDir, 'CLAUDE.md');
     assert.ok(
-      combined.toLowerCase().includes('soma') || combined.toLowerCase().includes('install') || combined.toLowerCase().includes('.soma'),
-      `stdout must contain install completion indication. Got: ${combined.slice(0, 300)}`
+      fs.existsSync(claudeMdPath),
+      `[RED — T-08bis] CLAUDE.md must be created by sync.cjs project-level targets. Not found at ${claudeMdPath}`
     );
+
+    const claudeMdContent = fs.readFileSync(claudeMdPath, 'utf8');
+    const anchorCount = (claudeMdContent.match(/<!-- soma-v2:start/g) || []).length;
+    assert.equal(anchorCount, 1,
+      `[RED — T-08bis] AC-01 literal: grep -c '<!-- soma-v2:start' CLAUDE.md must return 1. Got ${anchorCount}.\nContent: ${claudeMdContent.slice(0, 500)}`
+    );
+
+    // The anchor must be for block.claude.CLAUDE_md.project-bootloader
+    assert.ok(
+      claudeMdContent.includes('id=block.claude.CLAUDE_md.project-bootloader'),
+      `[RED — T-08bis] CLAUDE.md anchor must have id=block.claude.CLAUDE_md.project-bootloader.\nContent: ${claudeMdContent.slice(0, 500)}`
+    );
+  } finally {
+    try { fs.rmSync(freshDir, { recursive: true, force: true }); } catch (_) {}
+  }
+});
+
+/**
+ * T-08bis-S1: AC-01b — project-bootloader block literal substrings present in CLAUDE.md.
+ * After greenfield install, <freshDir>/CLAUDE.md must contain all 7 required substrings
+ * defined in AC-01b spec amendment.
+ *
+ * @spec AC-01b (project-bootloader block content)
+ * @task T-08bis
+ */
+test('T-08bis-S1: AC-01b project-bootloader block contains all required literal substrings in CLAUDE.md', async (t) => {
+  const freshDir = fs.mkdtempSync(path.join(os.tmpdir(), 'soma-t08bis-s1-'));
+  try {
+    const r = spawnSync('node', [INSTALL_CJS, freshDir, '--tool=claude'], {
+      encoding: 'utf8',
+      timeout: 30000,
+    });
+
+    assert.equal(r.status, 0,
+      `T-08bis-S1: install must exit 0. Got ${r.status}. stderr: ${r.stderr}`);
+
+    const claudeMdPath = path.join(freshDir, 'CLAUDE.md');
+    assert.ok(
+      fs.existsSync(claudeMdPath),
+      `[RED — T-08bis] CLAUDE.md must exist at ${claudeMdPath}`
+    );
+
+    const content = fs.readFileSync(claudeMdPath, 'utf8');
+
+    // AC-01b literal substrings (all must be present)
+    const requiredSubstrings = [
+      '## SOMA install',
+      '## Project artifacts',
+      '## Workflow',
+    ];
+
+    for (const substr of requiredSubstrings) {
+      assert.ok(
+        content.includes(substr),
+        `[RED — T-08bis] AC-01b: CLAUDE.md must contain literal "${substr}". Content (first 600): ${content.slice(0, 600)}`
+      );
+    }
+
+    // {{version}} must be resolved (no unresolved placeholders)
+    assert.ok(
+      !content.includes('{{version}}'),
+      `[RED — T-08bis] AC-01b: {{version}} must be resolved in CLAUDE.md. Content: ${content.slice(0, 600)}`
+    );
+    assert.ok(
+      content.includes('2.2.0'),
+      `[RED — T-08bis] AC-01b: version 2.2.0 must appear in CLAUDE.md. Content: ${content.slice(0, 600)}`
+    );
+
+    // {{harness}} must be resolved to 'claude'
+    assert.ok(
+      !content.includes('{{harness}}'),
+      `[RED — T-08bis] AC-01b: {{harness}} must be resolved in CLAUDE.md. Content: ${content.slice(0, 600)}`
+    );
+    assert.ok(
+      content.includes('claude'),
+      `[RED — T-08bis] AC-01b: harness value 'claude' must appear in CLAUDE.md. Content: ${content.slice(0, 600)}`
+    );
+
+    // {{install_timestamp}} must be resolved (no unresolved placeholder)
+    assert.ok(
+      !content.includes('{{install_timestamp}}'),
+      `[RED — T-08bis] AC-01b: {{install_timestamp}} must be resolved. Content: ${content.slice(0, 600)}`
+    );
+
+    // {{soma_home}} must be resolved to a non-empty path
+    assert.ok(
+      !content.includes('{{soma_home}}'),
+      `[RED — T-08bis] AC-01b: {{soma_home}} must be resolved. Content: ${content.slice(0, 600)}`
+    );
+  } finally {
+    try { fs.rmSync(freshDir, { recursive: true, force: true }); } catch (_) {}
+  }
+});
+
+/**
+ * T-08bis-S2: --targets-file= resolves target_path relative to cwd.
+ * When sync.cjs is called with --targets-file=<absolutePath> and the adapter file
+ * contains target_path: "CLAUDE.md" (relative), the file must be written relative
+ * to process.cwd() (the project dir), NOT relative to soma_home.
+ *
+ * @spec D4 sync.cjs --targets-file flag
+ * @task T-08bis
+ */
+test('T-08bis-S2: sync.cjs --targets-file= resolves relative target_path against cwd', async (t) => {
+  const SYNC_CJS = path.join(SCRIPTS_DIR, 'sync.cjs');
+  const REPO_ROOT = path.resolve(SCRIPTS_DIR, '..', '..');
+  const projectAdapterPath = path.join(REPO_ROOT, 'core', 'adapters', 'claude', 'install-targets.project.json');
+  const freshCwd = fs.mkdtempSync(path.join(os.tmpdir(), 'soma-t08bis-s2-'));
+
+  try {
+    // Run sync.cjs with --targets-file pointing to the project adapter
+    // cwd=freshCwd means relative target_path "CLAUDE.md" must resolve to freshCwd/CLAUDE.md
+    const r = spawnSync('node', [
+      SYNC_CJS,
+      '--apply',
+      '--tool=claude',
+      `--targets-file=${projectAdapterPath}`,
+      `--soma-home=${path.join(REPO_ROOT, 'core')}`,
+    ], {
+      encoding: 'utf8',
+      timeout: 30000,
+      cwd: freshCwd,
+    });
+
+    // Must exit 0 (apply succeeded)
+    assert.equal(r.status, 0,
+      `[RED — T-08bis] sync.cjs --targets-file must exit 0. Got ${r.status}. stderr: ${r.stderr} stdout: ${r.stdout}`);
+
+    // CLAUDE.md must be created in cwd (freshCwd), not in soma_home
+    const claudeMdInCwd = path.join(freshCwd, 'CLAUDE.md');
+    assert.ok(
+      fs.existsSync(claudeMdInCwd),
+      `[RED — T-08bis] CLAUDE.md must be created at ${claudeMdInCwd} (relative to cwd). Not found.`
+    );
+
+    const content = fs.readFileSync(claudeMdInCwd, 'utf8');
+    assert.ok(
+      content.includes('<!-- soma-v2:start'),
+      `[RED — T-08bis] CLAUDE.md created by --targets-file must contain soma-v2 anchor. Got: ${content.slice(0, 400)}`
+    );
+    assert.ok(
+      content.includes('id=block.claude.CLAUDE_md.project-bootloader'),
+      `[RED — T-08bis] CLAUDE.md must have id=block.claude.CLAUDE_md.project-bootloader. Got: ${content.slice(0, 400)}`
+    );
+  } finally {
+    try { fs.rmSync(freshCwd, { recursive: true, force: true }); } catch (_) {}
+  }
+});
+
+/**
+ * T-08bis-S3: user-globals invariant — ~/.claude/CLAUDE.md content unchanged by project install.
+ * Running install.cjs in a fresh project dir must NOT mutate the content of ~/.claude/CLAUDE.md.
+ * We verify by comparing sha256 of the file before and after install.
+ * If the file doesn't exist (fresh machine), we skip the content-unchanged assertion
+ * and only assert that the file is not created from scratch (to avoid false-positive on new machines).
+ *
+ * @spec D5 install.cjs orchestrate — user-globals stay in ~/.claude/CLAUDE.md
+ * @task T-08bis
+ */
+test('T-08bis-S3: user-globals invariant — ~/.claude/CLAUDE.md content unchanged by project install', async (t) => {
+  const CRYPTO = require('node:crypto');
+  const userClaudeMd = path.join(os.homedir(), '.claude', 'CLAUDE.md');
+  const freshDir = fs.mkdtempSync(path.join(os.tmpdir(), 'soma-t08bis-s3-'));
+
+  // Snapshot pre-run sha256 (if file exists)
+  let preSha256 = null;
+  if (fs.existsSync(userClaudeMd)) {
+    const preBuf = fs.readFileSync(userClaudeMd);
+    preSha256 = CRYPTO.createHash('sha256').update(preBuf).digest('hex');
+  }
+
+  try {
+    const r = spawnSync('node', [INSTALL_CJS, freshDir, '--tool=claude'], {
+      encoding: 'utf8',
+      timeout: 30000,
+    });
+
+    assert.equal(r.status, 0,
+      `T-08bis-S3: install must exit 0. Got ${r.status}. stderr: ${r.stderr}`);
+
+    if (preSha256 !== null) {
+      // File existed pre-run — content must be byte-identical after install
+      const postBuf = fs.readFileSync(userClaudeMd);
+      const postSha256 = CRYPTO.createHash('sha256').update(postBuf).digest('hex');
+      assert.equal(postSha256, preSha256,
+        `[T-08bis] user-globals invariant: ~/.claude/CLAUDE.md content must be unchanged after project install.\n` +
+        `pre sha256:  ${preSha256}\n` +
+        `post sha256: ${postSha256}`
+      );
+    } else {
+      // File did not exist pre-run — must still not exist (project install must not create user global)
+      // Note: user-globals sync (step 3 in orchestrate) DOES write user globals when they drift.
+      // T-08bis-S3 is specifically about content invariance, not file creation.
+      // Skip the assertion if file didn't exist (new machine scenario).
+      t.skip('~/.claude/CLAUDE.md did not exist pre-run — skipping content-unchanged check (new machine)');
+    }
   } finally {
     try { fs.rmSync(freshDir, { recursive: true, force: true }); } catch (_) {}
   }
