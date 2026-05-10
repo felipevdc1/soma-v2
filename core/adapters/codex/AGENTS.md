@@ -99,3 +99,38 @@ Pause and re-plan when:
 - a fix requires deleting or weakening existing behavior without explicit approval;
 - implementation drifts from the spec.
 <!-- soma-v2:end id=block.codex.AGENTS.soma-stsd -->
+
+<!-- soma-v2:start id=block.codex.AGENTS.soma-install version=2.2.0 sha256=696e825cee7f462ae18d15ef65e1d0d1ee84723b689bf81dd821d0a7b3ba1c86 -->
+# Soma Install Skill (Codex)
+
+When user requests "instalar SOMA" / "install soma" (PT or EN, see triggers list below), invoke:
+```bash
+node ~/.soma-v2/scripts/soma.cjs install <project-path> [flags]
+```
+
+## Triggers (NL phrasings — parity with Claude /soma:install)
+
+- "instalar o SOMA neste projeto"
+- "instalar SOMA aqui"
+- "configurar SOMA neste repo"
+- "set up SOMA in this repo"
+- "install soma here"
+- "soma install"
+- "add SOMA to this project"
+
+## Args (parity with Claude skill)
+
+| Flag | Type | Default | Description |
+|---|---|---|---|
+| `<project-path>` | string | required | Target project path |
+| `--tool` | enum {claude, codex, both} | claude | Which harness adapter |
+| `--dry-run` | boolean | false | Preview without writing |
+| `--merge-claude-md` | boolean | null | Preserve+append on free-text CLAUDE.md |
+| `--replace-claude-md` | boolean | false | Snapshot+replace on free-text CLAUDE.md |
+| `--force-resync` | boolean | false | Bypass drift detection |
+| `--allow-local-edits` | boolean | false | Pass-through to sync escape hatch |
+
+## Post-invocation
+
+Emit summary: status (pass/fail/partial), paths created, snapshot ID, recovery hint if exit != 0.
+<!-- soma-v2:end id=block.codex.AGENTS.soma-install -->
