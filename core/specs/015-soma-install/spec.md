@@ -228,12 +228,12 @@ v2.2 **adds** a new project-scoped block (`block.claude.CLAUDE_md.project-bootlo
 | AC-10 | `core/adapters/claude/commands/soma-install.md` (T-27) + smoke transcript inspection | manual + future hook test |
 | AC-11 | `core/adapters/codex/AGENTS.md` block `id=block.codex.AGENTS.soma-install` (T-28) | manual + parse anchored block |
 | AC-12 | `core/scripts/__tests__/slash-prereq-guard.test.cjs` (T-26) + 3 slash command sources + 2 bootloaders (T-21..T-25) | integration + manual review |
-| AC-13 | repo grep CI check | static |
+| AC-13 | `core/scripts/__tests__/no-execute-deletion.test.cjs` (T-30) | unit (deletion + grep) |
 | AC-14 | `core/scripts/__tests__/sync-bf06-abort.test.cjs` (T-17 closes) | contract (BF-06 abort) |
 | AC-15 | `core/scripts/__tests__/cross-harness-parity.test.cjs` (T-29 closes — T-05 GREEN) | contract (parity) |
 | AC-16 | `core/scripts/__tests__/install.test.js` | integration (state file) |
-| AC-17 | `core/scripts/__tests__/frozen-libs-invariant.test.js` (existing per v2.1.4) | invariant |
-| AC-18 | `core/scripts/__tests__/discovery-traceability.test.js` (new, optional) | static |
+| AC-17 | `core/scripts/__tests__/frozen-libs-invariant-014.test.cjs` (T-31) | invariant (SHA baselines) |
+| AC-18 | `core/scripts/__tests__/plan-cites-discovery.test.cjs` (T-32) | static (plan traceability) |
 | AC-19 | `core/scripts/__tests__/sync-bf06-abort.test.cjs` (T-17 closes — 5-element msg) | contract (BF-06 msg) |
 | AC-13 sub-effect | `README.md` + `core/README.md` (T-18 docs cleanup) | manual review |
 | OOS cross-link | `core/docs/onboarding.md` + `core/INSTALL.md` (T-19, T-20) | manual review (SONAR Step 8) |
