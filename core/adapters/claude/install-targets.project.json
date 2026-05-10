@@ -1,0 +1,12 @@
+{
+  "schema": "soma-install-targets/v1",
+  "tool": "claude",
+  "entries": [
+    {
+      "block_id": "block.claude.CLAUDE_md.project-bootloader",
+      "source_doc": "docs/project-bootloader.md",
+      "target_path": "CLAUDE.md",
+      "target_anchor_id": "block.claude.CLAUDE_md.project-bootloader"
+    }
+  ]
+}
