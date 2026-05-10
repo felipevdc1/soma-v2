@@ -235,3 +235,129 @@ test('T-07-S4: resolveProjectPath helper returns absolute path', () => {
     `resolveProjectPath('relative/path') must return absolute path. Got: ${relResult}`
   );
 });
+
+// ── T-08 tests: greenfield install pipeline orchestration ─────────────────────
+// @spec [SPEC:AC-01] [CONTRACT:01]
+// @task T-08
+// Article II HARD: RED phase — these 3 tests are written BEFORE orchestration
+// implementation and MUST FAIL until T-08 GREEN phase wires orchestrate() into main().
+
+/**
+ * T-08-S1: AC-01 greenfield install creates .soma/ + manifest.json + CLAUDE.md block.
+ * Verifies the full 3-step pipeline:
+ *   1. init.cjs → .soma/ created
+ *   2. manifest.cjs baseline --apply → manifest.json created
+ *   3. sync.cjs --apply --tool=claude → CLAUDE.md anchored block injected
+ */
+test('T-08-S1: AC-01 greenfield install creates .soma/ + manifest.json + CLAUDE.md block', async (t) => {
+  const freshDir = fs.mkdtempSync(path.join(os.tmpdir(), 'soma-test-fresh-'));
+  try {
+    const r = spawnSync('node', [INSTALL_CJS, freshDir, '--tool=claude'], {
+      encoding: 'utf8',
+      timeout: 30000,
+    });
+
+    // Exit 0: pipeline must succeed
+    assert.equal(r.status, 0,
+      `Greenfield install must exit 0. Got ${r.status}. stderr: ${r.stderr} stdout: ${r.stdout}`);
+
+    // .soma/ directory created (init.cjs step)
+    assert.ok(
+      fs.existsSync(path.join(freshDir, '.soma')),
+      `.soma/ directory must be created by init.cjs step. Not found at ${path.join(freshDir, '.soma')}`
+    );
+
+    // manifest.json created (manifest.cjs baseline --apply step)
+    assert.ok(
+      fs.existsSync(path.join(freshDir, 'manifest.json')),
+      `manifest.json must be created by manifest.cjs baseline --apply step. Not found at ${path.join(freshDir, 'manifest.json')}`
+    );
+
+    // CLAUDE.md created and contains soma anchor (sync.cjs --apply --tool=claude step)
+    assert.ok(
+      fs.existsSync(path.join(freshDir, 'CLAUDE.md')),
+      `CLAUDE.md must be created by sync.cjs --apply step. Not found at ${path.join(freshDir, 'CLAUDE.md')}`
+    );
+
+    const claudeMdContent = fs.readFileSync(path.join(freshDir, 'CLAUDE.md'), 'utf8');
+    assert.ok(
+      claudeMdContent.includes('<!-- soma:start id=block.claude.CLAUDE.md') ||
+      claudeMdContent.includes('<!-- soma-v2:start id='),
+      `CLAUDE.md must contain soma anchor preamble. Got: ${claudeMdContent.slice(0, 300)}`
+    );
+  } finally {
+    try { fs.rmSync(freshDir, { recursive: true, force: true }); } catch (_) {}
+  }
+});
+
+/**
+ * T-08-S2: --dry-run on greenfield → exit 0 + does NOT create .soma/.
+ * Pipeline must preview operations without mutating target when --dry-run passed.
+ */
+test('T-08-S2: --dry-run on greenfield → exit 0 + does NOT create .soma/', async (t) => {
+  const freshDir = fs.mkdtempSync(path.join(os.tmpdir(), 'soma-test-dry-'));
+  try {
+    const r = spawnSync('node', [INSTALL_CJS, freshDir, '--tool=claude', '--dry-run'], {
+      encoding: 'utf8',
+      timeout: 30000,
+    });
+
+    // Exit 0: dry-run must succeed
+    assert.equal(r.status, 0,
+      `Dry-run install must exit 0. Got ${r.status}. stderr: ${r.stderr} stdout: ${r.stdout}`);
+
+    // .soma/ must NOT be created (no mutations applied in dry-run)
+    assert.ok(
+      !fs.existsSync(path.join(freshDir, '.soma')),
+      `.soma/ must NOT be created in dry-run mode. Found at ${path.join(freshDir, '.soma')}`
+    );
+
+    // stdout must indicate dry-run preview
+    const combined = r.stdout + r.stderr;
+    assert.ok(
+      combined.toLowerCase().includes('dry-run') || combined.toLowerCase().includes('would create'),
+      `Dry-run output must mention "dry-run" or "Would create". Got: ${combined.slice(0, 300)}`
+    );
+  } finally {
+    try { fs.rmSync(freshDir, { recursive: true, force: true }); } catch (_) {}
+  }
+});
+
+/**
+ * T-08-S3: failed init.cjs propagates exit 2.
+ * Simulate init.cjs failure by pre-creating .soma/ (init sees "already initialized" → exit 1).
+ * T-08's greenfield pipeline must treat ANY non-zero init exit as failure → exit 2.
+ * (T-12 will add proper recovery for the "already initialized" case later.)
+ *
+ * Note: init.cjs exits 1 for "already initialized" (redirect), not exit 2 (hard error).
+ * For T-08's greenfield scope, any non-zero child exit propagates as exit 2 since
+ * the full recovery logic (T-12) is not yet wired. This tests propagation correctness.
+ */
+test('T-08-S3: pre-existing .soma/ causes init to redirect → install propagates exit 2', async (t) => {
+  const freshDir = fs.mkdtempSync(path.join(os.tmpdir(), 'soma-test-init-fail-'));
+  try {
+    // Pre-create .soma/ to trigger init.cjs "already initialized" (exit 1)
+    fs.mkdirSync(path.join(freshDir, '.soma'), { recursive: true });
+
+    const r = spawnSync('node', [INSTALL_CJS, freshDir, '--tool=claude'], {
+      encoding: 'utf8',
+      timeout: 30000,
+    });
+
+    // T-08 must propagate child non-zero as exit 2 (T-12 owns proper recovery)
+    assert.equal(r.status, 2,
+      `init.cjs failure (exit 1 redirect) must propagate as install exit 2. Got ${r.status}. stderr: ${r.stderr} stdout: ${r.stdout}`);
+
+    // stderr must indicate failure (init, already initialized, or step failure)
+    const combined = r.stdout + r.stderr;
+    assert.ok(
+      combined.toLowerCase().includes('init') ||
+      combined.toLowerCase().includes('fail') ||
+      combined.toLowerCase().includes('already') ||
+      combined.toLowerCase().includes('install'),
+      `stderr/stdout must reference the failure cause. Got: ${combined.slice(0, 300)}`
+    );
+  } finally {
+    try { fs.rmSync(freshDir, { recursive: true, force: true }); } catch (_) {}
+  }
+});
