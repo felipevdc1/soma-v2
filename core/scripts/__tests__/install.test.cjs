@@ -739,6 +739,189 @@ test('T-08-S3: pre-existing .soma/ causes init redirect → install resumes pipe
   }
 });
 
+// ── T-12 tests: partial state recovery (AC-04) ───────────────────────────────
+// @spec [SPEC:AC-04]
+// @task T-12
+// Article II HARD: RED phase — T-12-S1 and T-12-S2 written BEFORE implementation.
+// Must FAIL until T-12 GREEN phase adds partial-state recovery branch in install.cjs.
+//
+// AC-04 contract: Given .soma/ exists but anchored block MISSING in CLAUDE.md,
+// when soma install runs, then:
+//   1. exit code is 0
+//   2. anchored block IS injected (sync step ran)
+//   3. init step IS SKIPPED (verified via stdout/stderr containing "init skipped" marker)
+
+/**
+ * T-12-S1: AC-04 partial state recovery — CLAUDE.md block stripped, .soma/ intact.
+ *
+ * Setup:
+ *   1st run: full greenfield install → establishes baseline (.soma/ + CLAUDE.md with anchor)
+ *   Mutation: strip the <!-- soma-v2:start ... --> ... <!-- soma-v2:end --> block from CLAUDE.md
+ *   2nd run: soma install → must recover (inject block) without re-running init step
+ *
+ * Assertions:
+ *   - exit code 0
+ *   - CLAUDE.md exists AND grep -c '<!-- soma-v2:start' returns exactly 1
+ *   - stdout/stderr contains "init skipped" marker (init was NOT re-run)
+ *   - .soma/ directory still intact (not deleted between runs — that's the contract)
+ */
+test('T-12-S1: AC-04 partial state recovery — block stripped from CLAUDE.md, .soma/ intact → block re-injected + init skipped', async (t) => {
+  const freshDir = fs.mkdtempSync(path.join(os.tmpdir(), 'soma-t12-s1-'));
+  try {
+    // ── 1st run: greenfield install ──────────────────────────────────────────
+    const r1 = spawnSync('node', [INSTALL_CJS, freshDir, '--tool=claude'], {
+      encoding: 'utf8',
+      timeout: 30000,
+    });
+
+    assert.equal(r1.status, 0,
+      `T-12-S1: 1st install must exit 0. Got ${r1.status}. stderr: ${r1.stderr} stdout: ${r1.stdout}`);
+
+    // Verify 1st run created CLAUDE.md with anchor
+    const claudeMdPath = path.join(freshDir, 'CLAUDE.md');
+    assert.ok(
+      fs.existsSync(claudeMdPath),
+      `T-12-S1: CLAUDE.md must exist after 1st install. Not found at ${claudeMdPath}`
+    );
+
+    const afterFirst = fs.readFileSync(claudeMdPath, 'utf8');
+    const countAfterFirst = (afterFirst.match(/<!-- soma-v2:start/g) || []).length;
+    assert.equal(countAfterFirst, 1,
+      `T-12-S1: CLAUDE.md must have exactly 1 anchor after 1st install. Got ${countAfterFirst}`
+    );
+
+    // Verify .soma/ exists (precondition for partial-state scenario)
+    const somaDir = path.join(freshDir, '.soma');
+    assert.ok(
+      fs.existsSync(somaDir),
+      `T-12-S1: .soma/ must exist after 1st install. Not found at ${somaDir}`
+    );
+
+    // ── Mutation: strip the anchored block from CLAUDE.md ────────────────────
+    // Remove the <!-- soma-v2:start ... --> ... <!-- soma-v2:end ... --> block entirely.
+    // This simulates: user manually edited CLAUDE.md and stripped the block.
+    const stripped = afterFirst.replace(
+      /<!-- soma-v2:start[^>]*-->([\s\S]*?)<!-- soma-v2:end[^>]*-->\n?/g,
+      ''
+    ).trim();
+    fs.writeFileSync(claudeMdPath, stripped + '\n', 'utf8');
+
+    // Verify strip worked
+    const afterStrip = fs.readFileSync(claudeMdPath, 'utf8');
+    const countAfterStrip = (afterStrip.match(/<!-- soma-v2:start/g) || []).length;
+    assert.equal(countAfterStrip, 0,
+      `T-12-S1: setup: CLAUDE.md must have 0 anchors after strip. Got ${countAfterStrip}`
+    );
+
+    // .soma/ MUST still exist (do NOT delete it — T-12 contract requires it)
+    assert.ok(
+      fs.existsSync(somaDir),
+      `T-12-S1: .soma/ must still exist after strip mutation. It was unexpectedly removed.`
+    );
+
+    // ── 2nd run: partial state recovery ──────────────────────────────────────
+    const r2 = spawnSync('node', [INSTALL_CJS, freshDir, '--tool=claude'], {
+      encoding: 'utf8',
+      timeout: 30000,
+    });
+
+    // AC-04 assertion 1: exit code 0
+    assert.equal(r2.status, 0,
+      `[RED — T-12] AC-04: 2nd install (partial state recovery) must exit 0. Got ${r2.status}.\n` +
+      `stderr: ${r2.stderr}\nstdout: ${r2.stdout}`
+    );
+
+    // AC-04 assertion 2: anchored block re-injected (exactly 1 anchor)
+    const afterSecond = fs.readFileSync(claudeMdPath, 'utf8');
+    const countAfterSecond = (afterSecond.match(/<!-- soma-v2:start/g) || []).length;
+    assert.equal(countAfterSecond, 1,
+      `[RED — T-12] AC-04: grep -c '<!-- soma-v2:start' CLAUDE.md must return 1 after recovery. Got ${countAfterSecond}.\n` +
+      `Content: ${afterSecond.slice(0, 500)}`
+    );
+
+    // AC-04 assertion 3: init step was SKIPPED (log marker present)
+    const combined2 = r2.stdout + r2.stderr;
+    assert.ok(
+      combined2.toLowerCase().includes('init skipped') || combined2.toLowerCase().includes('init: skip'),
+      `[RED — T-12] AC-04: output must contain "init skipped" or "init: skip" marker when .soma/ exists + block missing.\n` +
+      `stdout: ${r2.stdout}\nstderr: ${r2.stderr}`
+    );
+  } finally {
+    try { fs.rmSync(freshDir, { recursive: true, force: true }); } catch (_) {}
+  }
+});
+
+/**
+ * T-12-S2: AC-04 partial state recovery — CLAUDE.md deleted entirely, .soma/ intact.
+ *
+ * Variant of T-12-S1 where CLAUDE.md is completely deleted (not just stripped).
+ * This simulates: user ran `rm CLAUDE.md` after install.
+ *
+ * Same AC-04 assertions:
+ *   - exit code 0
+ *   - CLAUDE.md re-created with exactly 1 anchor
+ *   - init step skipped (log marker)
+ */
+test('T-12-S2: AC-04 partial state recovery — CLAUDE.md deleted, .soma/ intact → CLAUDE.md recreated + init skipped', async (t) => {
+  const freshDir = fs.mkdtempSync(path.join(os.tmpdir(), 'soma-t12-s2-'));
+  try {
+    // ── 1st run: greenfield install ──────────────────────────────────────────
+    const r1 = spawnSync('node', [INSTALL_CJS, freshDir, '--tool=claude'], {
+      encoding: 'utf8',
+      timeout: 30000,
+    });
+
+    assert.equal(r1.status, 0,
+      `T-12-S2: 1st install must exit 0. Got ${r1.status}. stderr: ${r1.stderr}`);
+
+    const claudeMdPath = path.join(freshDir, 'CLAUDE.md');
+    const somaDir = path.join(freshDir, '.soma');
+
+    assert.ok(fs.existsSync(claudeMdPath), `T-12-S2: CLAUDE.md must exist after 1st install`);
+    assert.ok(fs.existsSync(somaDir), `T-12-S2: .soma/ must exist after 1st install`);
+
+    // ── Mutation: delete CLAUDE.md entirely ──────────────────────────────────
+    fs.rmSync(claudeMdPath, { force: true });
+
+    assert.ok(!fs.existsSync(claudeMdPath), `T-12-S2: setup: CLAUDE.md must not exist after deletion`);
+    // .soma/ MUST still exist (do NOT delete — T-12 contract)
+    assert.ok(fs.existsSync(somaDir), `T-12-S2: .soma/ must still exist after CLAUDE.md deletion`);
+
+    // ── 2nd run: partial state recovery ──────────────────────────────────────
+    const r2 = spawnSync('node', [INSTALL_CJS, freshDir, '--tool=claude'], {
+      encoding: 'utf8',
+      timeout: 30000,
+    });
+
+    // AC-04 assertion 1: exit code 0
+    assert.equal(r2.status, 0,
+      `[RED — T-12] AC-04 (deleted CLAUDE.md): 2nd install must exit 0. Got ${r2.status}.\n` +
+      `stderr: ${r2.stderr}\nstdout: ${r2.stdout}`
+    );
+
+    // AC-04 assertion 2: CLAUDE.md re-created with exactly 1 anchor
+    assert.ok(
+      fs.existsSync(claudeMdPath),
+      `[RED — T-12] AC-04: CLAUDE.md must be re-created after recovery. Not found at ${claudeMdPath}`
+    );
+    const afterRecovery = fs.readFileSync(claudeMdPath, 'utf8');
+    const countAfterRecovery = (afterRecovery.match(/<!-- soma-v2:start/g) || []).length;
+    assert.equal(countAfterRecovery, 1,
+      `[RED — T-12] AC-04: grep -c '<!-- soma-v2:start' CLAUDE.md must return 1 after recovery from deletion. Got ${countAfterRecovery}`
+    );
+
+    // AC-04 assertion 3: init step was SKIPPED
+    const combined2 = r2.stdout + r2.stderr;
+    assert.ok(
+      combined2.toLowerCase().includes('init skipped') || combined2.toLowerCase().includes('init: skip'),
+      `[RED — T-12] AC-04 (deleted CLAUDE.md): output must contain "init skipped" or "init: skip" marker.\n` +
+      `stdout: ${r2.stdout}\nstderr: ${r2.stderr}`
+    );
+  } finally {
+    try { fs.rmSync(freshDir, { recursive: true, force: true }); } catch (_) {}
+  }
+});
+
 // ── T-10 tests: idempotent re-run clean (AC-02) ───────────────────────────────
 // @spec [SPEC:AC-02]
 // @task T-10
