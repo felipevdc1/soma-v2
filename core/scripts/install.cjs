@@ -39,6 +39,22 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const os = require('node:os');
+
+// ── Path helpers ──────────────────────────────────────────────────────────────
+
+/**
+ * Resolve a raw project-path to an absolute path.
+ *
+ * Applies path.resolve() so downstream tasks (T-08..T-17) always receive an
+ * absolute path, regardless of whether the caller passed a relative path.
+ *
+ * @param {string} rawPath  Raw project-path from parseArgs
+ * @returns {string}        Absolute resolved path
+ */
+function resolveProjectPath(rawPath) {
+  return path.resolve(rawPath);
+}
 
 // ── Arg parsing ───────────────────────────────────────────────────────────────
 
@@ -144,9 +160,37 @@ function main(argv) {
     return 1;
   }
 
-  // T-01 STUB: argv parsing complete, no logic yet.
-  // Orchestration implemented in T-07 through T-17.
-  // Return exit 0 to signal valid invocation recognized.
+  // T-07: Resolve project-path to absolute (downstream tasks need absolute path).
+  const projectPathAbs = resolveProjectPath(projectPath);
+
+  // T-07: Validate that project-path exists and is a directory.
+  // CONTRACT-01: "project-path … Must exist."
+  if (!fs.existsSync(projectPathAbs) || !fs.statSync(projectPathAbs).isDirectory()) {
+    process.stderr.write(
+      `soma install: project-path does not exist or is not a directory: "${projectPathAbs}"\n` +
+      `  Ensure the directory exists before running soma install.\n`
+    );
+    return 1;
+  }
+
+  // T-07: --tool=codex|both sanity check — Codex requires ~/.codex/ to exist.
+  // CONTRACT-01: "Codex requires ~/.codex/ to exist; aborts with hint if missing."
+  if (flags.tool === 'codex' || flags.tool === 'both') {
+    const codexDir = path.join(os.homedir(), '.codex');
+    if (!fs.existsSync(codexDir)) {
+      process.stderr.write(
+        `soma install: --tool=${flags.tool} requires Codex CLI to be installed.\n` +
+        `  Missing: ~/.codex/ — Codex CLI config directory not found.\n` +
+        `  Install Codex CLI first, or use --tool=claude to proceed without Codex.\n`
+      );
+      return 2;
+    }
+  }
+
+  // T-01 STUB: argv parsing + path validation complete.
+  // Orchestration pipeline implemented in T-08 through T-17.
+  // Return exit 0 to signal valid invocation with valid project-path.
+  void projectPathAbs; // consumed by T-08+ pipeline stages
   void flags; // used in future tasks
   return 0;
 }
@@ -160,4 +204,4 @@ if (require.main === module) {
 
 // ── Module exports (for testability) ─────────────────────────────────────────
 
-module.exports = { main, parseArgs };
+module.exports = { main, parseArgs, resolveProjectPath };
