@@ -236,6 +236,190 @@ test('T-07-S4: resolveProjectPath helper returns absolute path', () => {
   );
 });
 
+// ── T-09 tests: install-state.json writer + install.lock lifecycle ─────────────
+// @spec [SPEC:AC-16] [CONTRACT:02] [CONTRACT:05]
+// @task T-09
+// Article II HARD: RED phase — these 4 tests are written BEFORE implementation.
+// They MUST FAIL until T-09 GREEN phase implements acquireLock/releaseLock/writeInstallState.
+
+/**
+ * T-09-S1: AC-16 install writes valid install-state.json with required fields.
+ * Runs install on a fresh directory, asserts state file is created with correct schema.
+ */
+test('T-09-S1: AC-16 install writes valid install-state.json with required fields', async (t) => {
+  const freshDir = fs.mkdtempSync(path.join(os.tmpdir(), 'soma-t09-state-'));
+  try {
+    const r = spawnSync('node', [INSTALL_CJS, freshDir, '--tool=claude'], {
+      encoding: 'utf8',
+      timeout: 30000,
+    });
+
+    // Must exit 0 (pipeline success)
+    assert.equal(r.status, 0,
+      `T-09-S1: install must exit 0 for valid greenfield. Got ${r.status}. stderr: ${r.stderr}`);
+
+    const stateFile = path.join(freshDir, '.soma', 'install-state.json');
+    assert.ok(
+      fs.existsSync(stateFile),
+      `T-09-S1: [RED — T-09] install-state.json must be created at ${stateFile}`
+    );
+
+    const raw = fs.readFileSync(stateFile, 'utf8');
+    let parsed;
+    assert.doesNotThrow(() => { parsed = JSON.parse(raw); },
+      `T-09-S1: [RED — T-09] install-state.json must be valid JSON`);
+
+    // Required fields per CONTRACT-02 schema
+    const required = ['status', 'timestamp', 'snapshotId', 'harness', 'installedVersion'];
+    for (const field of required) {
+      assert.ok(field in parsed && parsed[field] !== null && parsed[field] !== undefined,
+        `T-09-S1: [RED — T-09] Required field "${field}" missing or null in install-state.json`);
+    }
+
+    // Status must be a valid enum value
+    const validStatuses = ['complete', 'partial-failed', 'drift-detected'];
+    assert.ok(validStatuses.includes(parsed.status),
+      `T-09-S1: [RED — T-09] status must be one of ${validStatuses.join('|')}. Got: "${parsed.status}"`);
+
+    // harness must be a valid enum value
+    const validHarnesses = ['claude', 'codex', 'both'];
+    assert.ok(validHarnesses.includes(parsed.harness),
+      `T-09-S1: [RED — T-09] harness must be one of ${validHarnesses.join('|')}. Got: "${parsed.harness}"`);
+
+    // timestamp must be ISO-8601 with Z suffix
+    const ISO_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/;
+    assert.ok(typeof parsed.timestamp === 'string' && ISO_RE.test(parsed.timestamp),
+      `T-09-S1: [RED — T-09] timestamp must be ISO-8601 UTC (Z suffix). Got: "${parsed.timestamp}"`);
+
+    // installedVersion must match semver pattern
+    const SEMVER_RE = /^\d+\.\d+\.\d+/;
+    assert.ok(typeof parsed.installedVersion === 'string' && SEMVER_RE.test(parsed.installedVersion),
+      `T-09-S1: [RED — T-09] installedVersion must match semver N.N.N. Got: "${parsed.installedVersion}"`);
+  } finally {
+    try { fs.rmSync(freshDir, { recursive: true, force: true }); } catch (_) {}
+  }
+});
+
+/**
+ * T-09-S2: install.lock acquired during pipeline, released after success.
+ * After install completes (exit 0), the lock file must NOT remain.
+ */
+test('T-09-S2: install.lock acquired during pipeline, released after success (finally block)', async (t) => {
+  const freshDir = fs.mkdtempSync(path.join(os.tmpdir(), 'soma-t09-lock-'));
+  try {
+    const r = spawnSync('node', [INSTALL_CJS, freshDir, '--tool=claude'], {
+      encoding: 'utf8',
+      timeout: 30000,
+    });
+
+    // Exit 0: pipeline success
+    assert.equal(r.status, 0,
+      `T-09-S2: install must exit 0 for greenfield. Got ${r.status}. stderr: ${r.stderr}`);
+
+    const lockFile = path.join(freshDir, '.soma', 'install.lock');
+    assert.ok(
+      !fs.existsSync(lockFile),
+      `T-09-S2: [RED — T-09] install.lock must NOT exist after successful install (must be released in finally). ` +
+      `Found: ${lockFile}`
+    );
+  } finally {
+    try { fs.rmSync(freshDir, { recursive: true, force: true }); } catch (_) {}
+  }
+});
+
+/**
+ * T-09-S3: stale lockfile (>60min) auto-cleans with WARNING + install proceeds normally.
+ * Pre-creates a lock with timestamp 90 minutes ago.
+ */
+test('T-09-S3: stale lockfile (>60min) auto-cleans with WARNING + install proceeds (exit 0)', async (t) => {
+  const freshDir = fs.mkdtempSync(path.join(os.tmpdir(), 'soma-t09-stale-'));
+  try {
+    // Pre-create .soma/install.lock with 90-min-old timestamp
+    const somaDir = path.join(freshDir, '.soma');
+    fs.mkdirSync(somaDir, { recursive: true });
+    const staleLock = {
+      pid: 12345,
+      timestamp: new Date(Date.now() - 90 * 60 * 1000).toISOString(),
+      hostname: os.hostname(),
+    };
+    fs.writeFileSync(
+      path.join(somaDir, 'install.lock'),
+      JSON.stringify(staleLock),
+      { mode: 0o644 }
+    );
+
+    const r = spawnSync('node', [INSTALL_CJS, freshDir, '--tool=claude'], {
+      encoding: 'utf8',
+      timeout: 30000,
+    });
+
+    // Must NOT exit 2 (stale lock should be auto-cleaned, not block)
+    assert.notEqual(r.status, 2,
+      `T-09-S3: [RED — T-09] Stale lock must be auto-cleaned (NOT contention exit 2). Got exit ${r.status}. stderr: ${r.stderr}`);
+
+    // Must exit 0 (install proceeds after stale cleanup)
+    assert.equal(r.status, 0,
+      `T-09-S3: [RED — T-09] Stale lock auto-clean: install must proceed and exit 0. Got ${r.status}. stderr: ${r.stderr}`);
+
+    // Must emit WARNING or stale message to stderr
+    const combined = r.stdout + r.stderr;
+    assert.ok(
+      combined.toLowerCase().includes('stale') || combined.toLowerCase().includes('warn'),
+      `T-09-S3: [RED — T-09] Output must contain "stale" or "warn" message for stale lock auto-clean. Got: ${combined}`
+    );
+
+    // install-state.json should be written normally (install succeeded)
+    const stateFile = path.join(freshDir, '.soma', 'install-state.json');
+    assert.ok(
+      fs.existsSync(stateFile),
+      `T-09-S3: [RED — T-09] install-state.json must be written after stale-lock auto-clean + successful install. Not found at ${stateFile}`
+    );
+  } finally {
+    try { fs.rmSync(freshDir, { recursive: true, force: true }); } catch (_) {}
+  }
+});
+
+/**
+ * T-09-S4: fresh lockfile (<60min) blocks with exit 2.
+ * Pre-creates a lock with timestamp = now (0 seconds old).
+ */
+test('T-09-S4: fresh lockfile (<60min) blocks install with exit 2', async (t) => {
+  const freshDir = fs.mkdtempSync(path.join(os.tmpdir(), 'soma-t09-contend-'));
+  try {
+    // Pre-create .soma/install.lock with current timestamp (fresh, < 60min)
+    const somaDir = path.join(freshDir, '.soma');
+    fs.mkdirSync(somaDir, { recursive: true });
+    const freshLock = {
+      pid: 99999,
+      timestamp: new Date().toISOString(),
+      hostname: os.hostname(),
+    };
+    fs.writeFileSync(
+      path.join(somaDir, 'install.lock'),
+      JSON.stringify(freshLock),
+      { mode: 0o644 }
+    );
+
+    const r = spawnSync('node', [INSTALL_CJS, freshDir, '--tool=claude'], {
+      encoding: 'utf8',
+      timeout: 10000,
+    });
+
+    // Must exit 2 (lockfile contention blocks)
+    assert.equal(r.status, 2,
+      `T-09-S4: [RED — T-09] Fresh lock contention must exit 2. Got ${r.status}. stderr: ${r.stderr}`);
+
+    // stderr must mention PID or "install.lock" or "in progress"
+    const combined = r.stdout + r.stderr;
+    assert.ok(
+      combined.includes('PID') || combined.includes('install.lock') || combined.toLowerCase().includes('in progress'),
+      `T-09-S4: [RED — T-09] stderr must mention PID, install.lock, or "in progress". Got: ${combined}`
+    );
+  } finally {
+    try { fs.rmSync(freshDir, { recursive: true, force: true }); } catch (_) {}
+  }
+});
+
 // ── T-08 tests: greenfield install pipeline orchestration ─────────────────────
 // @spec [SPEC:AC-01] [CONTRACT:01]
 // @task T-08
