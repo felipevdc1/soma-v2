@@ -1013,3 +1013,97 @@ test('T-10-S1: AC-02 idempotent re-run clean — 2nd install run exits 0 + no du
     try { fs.rmSync(freshDir, { recursive: true, force: true }); } catch (_) {}
   }
 });
+
+// ── T-13 tests: mid-pipeline failure rollback (AC-05) ────────────────────────
+// @spec [SPEC:AC-05]
+// @task T-13
+// Article II HARD: RED phase — T-13-S1 written BEFORE implementation.
+// Must FAIL until T-13 GREEN phase adds snapshot-id surface in stderr.
+//
+// AC-05 contract: Given init succeeded but manifest baseline failed,
+// when install detects partial state, then:
+//   1. exit code is 2 (NOT 1 — distinct from generic error)
+//   2. stderr contains a snapshot-id reference (ISO-8601 UTC format)
+//   3. .soma/install-state.json field status is "partial-failed"
+
+/**
+ * T-13-S1: AC-05 mid-pipeline failure rollback (simulated manifest baseline failure).
+ *
+ * Setup:
+ *   - Pre-create .soma/ in a fresh tmpdir so init.cjs exits 1 (redirect / "already initialized")
+ *   - Run install with SOMA_HOME=/nonexistent to force manifest.cjs baseline to fail
+ *     (MANIFEST_MISSING: manifest.json not found at /nonexistent/manifest.json)
+ *
+ * This simulates "init succeeded but manifest baseline failed" (AC-05 precondition).
+ * init exits 1 = redirect = success branch in orchestrate().
+ * manifest.cjs exits 2 = MANIFEST_MISSING = failure branch.
+ *
+ * AC-05 assertions:
+ *   1. exit code is 2 (hard error, distinct from exit 1 usage error)
+ *   2. stderr contains snapshot-id substring matching ISO-8601 UTC pattern
+ *      (/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z/ or literal "snapshot-id: ...")
+ *   3. .soma/install-state.json exists + parses as JSON + status === "partial-failed"
+ *
+ * @spec AC-05
+ * @task T-13
+ */
+test('T-13-S1: AC-05 mid-pipeline failure rollback (EACCES/MANIFEST_MISSING) — exit 2 + stderr snapshot-id + state partial-failed', async (t) => {
+  const freshDir = fs.mkdtempSync(path.join(os.tmpdir(), 'soma-t13-s1-'));
+  try {
+    // ── Setup: pre-create .soma/ to simulate "init already ran" ─────────────
+    // This causes init.cjs to exit 1 (redirect / "already initialized") so
+    // the pipeline continues to manifest baseline (AC-05 precondition: init succeeded).
+    fs.mkdirSync(path.join(freshDir, '.soma'), { recursive: true });
+
+    // ── Run install with SOMA_HOME=/nonexistent to force manifest failure ────
+    // SOMA_HOME env is inherited by all subprocesses (init.cjs, manifest.cjs, sync.cjs).
+    // init.cjs: exits 1 (redirect) when .soma/ already exists, regardless of SOMA_HOME.
+    // manifest.cjs: exits 2 (MANIFEST_MISSING) when SOMA_HOME points to nonexistent path.
+    const r = spawnSync('node', [INSTALL_CJS, freshDir, '--tool=claude'], {
+      encoding: 'utf8',
+      timeout: 30000,
+      env: { ...process.env, SOMA_HOME: '/nonexistent-soma-home-t13-test' },
+    });
+
+    // AC-05 assertion 1: exit code must be 2 (distinct from exit 1 USAGE error)
+    assert.equal(r.status, 2,
+      `[RED — T-13] AC-05: install must exit 2 when manifest baseline fails. Got ${r.status}.\n` +
+      `stderr: ${r.stderr}\nstdout: ${r.stdout}`
+    );
+
+    // AC-05 assertion 2: stderr must contain a snapshot-id reference
+    // Expected format: "snapshot-id: 2026-05-10T18:41:13Z" or similar ISO-8601 UTC string
+    // The snapshot-id is the ISO-8601 timestamp computed at orchestrate() start (the `now` variable).
+    // D1 adds: process.stderr.write(`soma install: partial-failed snapshot-id: ${snapshotId}\n`)
+    const ISO_UTC_SNAPSHOT_RE = /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z/;
+    const stderrHasSnapshotId = (
+      (r.stderr.toLowerCase().includes('snapshot') || r.stderr.includes('snapshotId') || r.stderr.toLowerCase().includes('snapshot-id')) &&
+      ISO_UTC_SNAPSHOT_RE.test(r.stderr)
+    );
+    assert.ok(
+      stderrHasSnapshotId,
+      `[RED — T-13] AC-05: stderr must contain a snapshot-id reference (ISO-8601 UTC timestamp + "snapshot"/"snapshotId" keyword).\n` +
+      `Got stderr: ${r.stderr}`
+    );
+
+    // AC-05 assertion 3: .soma/install-state.json must exist with status="partial-failed"
+    const stateFilePath = path.join(freshDir, '.soma', 'install-state.json');
+    assert.ok(
+      fs.existsSync(stateFilePath),
+      `[RED — T-13] AC-05: .soma/install-state.json must be written on partial failure. Not found at ${stateFilePath}`
+    );
+
+    let stateRaw, stateParsed;
+    assert.doesNotThrow(
+      () => { stateRaw = fs.readFileSync(stateFilePath, 'utf8'); stateParsed = JSON.parse(stateRaw); },
+      `[RED — T-13] AC-05: install-state.json must be valid JSON`
+    );
+
+    assert.equal(stateParsed.status, 'partial-failed',
+      `[RED — T-13] AC-05: install-state.json must have status="partial-failed" on mid-pipeline failure. Got: "${stateParsed.status}"`
+    );
+
+  } finally {
+    try { fs.rmSync(freshDir, { recursive: true, force: true }); } catch (_) {}
+  }
+});
