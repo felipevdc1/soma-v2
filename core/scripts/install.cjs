@@ -570,9 +570,9 @@ function orchestrate(projectPathAbs, flags) {
   if (!initResult.ok) {
     if (initResult.status === 1) {
       // init exit 1 = "already initialized" (REDIRECT). .soma/ already exists.
-      // T-12 owns proper recovery (re-run detection + state-matching).
-      // For T-08, skip init and proceed with manifest + sync (pipeline resume).
-      // This ensures CC-02 tests (which use os.tmpdir() with existing .soma/) keep passing.
+      // T-12: partial state recovery — .soma/ present but anchored block missing.
+      // Log an indicator so tests (and humans) can confirm init was skipped.
+      process.stdout.write(`soma install: init skipped: .soma/ exists, recovering missing block\n`);
     } else {
       // init exit 2 = hard error (template missing, IO failure, etc.)
       const errSummary = `init: ${(initResult.stderr || '').trim().slice(0, 200) || 'no output'}`;
