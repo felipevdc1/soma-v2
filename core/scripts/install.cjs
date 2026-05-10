@@ -858,6 +858,43 @@ function main(argv) {
     return 0;
   }
 
+  // T-10: Idempotent re-run early exit (AC-02).
+  //
+  // If install-state.json exists with status=complete AND the anchored block
+  // is still present in CLAUDE.md, the project is already fully installed.
+  // Emit "no changes" and exit 0 without re-running the pipeline.
+  //
+  // Conditions for early exit:
+  //   1. .soma/install-state.json exists + status === "complete"
+  //   2. <projectPathAbs>/CLAUDE.md exists + contains <!-- soma-v2:start anchor
+  //
+  // If either condition fails (e.g., CLAUDE.md deleted, status partial-failed),
+  // fall through to the full pipeline so the next run repairs the installation.
+  {
+    const stateFilePath = path.join(projectPathAbs, '.soma', 'install-state.json');
+    const claudeMdPath = path.join(projectPathAbs, 'CLAUDE.md');
+    let earlyExit = false;
+    try {
+      if (fs.existsSync(stateFilePath) && fs.existsSync(claudeMdPath)) {
+        const stateRaw = fs.readFileSync(stateFilePath, 'utf8');
+        const state = JSON.parse(stateRaw);
+        if (state && state.status === 'complete') {
+          const claudeMdContent = fs.readFileSync(claudeMdPath, 'utf8');
+          if (claudeMdContent.includes('<!-- soma-v2:start')) {
+            earlyExit = true;
+          }
+        }
+      }
+    } catch (_) {
+      // Any read/parse error → fall through to full pipeline
+      earlyExit = false;
+    }
+    if (earlyExit) {
+      process.stdout.write(`soma install: no changes — project already installed at ${projectPathAbs}\n`);
+      return 0;
+    }
+  }
+
   // T-09: Two-phase lock protocol (CONTRACT-05).
   //
   // Phase A — Pre-init conflict check:
