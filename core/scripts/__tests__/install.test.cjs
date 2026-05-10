@@ -1251,3 +1251,315 @@ test('T-11-S1: AC-03 drift detection abort — user edit inside anchor, no bypas
     try { fs.rmSync(freshDir, { recursive: true, force: true }); } catch (_) {}
   }
 });
+
+// ── T-14 + T-15 + T-16 tests: CLAUDE.md custom handling (AC-07, AC-08, AC-09) ──
+// @spec [SPEC:AC-07] [SPEC:AC-08] [SPEC:AC-09]
+// @task T-14 T-15 T-16
+// Article II HARD: RED phase — these 3 tests are written BEFORE implementation.
+// Must FAIL until T-14/T-15/T-16 GREEN phase adds CLAUDE.md detection + branching.
+//
+// AC-07: --merge-claude-md → preserve original + append anchor (no deletions)
+// AC-08: --replace-claude-md → snapshot original + replace with anchor only
+// AC-09: non-interactive + no flag → exit 2 + stderr names both flags
+
+const HYDRA_FIXTURE = path.join(__dirname, 'fixtures', 'hydra-like-claude.md');
+
+/**
+ * T-14-S1: AC-07 --merge-claude-md preserves free-text + appends anchored block.
+ *
+ * Setup:
+ *   - Fresh tmpdir with CLAUDE.md = hydra-like-claude.md fixture (free-text, no anchors)
+ *
+ * Run:
+ *   soma install <tmpdir> --merge-claude-md
+ *
+ * Assertions:
+ *   1. exit code 0
+ *   2. CLAUDE.md still contains ALL original lines (no deletions)
+ *   3. CLAUDE.md NOW contains <!-- soma-v2:start id=block.claude.CLAUDE_md.project-bootloader
+ *      AFTER the original content (anchored block appended at end)
+ *
+ * @spec AC-07
+ * @task T-14
+ */
+test('T-14-S1: AC-07 --merge-claude-md preserves free-text + appends anchored block (no deletions)', async (t) => {
+  const freshDir = fs.mkdtempSync(path.join(os.tmpdir(), 'soma-t14-s1-'));
+  const claudeMdPath = path.join(freshDir, 'CLAUDE.md');
+  try {
+    // Setup: copy hydra fixture into tmpdir
+    const fixtureContent = fs.readFileSync(HYDRA_FIXTURE, 'utf8');
+    fs.writeFileSync(claudeMdPath, fixtureContent, 'utf8');
+
+    const r = spawnSync('node', [INSTALL_CJS, freshDir, '--tool=claude', '--merge-claude-md'], {
+      encoding: 'utf8',
+      timeout: 30000,
+    });
+
+    // Assertion 1: exit code 0
+    assert.equal(r.status, 0,
+      `[RED — T-14] AC-07: install with --merge-claude-md must exit 0. Got ${r.status}.\n` +
+      `stderr: ${r.stderr}\nstdout: ${r.stdout}`
+    );
+
+    const afterContent = fs.readFileSync(claudeMdPath, 'utf8');
+
+    // Assertion 2: no original lines deleted
+    // All original non-empty lines from fixture must still be present
+    const originalLines = fixtureContent.split('\n').filter(l => l.trim().length > 0);
+    const missingLines = originalLines.filter(l => !afterContent.includes(l));
+    assert.equal(missingLines.length, 0,
+      `[RED — T-14] AC-07: --merge-claude-md must NOT delete any original lines.\n` +
+      `Missing (first 3): ${JSON.stringify(missingLines.slice(0, 3))}\n` +
+      `Content (first 800): ${afterContent.slice(0, 800)}`
+    );
+
+    // Assertion 3: soma-v2 anchored block appended AFTER original content
+    const anchorIdx = afterContent.indexOf('<!-- soma-v2:start');
+    const originalEndIdx = afterContent.indexOf('# Memory'); // last section in fixture
+    assert.ok(
+      anchorIdx > -1,
+      `[RED — T-14] AC-07: CLAUDE.md must contain <!-- soma-v2:start after --merge-claude-md.\n` +
+      `Content (first 800): ${afterContent.slice(0, 800)}`
+    );
+    assert.ok(
+      afterContent.includes('id=block.claude.CLAUDE_md.project-bootloader'),
+      `[RED — T-14] AC-07: anchored block must have id=block.claude.CLAUDE_md.project-bootloader.\n` +
+      `Content (first 800): ${afterContent.slice(0, 800)}`
+    );
+    // Block must appear AFTER the original content (append, not prepend)
+    assert.ok(
+      originalEndIdx > -1 && anchorIdx > originalEndIdx,
+      `[RED — T-14] AC-07: anchored block must appear AFTER original content (anchor at ${anchorIdx}, "# Memory" at ${originalEndIdx}).\n` +
+      `Content (first 800): ${afterContent.slice(0, 800)}`
+    );
+
+  } finally {
+    try { fs.rmSync(freshDir, { recursive: true, force: true }); } catch (_) {}
+  }
+});
+
+/**
+ * T-15-S1: AC-08 --replace-claude-md snapshots original + replaces with anchor only.
+ *
+ * Setup:
+ *   - Fresh tmpdir with CLAUDE.md = hydra-like-claude.md fixture (free-text, no anchors)
+ *   - Record content sha256 before install
+ *
+ * Run:
+ *   soma install <tmpdir> --replace-claude-md
+ *
+ * Assertions:
+ *   1. exit code 0
+ *   2. CLAUDE.md content now has anchored block but NOT original free-text lines
+ *   3. Snapshot file exists under ~/.soma-v2/.snapshots/<ts>/ with content matching original sha
+ *   4. stdout contains "Original preserved at" or ".snapshots" substring
+ *   5. Cleanup: snapshot dir created by this test is removed in teardown
+ *
+ * @spec AC-08
+ * @task T-15
+ */
+test('T-15-S1: AC-08 --replace-claude-md snapshots original + CLAUDE.md = anchor only + snapshot path in stdout', async (t) => {
+  const crypto = require('node:crypto');
+  const freshDir = fs.mkdtempSync(path.join(os.tmpdir(), 'soma-t15-s1-'));
+  const claudeMdPath = path.join(freshDir, 'CLAUDE.md');
+  let snapshotDirCreated = null;
+  try {
+    // Setup: copy hydra fixture into tmpdir, record sha256
+    const fixtureContent = fs.readFileSync(HYDRA_FIXTURE, 'utf8');
+    fs.writeFileSync(claudeMdPath, fixtureContent, 'utf8');
+    const originalSha = crypto.createHash('sha256').update(fixtureContent).digest('hex');
+
+    const r = spawnSync('node', [INSTALL_CJS, freshDir, '--tool=claude', '--replace-claude-md'], {
+      encoding: 'utf8',
+      timeout: 30000,
+    });
+
+    // Assertion 1: exit code 0
+    assert.equal(r.status, 0,
+      `[RED — T-15] AC-08: install with --replace-claude-md must exit 0. Got ${r.status}.\n` +
+      `stderr: ${r.stderr}\nstdout: ${r.stdout}`
+    );
+
+    const afterContent = fs.readFileSync(claudeMdPath, 'utf8');
+
+    // Assertion 2a: CLAUDE.md now has anchored block
+    assert.ok(
+      afterContent.includes('<!-- soma-v2:start'),
+      `[RED — T-15] AC-08: CLAUDE.md must contain <!-- soma-v2:start after --replace-claude-md.\n` +
+      `Content (first 600): ${afterContent.slice(0, 600)}`
+    );
+    assert.ok(
+      afterContent.includes('id=block.claude.CLAUDE_md.project-bootloader'),
+      `[RED — T-15] AC-08: anchored block must have id=block.claude.CLAUDE_md.project-bootloader.\n` +
+      `Content (first 600): ${afterContent.slice(0, 600)}`
+    );
+
+    // Assertion 2b: original free-text content is GONE
+    const fixtureUniqueLines = [
+      '# Hydra Project — Claude Context',
+      '- Squad copywriter-os in ~/squads/',
+      '- Single-tenant by design (Aryse first)',
+    ];
+    for (const line of fixtureUniqueLines) {
+      assert.ok(
+        !afterContent.includes(line),
+        `[RED — T-15] AC-08: original free-text line must NOT remain after --replace-claude-md.\n` +
+        `Found line: "${line}"\n` +
+        `Content (first 600): ${afterContent.slice(0, 600)}`
+      );
+    }
+
+    // Assertion 3: stdout contains snapshot path reference
+    const stdoutHasPreservedMsg = r.stdout.includes('Original preserved at') ||
+      r.stdout.includes('preserved') ||
+      r.stdout.includes('.snapshots');
+    assert.ok(
+      stdoutHasPreservedMsg,
+      `[RED — T-15] AC-08: stdout must contain "Original preserved at" or ".snapshots".\n` +
+      `Got stdout: ${r.stdout}`
+    );
+
+    // Assertion 4: snapshot file exists with matching sha256
+    const snapshotsBase = path.join(os.homedir(), '.soma-v2', '.snapshots');
+
+    // Try to extract snapshot path from stdout
+    const snapshotPathMatch = r.stdout.match(/(?:~\/\.soma-v2|\.soma-v2)[/\\]\.snapshots[/\\][^\s]+/);
+    let snapshotOriginalFile = null;
+
+    if (snapshotPathMatch) {
+      const rawPath = snapshotPathMatch[0].replace(/^~/, os.homedir());
+      const resolved = path.resolve(rawPath);
+      const snapDir = fs.existsSync(resolved) && fs.statSync(resolved).isDirectory()
+        ? resolved
+        : path.dirname(resolved);
+      snapshotDirCreated = snapDir;
+    }
+
+    // Scan for most recently modified snapshot dir containing CLAUDE.md.original or CLAUDE.md
+    const findSnapshotFile = (dir) => {
+      if (!fs.existsSync(dir)) return null;
+      const entries = fs.readdirSync(dir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (entry.isDirectory()) {
+          const found = findSnapshotFile(path.join(dir, entry.name));
+          if (found) return found;
+        }
+        if (entry.name === 'CLAUDE.md.original' || entry.name === 'CLAUDE.md') {
+          return path.join(dir, entry.name);
+        }
+      }
+      return null;
+    };
+
+    if (snapshotDirCreated) {
+      snapshotOriginalFile = findSnapshotFile(snapshotDirCreated);
+    }
+
+    if (!snapshotOriginalFile && fs.existsSync(snapshotsBase)) {
+      // Fallback: scan all snapshot dirs newest first
+      const tsDirs = fs.readdirSync(snapshotsBase)
+        .map(d => path.join(snapshotsBase, d))
+        .filter(d => { try { return fs.statSync(d).isDirectory(); } catch (_) { return false; } })
+        .sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs);
+
+      for (const tsDir of tsDirs) {
+        const f = findSnapshotFile(tsDir);
+        if (f) {
+          snapshotOriginalFile = f;
+          if (!snapshotDirCreated) snapshotDirCreated = tsDir;
+          break;
+        }
+      }
+    }
+
+    assert.ok(
+      snapshotOriginalFile !== null && fs.existsSync(snapshotOriginalFile),
+      `[RED — T-15] AC-08: snapshot file (CLAUDE.md.original or CLAUDE.md) must exist under ~/.soma-v2/.snapshots/.\n` +
+      `stdout: ${r.stdout}\n` +
+      `Searched in: ${snapshotsBase}`
+    );
+
+    const snapshotContent = fs.readFileSync(snapshotOriginalFile, 'utf8');
+    const snapshotSha = crypto.createHash('sha256').update(snapshotContent).digest('hex');
+    assert.equal(snapshotSha, originalSha,
+      `[RED — T-15] AC-08: snapshot content sha256 must match original.\n` +
+      `original sha: ${originalSha}\n` +
+      `snapshot sha: ${snapshotSha}\n` +
+      `snapshot file: ${snapshotOriginalFile}`
+    );
+
+  } finally {
+    try { fs.rmSync(freshDir, { recursive: true, force: true }); } catch (_) {}
+    // Cleanup: remove snapshot dir created by this test (no orphans in ~/.soma-v2/.snapshots/)
+    if (snapshotDirCreated && fs.existsSync(snapshotDirCreated)) {
+      try { fs.rmSync(snapshotDirCreated, { recursive: true, force: true }); } catch (_) {}
+    }
+  }
+});
+
+/**
+ * T-16-S1: AC-09 abort default non-interactive — free-text CLAUDE.md + no flag → exit 2.
+ *
+ * Setup:
+ *   - Fresh tmpdir with CLAUDE.md = hydra-like-claude.md fixture (free-text, no anchors)
+ *
+ * Run:
+ *   soma install <tmpdir> via spawnSync with piped stdio (non-TTY)
+ *   WITHOUT --merge-claude-md or --replace-claude-md
+ *
+ * Assertions:
+ *   1. exit code 2
+ *   2. stderr contains literal "--merge-claude-md"
+ *   3. stderr contains literal "--replace-claude-md"
+ *   4. CLAUDE.md NOT modified (original content intact)
+ *
+ * @spec AC-09
+ * @task T-16
+ */
+test('T-16-S1: AC-09 abort default non-interactive — free-text CLAUDE.md + no flag → exit 2 + stderr names both flags + CLAUDE.md unchanged', async (t) => {
+  const freshDir = fs.mkdtempSync(path.join(os.tmpdir(), 'soma-t16-s1-'));
+  const claudeMdPath = path.join(freshDir, 'CLAUDE.md');
+  try {
+    // Setup: copy hydra fixture into tmpdir
+    const fixtureContent = fs.readFileSync(HYDRA_FIXTURE, 'utf8');
+    fs.writeFileSync(claudeMdPath, fixtureContent, 'utf8');
+
+    // Run install WITHOUT any --merge-claude-md or --replace-claude-md flag
+    // spawnSync with piped stdio → child stdout.isTTY === undefined (non-interactive)
+    const r = spawnSync('node', [INSTALL_CJS, freshDir, '--tool=claude'], {
+      encoding: 'utf8',
+      timeout: 15000,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+
+    // Assertion 1: exit code 2 (AC-09 abort)
+    assert.equal(r.status, 2,
+      `[RED — T-16] AC-09: non-interactive install with free-text CLAUDE.md + no flag must exit 2. Got ${r.status}.\n` +
+      `stderr: ${r.stderr}\nstdout: ${r.stdout}`
+    );
+
+    // Assertion 2: stderr contains literal "--merge-claude-md"
+    assert.ok(
+      r.stderr.includes('--merge-claude-md'),
+      `[RED — T-16] AC-09: stderr must contain literal "--merge-claude-md".\n` +
+      `Got stderr: ${r.stderr}`
+    );
+
+    // Assertion 3: stderr contains literal "--replace-claude-md"
+    assert.ok(
+      r.stderr.includes('--replace-claude-md'),
+      `[RED — T-16] AC-09: stderr must contain literal "--replace-claude-md".\n` +
+      `Got stderr: ${r.stderr}`
+    );
+
+    // Assertion 4: CLAUDE.md NOT modified (original content intact)
+    const afterContent = fs.readFileSync(claudeMdPath, 'utf8');
+    assert.equal(afterContent, fixtureContent,
+      `[RED — T-16] AC-09: CLAUDE.md must NOT be modified on abort.\n` +
+      `Original length: ${fixtureContent.length}, After length: ${afterContent.length}`
+    );
+
+  } finally {
+    try { fs.rmSync(freshDir, { recursive: true, force: true }); } catch (_) {}
+  }
+});
