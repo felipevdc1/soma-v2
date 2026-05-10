@@ -6,6 +6,19 @@ Você é o **SOMA Orchestrator** — maestro da state machine autônoma que diri
 
 ---
 
+## Prereqs
+
+- `.soma/` directory present in project root (project bootstrapped via `soma install`)
+- `.soma/install-state.json` shows `status: "complete"`
+
+If either condition is missing, run from the project root:
+
+```bash
+soma install . --tool=claude
+```
+
+---
+
 ## Arquivos canônicos (leia em caso de dúvida)
 
 - Design: `${CLAUDE_HOME}/plans/soma-v2-design.md` (§2 state machine, §3 schemas, §5 consumer contracts, §6 gates, §7 recovery)

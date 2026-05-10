@@ -2,6 +2,17 @@ Gere um `spec.md` estruturado a partir de uma descrição de feature em linguage
 
 O argumento passado é a descrição da feature. Se nenhum argumento foi passado, pergunte ao usuário o que quer especificar.
 
+## Prereqs
+
+- `.soma/` directory present in project root (project bootstrapped via `soma install`)
+- `.soma/install-state.json` shows `status: "complete"`
+
+If either condition is missing, run from the project root:
+
+```bash
+soma install . --tool=claude
+```
+
 ## Passos
 
 ### 1. Determine o project root

@@ -227,7 +227,7 @@ v2.2 **adds** a new project-scoped block (`block.claude.CLAUDE_md.project-bootlo
 | AC-09 | `core/scripts/__tests__/install.test.cjs` (T-16-S1) | integration (abort default) |
 | AC-10 | manual + transcript inspection (or future hook test) | smoke (Claude skill) |
 | AC-11 | manual Codex session OR stubbed | smoke (Codex skill) — pending NEEDS_CLARIFICATION-1 |
-| AC-12 | `core/scripts/__tests__/slash-prereq-guard.test.js` (new) | integration |
+| AC-12 | `core/scripts/__tests__/slash-prereq-guard.test.cjs` (T-26) + 3 slash command sources + 2 bootloaders (T-21..T-25) | integration + manual review |
 | AC-13 | repo grep CI check | static |
 | AC-14 | `core/scripts/__tests__/sync-bf06-abort.test.cjs` (T-17 closes) | contract (BF-06 abort) |
 | AC-15 | `core/scripts/__tests__/cross-harness-parity.test.js` (new) | contract |
@@ -235,6 +235,8 @@ v2.2 **adds** a new project-scoped block (`block.claude.CLAUDE_md.project-bootlo
 | AC-17 | `core/scripts/__tests__/frozen-libs-invariant.test.js` (existing per v2.1.4) | invariant |
 | AC-18 | `core/scripts/__tests__/discovery-traceability.test.js` (new, optional) | static |
 | AC-19 | `core/scripts/__tests__/sync-bf06-abort.test.cjs` (T-17 closes — 5-element msg) | contract (BF-06 msg) |
+| AC-13 sub-effect | `README.md` + `core/README.md` (T-18 docs cleanup) | manual review |
+| OOS cross-link | `core/docs/onboarding.md` + `core/INSTALL.md` (T-19, T-20) | manual review (SONAR Step 8) |
 
 ---
 
