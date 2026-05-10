@@ -1,6 +1,6 @@
-# SOMA v2.1 Lab MVP
+# SOMA v2.2 — Core
 
-Structural exhibit of the SOMA v2.1 context operating system. See `docs/00-overview.md` for purpose, layout, and index.
+SOMA v2.2 context operating system — executable install pipeline. See `docs/00-overview.md` for purpose, layout, and index.
 
 ## Layout
 
@@ -8,17 +8,22 @@ Structural exhibit of the SOMA v2.1 context operating system. See `docs/00-overv
 ~/.soma-v2/
   manifest.json          — file inventory (sha256, sourceSha256, sourceMtime)
   README.md              — this file
-  .no-execute            — sentinel: lab is structural exhibit, not runtime
   docs/                  — canonical references (constitution, hyd-v2, soma-stsd, 10-step-protocol, 5 stubs)
   templates/             — project/ + module/ + contracts/
   adapters/              — codex/ + claude/ + _global/
-  scripts/               — Phase 2 CLI (currently empty, sentinel .phase-1-empty)
+  scripts/               — install CLI (soma install, soma sync, soma doctor, soma bootstrap)
   benchmarks/            — REPORT.md copies from Codex workspace
 ```
 
 ## Status
 
-Lab MVP (v2.1 Phase 0+1) — structural exhibit, not runtime. See `manifest.json` for full file inventory with sha256 hashes.
+SOMA v2.2 — install pipeline operational. Run `node scripts/install.cjs <project-path> --tool=claude` to instrument a target project. See `manifest.json` for full file inventory with sha256 hashes.
+
+## Install
+
+See [`INSTALL.md`](INSTALL.md) for setup instructions.
+
+Quick start: `node core/scripts/install.cjs <project> --tool=claude`
 
 ## Reference
 

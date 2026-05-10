@@ -159,6 +159,18 @@ Uninstall via `bash uninstall.sh` (snapshot-based, fully reversible).
 
 See [docs/INSTALL.md](./docs/INSTALL.md) for full options and [docs/QUICKSTART.md](./docs/QUICKSTART.md) for a first-feature walkthrough.
 
+## Install SOMA on a Project
+
+Once the SOMA framework is installed, use the project-install command to instrument any target project:
+
+```bash
+node core/scripts/install.cjs <project-path> --tool=claude
+```
+
+This writes `.soma/`, `manifest.json`, `.soma/install-state.json`, and a SOMA bootloader anchored block into `<project>/CLAUDE.md`.
+
+See [`core/INSTALL.md`](core/INSTALL.md) for prerequisites, verification checklist, and troubleshooting.
+
 ---
 
 ## License

@@ -22,7 +22,7 @@ ls ~/.soma-v2/manifest.json   # must exist
 node -e "require('fs').readFileSync(require('os').homedir() + '/.soma-v2/manifest.json')" && echo "OK"
 ```
 
-If missing, install SOMA_HOME via your team's setup script (Phase 5+ — not automated in v1).
+If missing, install SOMA_HOME using the automated install command — see [`../INSTALL.md`](../INSTALL.md) for step-by-step instructions and verification checklist.
 
 To use a custom installation path:
 
