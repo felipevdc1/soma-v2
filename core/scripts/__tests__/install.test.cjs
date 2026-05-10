@@ -1423,12 +1423,14 @@ test('T-15-S1: AC-08 --replace-claude-md snapshots original + CLAUDE.md = anchor
     const snapshotsBase = path.join(os.homedir(), '.soma-v2', '.snapshots');
 
     // Try to extract snapshot path from stdout
-    const snapshotPathMatch = r.stdout.match(/(?:~\/\.soma-v2|\.soma-v2)[/\\]\.snapshots[/\\][^\s]+/);
+    // Match absolute paths (/Users/.../.soma-v2/.snapshots/<ts>/) or relative (.soma-v2/.snapshots/<ts>/)
+    const snapshotPathMatch = r.stdout.match(/(?:\/[^\s]*\.soma-v2[/\\]\.snapshots[/\\][^\s/]+|~[/\\]\.soma-v2[/\\]\.snapshots[/\\][^\s/]+|\.soma-v2[/\\]\.snapshots[/\\][^\s/]+)/);
     let snapshotOriginalFile = null;
 
     if (snapshotPathMatch) {
       const rawPath = snapshotPathMatch[0].replace(/^~/, os.homedir());
-      const resolved = path.resolve(rawPath);
+      // Resolve: if starts with '/', it's already absolute; otherwise resolve from home
+      const resolved = rawPath.startsWith('/') ? rawPath : path.join(os.homedir(), rawPath);
       const snapDir = fs.existsSync(resolved) && fs.statSync(resolved).isDirectory()
         ? resolved
         : path.dirname(resolved);
