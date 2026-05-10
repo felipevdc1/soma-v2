@@ -2,6 +2,12 @@
 
 Source: PLAN.md §4.2 (literal).
 
+## Install
+
+Canonical install command: `soma install <project> --tool=codex`
+
+Codex sessions reference this via the AGENTS.md anchored block `id=block.codex.AGENTS.soma-install`.
+
 ## Responsibilities
 
 1. Detect whether the current project has `.soma/`.

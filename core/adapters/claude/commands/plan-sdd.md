@@ -4,6 +4,19 @@ The argument is a path to `spec.md`. If no argument is passed, auto-detect by se
 
 ---
 
+## Prereqs
+
+- `.soma/` directory present in project root (project bootstrapped via `soma install`)
+- `.soma/install-state.json` shows `status: "complete"`
+
+If either condition is missing, run from the project root:
+
+```bash
+soma install . --tool=claude
+```
+
+---
+
 ## Passos
 
 ### 1. Localizar e validar a spec

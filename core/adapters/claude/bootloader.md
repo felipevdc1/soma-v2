@@ -2,6 +2,12 @@
 
 Source: PLAN.md §4.2 (literal). Initially same as Codex bootloader.md — Phase 5 may diverge them.
 
+## Install
+
+Canonical install command: `soma install <project> --tool=claude`
+
+For interactive use within Claude Code, invoke the skill `/soma:install`.
+
 ## Responsibilities
 
 1. Detect whether the current project has `.soma/`.
