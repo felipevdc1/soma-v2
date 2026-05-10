@@ -1107,3 +1107,147 @@ test('T-13-S1: AC-05 mid-pipeline failure rollback (EACCES/MANIFEST_MISSING) —
     try { fs.rmSync(freshDir, { recursive: true, force: true }); } catch (_) {}
   }
 });
+
+// ── T-11 tests: drift detection abort (AC-03) ────────────────────────────────
+// @spec [SPEC:AC-03]
+// @task T-11
+// Article II HARD: RED phase — T-11-S1 written BEFORE implementation.
+// Must FAIL until T-11 GREEN phase adds drift-specific state + propagation in install.cjs.
+//
+// AC-03 contract: Given anchored block exists in CLAUDE.md but user added text INSIDE
+// the anchored region (sha mismatch), when soma install runs WITHOUT --force-resync or
+// --allow-local-edits, then:
+//   1. exit code is 2 (drift abort)
+//   2. stderr contains literal "soma rollback" OR "force-resync" hint
+//   3. install-state.json has status="drift-detected"
+//   4. User's added text is preserved in CLAUDE.md (no overwrite happened)
+
+/**
+ * T-11-S1: AC-03 drift detection abort — user edit inside anchored region, no bypass flag.
+ *
+ * Setup:
+ *   1st run: full greenfield install → CLAUDE.md has anchored block (clean sha)
+ *   Mutation: insert user text INSIDE the anchored region (between start and end markers)
+ *             This changes the block content sha → BF-06 conflict
+ *   2nd run: soma install WITHOUT --force-resync or --allow-local-edits
+ *
+ * Assertions (AC-03 literal):
+ *   1. exit code is 2 (NOT 0, NOT 1)
+ *   2. stderr contains "soma rollback" OR "force-resync" substring
+ *   3. .soma/install-state.json field status is "drift-detected"
+ *   4. CLAUDE.md still contains the user-added text (no overwrite)
+ *
+ * @spec AC-03 (drift detection abort)
+ * @task T-11
+ */
+test('T-11-S1: AC-03 drift detection abort — user edit inside anchor, no bypass flag → exit 2 + drift-detected state + user text preserved', async (t) => {
+  const freshDir = fs.mkdtempSync(path.join(os.tmpdir(), 'soma-t11-s1-'));
+  const USER_EDIT_MARKER = '# USER ADDED TEXT INSIDE ANCHOR — T-11-S1 drift marker';
+  try {
+    // ── 1st run: greenfield install ──────────────────────────────────────────
+    const r1 = spawnSync('node', [INSTALL_CJS, freshDir, '--tool=claude'], {
+      encoding: 'utf8',
+      timeout: 30000,
+    });
+
+    assert.equal(r1.status, 0,
+      `T-11-S1: 1st install must exit 0. Got ${r1.status}. stderr: ${r1.stderr} stdout: ${r1.stdout}`);
+
+    const claudeMdPath = path.join(freshDir, 'CLAUDE.md');
+    assert.ok(
+      fs.existsSync(claudeMdPath),
+      `T-11-S1: CLAUDE.md must exist after 1st install. Not found at ${claudeMdPath}`
+    );
+
+    const afterFirst = fs.readFileSync(claudeMdPath, 'utf8');
+    const countAfterFirst = (afterFirst.match(/<!-- soma-v2:start/g) || []).length;
+    assert.equal(countAfterFirst, 1,
+      `T-11-S1: CLAUDE.md must have exactly 1 anchor after 1st install. Got ${countAfterFirst}`
+    );
+
+    // ── Mutation: insert user text INSIDE the anchored region ─────────────
+    // Find the start marker, locate the end marker, and insert user text between them.
+    // This changes the block content sha → triggers BF-06 conflict on 2nd run.
+    const startMarkerMatch = afterFirst.match(/<!-- soma-v2:start[^\n]*-->/);
+    const endMarkerMatch = afterFirst.match(/<!-- soma-v2:end[^\n]*-->/);
+    assert.ok(startMarkerMatch, `T-11-S1: setup: CLAUDE.md must have soma-v2:start marker`);
+    assert.ok(endMarkerMatch, `T-11-S1: setup: CLAUDE.md must have soma-v2:end marker`);
+
+    // Insert the user-edit text AFTER the start marker and BEFORE the end marker.
+    // This mutates the block content (sha mismatch) while preserving the markers themselves.
+    const startMarker = startMarkerMatch[0];
+    const endMarker = endMarkerMatch[0];
+    const mutated = afterFirst.replace(
+      startMarker,
+      `${startMarker}\n${USER_EDIT_MARKER}`
+    );
+    fs.writeFileSync(claudeMdPath, mutated, 'utf8');
+
+    // Verify mutation worked
+    const afterMutation = fs.readFileSync(claudeMdPath, 'utf8');
+    assert.ok(
+      afterMutation.includes(USER_EDIT_MARKER),
+      `T-11-S1: setup: mutation must insert user text marker inside anchor. Content: ${afterMutation.slice(0, 600)}`
+    );
+    // Markers must still be present (we only added content inside, not removed markers)
+    assert.ok(
+      afterMutation.includes('<!-- soma-v2:start'),
+      `T-11-S1: setup: soma-v2:start marker must still be present after mutation`
+    );
+    assert.ok(
+      afterMutation.includes('<!-- soma-v2:end'),
+      `T-11-S1: setup: soma-v2:end marker must still be present after mutation`
+    );
+
+    // ── 2nd run: WITHOUT --force-resync or --allow-local-edits ──────────────
+    const r2 = spawnSync('node', [INSTALL_CJS, freshDir, '--tool=claude'], {
+      encoding: 'utf8',
+      timeout: 30000,
+    });
+
+    // AC-03 assertion 1: exit code must be 2 (drift abort, distinct from exit 1 USAGE error)
+    assert.equal(r2.status, 2,
+      `[RED — T-11] AC-03: drift detection must exit 2. Got ${r2.status}.\n` +
+      `stderr: ${r2.stderr}\nstdout: ${r2.stdout}`
+    );
+
+    // AC-03 assertion 2: stderr must contain recovery hint
+    const hasRecoveryHint =
+      r2.stderr.includes('soma rollback') ||
+      r2.stderr.includes('force-resync');
+    assert.ok(
+      hasRecoveryHint,
+      `[RED — T-11] AC-03: stderr must contain "soma rollback" OR "force-resync" substring.\n` +
+      `Got stderr: ${r2.stderr}`
+    );
+
+    // AC-03 assertion 3: install-state.json must have status="drift-detected"
+    const stateFilePath = path.join(freshDir, '.soma', 'install-state.json');
+    assert.ok(
+      fs.existsSync(stateFilePath),
+      `[RED — T-11] AC-03: .soma/install-state.json must be written on drift detection. Not found at ${stateFilePath}`
+    );
+
+    let stateParsed;
+    assert.doesNotThrow(
+      () => { stateParsed = JSON.parse(fs.readFileSync(stateFilePath, 'utf8')); },
+      `[RED — T-11] AC-03: install-state.json must be valid JSON`
+    );
+
+    assert.equal(stateParsed.status, 'drift-detected',
+      `[RED — T-11] AC-03: install-state.json must have status="drift-detected" on drift abort. Got: "${stateParsed.status}"`
+    );
+
+    // AC-03 assertion 4: user edit text preserved in CLAUDE.md (no overwrite happened)
+    const afterSecond = fs.readFileSync(claudeMdPath, 'utf8');
+    assert.ok(
+      afterSecond.includes(USER_EDIT_MARKER),
+      `[RED — T-11] AC-03: user-added text must be preserved in CLAUDE.md (no overwrite on drift abort).\n` +
+      `Expected: "${USER_EDIT_MARKER}"\n` +
+      `Content after 2nd run: ${afterSecond.slice(0, 600)}`
+    );
+
+  } finally {
+    try { fs.rmSync(freshDir, { recursive: true, force: true }); } catch (_) {}
+  }
+});
