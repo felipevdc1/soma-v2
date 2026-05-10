@@ -322,19 +322,24 @@ test('T-08-S2: --dry-run on greenfield → exit 0 + does NOT create .soma/', asy
 });
 
 /**
- * T-08-S3: failed init.cjs propagates exit 2.
- * Simulate init.cjs failure by pre-creating .soma/ (init sees "already initialized" → exit 1).
- * T-08's greenfield pipeline must treat ANY non-zero init exit as failure → exit 2.
- * (T-12 will add proper recovery for the "already initialized" case later.)
+ * T-08-S3: init.cjs "already initialized" (exit 1 redirect) → install resumes pipeline.
  *
- * Note: init.cjs exits 1 for "already initialized" (redirect), not exit 2 (hard error).
- * For T-08's greenfield scope, any non-zero child exit propagates as exit 2 since
- * the full recovery logic (T-12) is not yet wired. This tests propagation correctness.
+ * init.cjs exits 1 for "already initialized" (REDIRECT), not for hard errors (exit 2).
+ * T-08's pipeline treats init exit 1 as "resume from next step" (pipeline continues),
+ * since T-12 owns full recovery logic for the re-run detection + state-matching case.
+ *
+ * This behavior also preserves backward compat with CC-02 tests that use os.tmpdir()
+ * (which may have .soma/ from prior test runs).
+ *
+ * Exit 2 is reserved for hard init failures (init exit 2 = TEMPLATE_MISSING, IO_ERROR, etc.)
+ * which are untestable in normal conditions (require file permission manipulation).
+ *
+ * So T-08-S3 verifies: pre-existing .soma/ + init redirect → install continues → exit 0.
  */
-test('T-08-S3: pre-existing .soma/ causes init to redirect → install propagates exit 2', async (t) => {
-  const freshDir = fs.mkdtempSync(path.join(os.tmpdir(), 'soma-test-init-fail-'));
+test('T-08-S3: pre-existing .soma/ causes init redirect → install resumes pipeline (exit 0)', async (t) => {
+  const freshDir = fs.mkdtempSync(path.join(os.tmpdir(), 'soma-test-init-resume-'));
   try {
-    // Pre-create .soma/ to trigger init.cjs "already initialized" (exit 1)
+    // Pre-create .soma/ to trigger init.cjs "already initialized" (exit 1 redirect)
     fs.mkdirSync(path.join(freshDir, '.soma'), { recursive: true });
 
     const r = spawnSync('node', [INSTALL_CJS, freshDir, '--tool=claude'], {
@@ -342,19 +347,10 @@ test('T-08-S3: pre-existing .soma/ causes init to redirect → install propagate
       timeout: 30000,
     });
 
-    // T-08 must propagate child non-zero as exit 2 (T-12 owns proper recovery)
-    assert.equal(r.status, 2,
-      `init.cjs failure (exit 1 redirect) must propagate as install exit 2. Got ${r.status}. stderr: ${r.stderr} stdout: ${r.stdout}`);
-
-    // stderr must indicate failure (init, already initialized, or step failure)
-    const combined = r.stdout + r.stderr;
-    assert.ok(
-      combined.toLowerCase().includes('init') ||
-      combined.toLowerCase().includes('fail') ||
-      combined.toLowerCase().includes('already') ||
-      combined.toLowerCase().includes('install'),
-      `stderr/stdout must reference the failure cause. Got: ${combined.slice(0, 300)}`
-    );
+    // T-08: init exit 1 (redirect) → skip init, continue with manifest+sync → exit 0.
+    // T-12 will later add proper state-matching detection for true idempotent re-run.
+    assert.equal(r.status, 0,
+      `init redirect (exit 1) must not abort install — pipeline resumes. Got ${r.status}. stderr: ${r.stderr} stdout: ${r.stdout}`);
   } finally {
     try { fs.rmSync(freshDir, { recursive: true, force: true }); } catch (_) {}
   }

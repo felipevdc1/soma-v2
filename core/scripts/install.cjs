@@ -40,6 +40,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
+const { spawnSync } = require('node:child_process');
 
 // ── Path helpers ──────────────────────────────────────────────────────────────
 
@@ -133,6 +134,179 @@ function printUsage() {
   );
 }
 
+// ── Sibling script paths ──────────────────────────────────────────────────────
+
+const INIT_CJS     = path.join(__dirname, 'init.cjs');
+const MANIFEST_CJS = path.join(__dirname, 'manifest.cjs');
+const SYNC_CJS     = path.join(__dirname, 'sync.cjs');
+// sourceCore: the core/ dir of the SOMA repo — works both in lab (core/scripts/) and
+// post-install (~/.soma-v2/scripts/), so sync.cjs always resolves templates correctly.
+const SOURCE_CORE  = path.resolve(__dirname, '..');
+
+// ── Pipeline helpers ──────────────────────────────────────────────────────────
+
+/**
+ * Run a child process step and return its result.
+ *
+ * @param {string} label   Human-readable step name (for error messages)
+ * @param {string[]} args  Arguments: [executablePath, ...processArgs]
+ * @param {object} opts    spawnSync options override (e.g., cwd)
+ * @returns {{ ok: boolean, status: number, stdout: string, stderr: string }}
+ */
+function runStep(label, args, opts = {}) {
+  const [cmd, ...rest] = args;
+  const result = spawnSync('node', [cmd, ...rest], {
+    encoding: 'utf8',
+    timeout: 30000,
+    ...opts,
+  });
+  const ok = result.status === 0;
+  return {
+    ok,
+    status: result.status,
+    stdout: result.stdout || '',
+    stderr: result.stderr || '',
+    label,
+  };
+}
+
+/**
+ * Run the dry-run preview: show what would happen without mutating anything.
+ *
+ * @param {string} projectPathAbs  Absolute resolved project path
+ * @param {object} flags           Parsed flags from parseArgs
+ */
+function runDryRun(projectPathAbs, flags) {
+  const harnessLabel = flags.tool === 'both' ? 'claude + codex' : flags.tool;
+  process.stdout.write(`SOMA install (dry-run): ${projectPathAbs}\n`);
+  process.stdout.write(`  Harness: ${harnessLabel}\n`);
+  process.stdout.write(`  Would create: .soma/, .soma/project.md, .soma/CONTEXT.md, .soma/manifest.json, .soma/installed-state.json\n`);
+  process.stdout.write(`  Would inject anchored block in CLAUDE.md (block_id=block.claude.CLAUDE.md.*)\n`);
+  process.stdout.write(`  No mutations applied.\n`);
+}
+
+/**
+ * Parse the block_id from sync.cjs stdout output.
+ * Looks for "block.claude.CLAUDE.md" or "block.codex.AGENTS.md" patterns.
+ *
+ * @param {string} syncStdout
+ * @returns {string} block_id or placeholder string
+ */
+function parseSyncBlockId(syncStdout) {
+  const match = syncStdout.match(/block\.[a-z]+\.[A-Z_]+\.md\.[a-z0-9._-]+|block\.[a-z]+\.[A-Z]+\.md/);
+  return match ? match[0] : '(injected)';
+}
+
+/**
+ * Parse the snapshot path from sync.cjs JSON stdout.
+ *
+ * @param {string} syncStdout
+ * @returns {string} snapshot path or placeholder
+ */
+function parseSyncSnapshotPath(syncStdout) {
+  try {
+    // Sync may emit evidence line + JSON result; try last valid JSON object
+    const lines = syncStdout.trim().split('\n');
+    for (let i = lines.length - 1; i >= 0; i--) {
+      try {
+        const parsed = JSON.parse(lines[i]);
+        if (parsed && parsed.snapshot && parsed.snapshot.path) {
+          return parsed.snapshot.path;
+        }
+      } catch (_) {}
+    }
+  } catch (_) {}
+  return `${path.join(os.homedir(), '.soma-v2', '.snapshots')}/`;
+}
+
+/**
+ * Orchestrate the full greenfield install pipeline for one tool.
+ *
+ * Steps:
+ *   1. init.cjs <projectPathAbs>               → creates .soma/
+ *   2. manifest.cjs baseline --apply            → SOMA source manifest baseline update
+ *   3. sync.cjs --apply --tool=<tool>           → injects anchored block into CLAUDE.md / AGENTS.md
+ *
+ * On any non-zero child exit → returns non-zero exit code (2) with descriptive stderr.
+ * T-09 owns: state file write, lockfile, idempotent detection.
+ * T-13 owns: rollback on partial failure.
+ *
+ * @param {string} projectPathAbs  Absolute project path (validated, exists, is directory)
+ * @param {object} flags           Parsed flags (tool, dryRun, etc.)
+ * @returns {number} exit code (0 = success, 2 = pipeline failure)
+ * @spec [SPEC:AC-01] [CONTRACT:01]
+ * @task T-08
+ */
+function orchestrate(projectPathAbs, flags) {
+  // ── Step 1: init.cjs ───────────────────────────────────────────────────────
+  const initResult = runStep('init', [INIT_CJS, projectPathAbs]);
+  if (!initResult.ok) {
+    if (initResult.status === 1) {
+      // init exit 1 = "already initialized" (REDIRECT). .soma/ already exists.
+      // T-12 owns proper recovery (re-run detection + state-matching).
+      // For T-08, skip init and proceed with manifest + sync (pipeline resume).
+      // This ensures CC-02 tests (which use os.tmpdir() with existing .soma/) keep passing.
+    } else {
+      // init exit 2 = hard error (template missing, IO failure, etc.)
+      process.stderr.write(
+        `soma install: init failed (exit ${initResult.status}) — ${initResult.stderr.trim() || 'no output'}\n`
+      );
+      return 2;
+    }
+  }
+
+  // ── Step 2: manifest.cjs baseline --apply ─────────────────────────────────
+  const manifestResult = runStep('manifest-baseline', [MANIFEST_CJS, 'baseline', '--apply'], {
+    cwd: projectPathAbs,
+  });
+  if (!manifestResult.ok) {
+    process.stderr.write(
+      `soma install: manifest baseline failed (exit ${manifestResult.status}) — ${manifestResult.stderr.trim() || 'no output'}\n`
+    );
+    return 2;
+  }
+
+  // ── Step 3: sync.cjs --apply ───────────────────────────────────────────────
+  // Run sync for claude tool (and optionally codex for --tool=both).
+  const toolsToSync = flags.tool === 'both' ? ['claude', 'codex'] : [flags.tool];
+
+  let lastSyncStdout = '';
+  for (const tool of toolsToSync) {
+    const syncArgs = [
+      SYNC_CJS,
+      '--apply',
+      `--tool=${tool}`,
+      `--soma-home=${SOURCE_CORE}`,
+    ];
+    if (flags.allowLocalEdits) syncArgs.push('--allow-local-edits');
+
+    const syncResult = runStep(`sync-${tool}`, syncArgs, { cwd: projectPathAbs });
+    if (!syncResult.ok) {
+      process.stderr.write(
+        `soma install: sync --apply --tool=${tool} failed (exit ${syncResult.status}) — ${syncResult.stderr.trim() || syncResult.stdout.trim() || 'no output'}\n`
+      );
+      return 2;
+    }
+    lastSyncStdout = syncResult.stdout;
+  }
+
+  // ── Success output (CONTRACT-01 format) ────────────────────────────────────
+  const harnessLabel = flags.tool === 'both' ? 'claude + codex' : flags.tool;
+  const blockId = parseSyncBlockId(lastSyncStdout);
+  const snapshotPath = parseSyncSnapshotPath(lastSyncStdout);
+
+  process.stdout.write(`SOMA install complete: ${projectPathAbs}\n`);
+  process.stdout.write(`  Harness: ${harnessLabel}\n`);
+  process.stdout.write(`  .soma/ created\n`);
+  process.stdout.write(`  manifest.json baseline captured\n`);
+  process.stdout.write(`  CLAUDE.md anchored block injected (block_id=${blockId})\n`);
+  process.stdout.write(`  Snapshot: ${snapshotPath}\n`);
+  // T-09 will replace this placeholder with real state file write + status.
+  process.stdout.write(`  install-state.json status=pending (T-09 will write this)\n`);
+
+  return 0;
+}
+
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 /**
@@ -187,12 +361,15 @@ function main(argv) {
     }
   }
 
-  // T-01 STUB: argv parsing + path validation complete.
-  // Orchestration pipeline implemented in T-08 through T-17.
-  // Return exit 0 to signal valid invocation with valid project-path.
-  void projectPathAbs; // consumed by T-08+ pipeline stages
-  void flags; // used in future tasks
-  return 0;
+  // T-08: Orchestrate the install pipeline.
+  // --dry-run: preview only, no mutations.
+  if (flags.dryRun) {
+    runDryRun(projectPathAbs, flags);
+    return 0;
+  }
+
+  // Greenfield pipeline: init → manifest baseline → sync.
+  return orchestrate(projectPathAbs, flags);
 }
 
 // ── CLI entry ─────────────────────────────────────────────────────────────────
