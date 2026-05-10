@@ -647,22 +647,45 @@ function orchestrate(projectPathAbs, flags) {
 
     const syncResult = runStep(`sync-${tool}`, syncArgs, { cwd: projectPathAbs });
     if (!syncResult.ok) {
-      const errSummary = `sync-${tool}: ${(syncResult.stderr || syncResult.stdout || '').trim().slice(0, 200) || 'no output'}`;
-      process.stderr.write(
-        `soma install: sync --apply --tool=${tool} failed (exit ${syncResult.status}) — ${errSummary}\n`
-      );
+      // T-11: Drift detection — sync.cjs exit 2 is the canonical BF-06 drift signal
+      // (T-17 fixed sync.cjs to exit 2 specifically for sha mismatch / BF-06 abort,
+      //  as distinct from exit 1 which covers generic sync errors like missing targets).
+      //
+      // Priority: exit-code-first (structural, unambiguous), then text-pattern fallback
+      // (for forward-compat with older sync builds or edge cases).
+      //
+      // IMPORTANT: sync.cjs stderr must NOT be swallowed — propagate it to our stderr
+      // so AC-03 assertions ("soma rollback" / "force-resync") pass through to the caller.
+      // The 5-element BF-06 message from sync.cjs (T-17) contains all required AC-03 hints.
+      const syncStderr = syncResult.stderr || '';
+      const syncStdout = syncResult.stdout || '';
 
-      // T-09: heuristic drift detection — sync exit != 0 with sha mismatch keyword.
-      // T-11 will refine this heuristic; T-09 provides minimal detection.
-      const combinedSyncOut = (syncResult.stdout || '') + (syncResult.stderr || '');
-      const isDriftDetected = (
+      // Propagate sync.cjs stderr verbatim (unswallowed) for AC-03 / AC-19 substring checks.
+      if (syncStderr) {
+        process.stderr.write(syncStderr);
+      }
+
+      const combinedSyncOut = syncStdout + syncStderr;
+      const isDriftByExitCode = (syncResult.status === 2);
+      const isDriftByText = (
         combinedSyncOut.includes('sha256 mismatch') ||
         combinedSyncOut.includes('sha mismatch') ||
         combinedSyncOut.includes('BF-06') ||
         combinedSyncOut.includes('LOCAL_EDITS_DETECTED')
       );
+      const isDriftDetected = isDriftByExitCode || isDriftByText;
 
       const stateStatus = isDriftDetected ? 'drift-detected' : 'partial-failed';
+
+      // Build errSummary from sync output (for lastError field in install-state.json).
+      // Use sync stderr preferentially (has the structured BF-06 message); fall back to stdout.
+      const errSummary = `sync-${tool}: ${(syncStderr || syncStdout).trim().slice(0, 200) || 'no output'}`;
+
+      // Emit install-level context line to stderr (in addition to the propagated sync stderr above).
+      process.stderr.write(
+        `soma install: sync --apply --tool=${tool} failed (exit ${syncResult.status}) — status=${stateStatus}\n`
+      );
+
       try {
         writeInstallState(projectPathAbs, {
           $schema: 'soma-install-state/v1',
@@ -729,17 +752,40 @@ function orchestrate(projectPathAbs, flags) {
       env: { ...process.env, SOMA_TEMPLATE_VARS: JSON.stringify(templateVars) },
     });
     if (!projectSyncResult.ok) {
-      const errSummary = `project-sync-${tool}: ${(projectSyncResult.stderr || projectSyncResult.stdout || '').trim().slice(0, 200) || 'no output'}`;
-      process.stderr.write(
-        `soma install: project sync --apply --tool=${tool} failed (exit ${projectSyncResult.status}) — ${errSummary}\n`
+      // T-11: Drift detection at project-level sync (same logic as Step 3 user-globals sync).
+      // Project-level sync (Step 3b) writes blocks into <project>/CLAUDE.md.
+      // When user edits inside the anchored block (sha mismatch), BF-06 fires here with exit 2.
+      // This is a HARD failure (drift abort), not "non-fatal" — propagate exit 2 + drift state.
+      //
+      // IMPORTANT: propagate sync.cjs stderr verbatim (AC-03 requires "soma rollback"/"force-resync").
+      const projectSyncStderr = projectSyncResult.stderr || '';
+      const projectSyncStdout = projectSyncResult.stdout || '';
+
+      if (projectSyncStderr) {
+        process.stderr.write(projectSyncStderr);
+      }
+
+      const combinedProjectSyncOut = projectSyncStdout + projectSyncStderr;
+      const isProjectDriftByExitCode = (projectSyncResult.status === 2);
+      const isProjectDriftByText = (
+        combinedProjectSyncOut.includes('sha256 mismatch') ||
+        combinedProjectSyncOut.includes('sha mismatch') ||
+        combinedProjectSyncOut.includes('BF-06') ||
+        combinedProjectSyncOut.includes('LOCAL_EDITS_DETECTED')
       );
-      // Non-fatal: project-level sync failure doesn't abort the install.
-      // The user-globals sync (Step 3) already succeeded; report warning and continue.
-      process.stderr.write(`soma install: WARNING project-level CLAUDE.md injection failed — install state will be partial-failed\n`);
+      const isProjectDriftDetected = isProjectDriftByExitCode || isProjectDriftByText;
+
+      const projectStateStatus = isProjectDriftDetected ? 'drift-detected' : 'partial-failed';
+      const errSummary = `project-sync-${tool}: ${(projectSyncStderr || projectSyncStdout).trim().slice(0, 200) || 'no output'}`;
+
+      process.stderr.write(
+        `soma install: project sync --apply --tool=${tool} failed (exit ${projectSyncResult.status}) — status=${projectStateStatus}\n`
+      );
+
       try {
         writeInstallState(projectPathAbs, {
           $schema: 'soma-install-state/v1',
-          status: 'partial-failed',
+          status: projectStateStatus,
           timestamp: now,
           snapshotId: projectSyncSnapshotId,
           harness: flags.tool,
@@ -872,9 +918,12 @@ function main(argv) {
   // Conditions for early exit:
   //   1. .soma/install-state.json exists + status === "complete"
   //   2. <projectPathAbs>/CLAUDE.md exists + contains <!-- soma-v2:start anchor
+  //   3. T-11 drift gate: no soma-v2 block in CLAUDE.md has a sha256 mismatch.
+  //      If any block sha differs from actual content → drift detected → fall through
+  //      to full pipeline (sync.cjs will abort with BF-06 exit 2).
   //
-  // If either condition fails (e.g., CLAUDE.md deleted, status partial-failed),
-  // fall through to the full pipeline so the next run repairs the installation.
+  // If any condition fails, fall through to the full pipeline so the next run
+  // repairs the installation or surfaces the drift error correctly.
   {
     const stateFilePath = path.join(projectPathAbs, '.soma', 'install-state.json');
     const claudeMdPath = path.join(projectPathAbs, 'CLAUDE.md');
@@ -886,7 +935,36 @@ function main(argv) {
         if (state && state.status === 'complete') {
           const claudeMdContent = fs.readFileSync(claudeMdPath, 'utf8');
           if (claudeMdContent.includes('<!-- soma-v2:start')) {
-            earlyExit = true;
+            // T-11 drift gate: check sha256 integrity of all anchored blocks in CLAUDE.md.
+            // If any block's stored sha256 attr differs from its actual content sha →
+            // drift detected → fall through to pipeline (sync BF-06 will abort with exit 2).
+            const { parseAnchorAttrs, computeBlockSha256 } = require('./lib/anchored-blocks.cjs');
+            const lines = claudeMdContent.split('\n');
+            let hasDrift = false;
+            for (let i = 0; i < lines.length; i++) {
+              const attrs = parseAnchorAttrs(lines[i]);
+              if (attrs && attrs.sha256) {
+                // Found a soma-v2 start marker with stored sha256. Collect content until end.
+                const endRe = new RegExp(`<!--\\s*soma-v2:end\\s+id=${attrs.id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*-->`);
+                const contentLines = [];
+                let j = i + 1;
+                while (j < lines.length && !endRe.test(lines[j])) {
+                  contentLines.push(lines[j]);
+                  j++;
+                }
+                // Compute actual content sha256
+                const actualContent = contentLines.join('\n');
+                const actualSha = computeBlockSha256(actualContent);
+                if (actualSha !== attrs.sha256) {
+                  // Sha mismatch → drift detected → do NOT take early exit
+                  hasDrift = true;
+                  break;
+                }
+              }
+            }
+            if (!hasDrift) {
+              earlyExit = true;
+            }
           }
         }
       }
