@@ -567,13 +567,47 @@ function runDryRun(projectPathAbs, flags) {
  * Extended in T-09 from single-match to global-match to capture all
  * blockIds for install-state.json (CONTRACT-02 §blockIds array).
  *
+ * NOTE: sync.cjs plain-text output does NOT include block_id strings, so this
+ * function reliably returns [] for non-JSON sync runs. Use readBlockIdsFromTargetsFile()
+ * to collect block_ids directly from adapter JSON when parsing sync stdout yields nothing.
+ *
  * @param {string} syncStdout
  * @returns {string[]} array of block_ids (may be empty if none found)
  */
 function parseSyncBlockIds(syncStdout) {
-  const pattern = /block\.[a-z]+\.[A-Z_]+\.md\.[a-z0-9._-]+|block\.[a-z]+\.[A-Z]+\.md/g;
+  // Supports both dotted-form (CLAUDE.md.block-id) and underscore-form (CLAUDE_md.block-id)
+  // introduced in T-08bis for project-bootloader blocks.
+  // Pattern breakdown:
+  //   block\.[a-z]+\.   — prefix e.g. "block.claude."
+  //   [A-Z_]+           — file base e.g. "CLAUDE" or "AGENTS"
+  //   (?:\.md|_md)      — separator: dotted ".md" or underscore "_md"
+  //   \.                — literal dot before block-name suffix
+  //   [a-z0-9._-]+      — block-name suffix e.g. "project-bootloader"
+  // Second alternative handles bare form: block.claude.CLAUDE.md or block.claude.CLAUDE_md
+  const pattern = /block\.[a-z]+\.[A-Z_]+(?:\.md|_md)\.[a-z0-9._-]+|block\.[a-z]+\.[A-Z_]+(?:\.md|_md)/g;
   const matches = syncStdout.match(pattern);
   return matches ? [...new Set(matches)] : [];
+}
+
+/**
+ * Read block_ids directly from a soma-install-targets JSON adapter file.
+ * More reliable than parsing sync stdout (which does not emit block_ids in plain-text mode).
+ * Returns [] on any read/parse error (non-fatal — caller falls back to placeholder).
+ *
+ * @param {string} targetsFilePath  absolute path to install-targets*.json
+ * @returns {string[]}  array of block_id strings from entries[]
+ */
+function readBlockIdsFromTargetsFile(targetsFilePath) {
+  try {
+    const raw = fs.readFileSync(targetsFilePath, 'utf8');
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed.entries)) return [];
+    return parsed.entries
+      .map(e => e.block_id)
+      .filter(id => typeof id === 'string' && id.length > 0);
+  } catch (_) {
+    return [];
+  }
 }
 
 /**
@@ -972,12 +1006,27 @@ function orchestrate(projectPathAbs, flags) {
 
   // ── Step 4: Write success state + emit output (CONTRACT-01 format) ─────────
   const harnessLabel = flags.tool === 'both' ? 'claude + codex' : flags.tool;
-  // Parse block IDs from both user-globals sync and project sync combined
-  const combinedSyncStdout = lastSyncStdout + '\n' + lastProjectSyncStdout;
-  const blockId = parseSyncBlockId(combinedSyncStdout);
-  const allBlockIds = parseSyncBlockIds(combinedSyncStdout);
   const snapshotPath = parseSyncSnapshotPath(lastSyncStdout);
   const snapshotId = buildSnapshotId(lastSyncStdout);
+
+  // Collect block_ids from adapter JSON files (canonical source — sync stdout does NOT
+  // emit block_ids in plain-text mode, making parseSyncBlockIds unreliable).
+  // Strategy: read block_ids from each adapter file used in this install run.
+  // Bucket A fix (v2.2.1): replaces stdout-regex approach that missed underscore-form CLAUDE_md.*.
+  const adapterBlockIds = [];
+  for (const tool of toolsToSync) {
+    // User-globals adapter
+    const userAdapterPath = path.join(SOURCE_CORE, 'adapters', tool, 'install-targets.json');
+    adapterBlockIds.push(...readBlockIdsFromTargetsFile(userAdapterPath));
+    // Project adapter (T-08bis project-bootloader)
+    const projectAdapterPath = path.join(SOURCE_CORE, 'adapters', tool, 'install-targets.project.json');
+    adapterBlockIds.push(...readBlockIdsFromTargetsFile(projectAdapterPath));
+  }
+  // Deduplicate and fall back to stdout-regex for any IDs not captured via adapter files
+  const combinedSyncStdout = lastSyncStdout + '\n' + lastProjectSyncStdout;
+  const stdoutBlockIds = parseSyncBlockIds(combinedSyncStdout);
+  const allBlockIds = [...new Set([...adapterBlockIds, ...stdoutBlockIds])];
+  const blockId = allBlockIds.length > 0 ? allBlockIds[0] : '(injected)';
 
   // T-09: Write state file (status=complete).
   // T-08bis: blockIds now includes project-bootloader block.
