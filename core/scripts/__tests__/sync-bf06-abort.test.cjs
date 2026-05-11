@@ -238,7 +238,7 @@ test('T-04-S3: sha mismatch with --allow-local-edits → exits 0 + emits overwri
 //   2. block_id
 //   3. "Expected:" sha256
 //   4. "Actual:" sha256
-//   5. "soma rollback" OR "force-resync" OR "re-extract" recovery hint
+//   5. "soma rollback" OR "--allow-local-edits" OR "re-extract" recovery hint
 
 test('T-04-S4-elem1: BF-06 abort stderr contains target file absolute path [RED until T-17]', () => {
   const originalContent = '# Original content for elem1';
@@ -344,7 +344,7 @@ test('T-04-S4-elem4: BF-06 abort stderr contains "Actual:" sha256 label [RED unt
   );
 });
 
-test('T-04-S4-elem5: BF-06 abort stderr contains recovery hint (soma rollback / force-resync / re-extract) [RED until T-17]', () => {
+test('T-04-S4-elem5: BF-06 abort stderr contains recovery hint (soma rollback / --allow-local-edits / re-extract) [RED until T-17]', () => {
   const originalContent = '# Original content for elem5';
   const originalSha = computeBlockSha256(originalContent);
   const { somaDir } = createFixture('s4-elem5', {
@@ -358,16 +358,17 @@ test('T-04-S4-elem5: BF-06 abort stderr contains recovery hint (soma rollback / 
   assert.ok(r.status !== 0, `T-04-S4-elem5: Expected non-zero exit for BF-06 abort. Got ${r.status}.`);
 
   // AC-19 element 5: recovery hint must name at least one of:
-  //   "soma rollback", "force-resync", "re-extract"
+  //   "soma rollback", "--allow-local-edits", "re-extract"
+  // Note: "force-resync" REMOVED in v2.2.0 — "--allow-local-edits" is the legitimate override flag.
   // [RED until T-17: current format has "resolution:" field with partial guidance but lacks these exact keywords]
   const hasRecoveryHint =
     r.stderr.includes('soma rollback') ||
-    r.stderr.includes('force-resync') ||
+    r.stderr.includes('--allow-local-edits') ||
     r.stderr.includes('re-extract');
 
   assert.ok(
     hasRecoveryHint,
-    `T-04-S4-elem5: Expected recovery hint containing "soma rollback", "force-resync", or "re-extract" in stderr.\n` +
+    `T-04-S4-elem5: Expected recovery hint containing "soma rollback", "--allow-local-edits", or "re-extract" in stderr.\n` +
     `[RED: T-17 must add AC-19 recovery options to BF-06 abort message]\nstderr: ${r.stderr}`
   );
 });

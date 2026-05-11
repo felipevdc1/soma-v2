@@ -64,7 +64,7 @@ v2.2 **adds** a new project-scoped block (`block.claude.CLAUDE_md.project-bootlo
 
 - **AC-02 (idempotent re-run clean):** Given project full-installed (state matches snapshot), when `soma install . --tool=claude` runs again, then exit code is 0 AND `grep -c '<!-- soma-v2:start' CLAUDE.md` returns exactly 1 (no duplicate block) AND output contains literal "no changes" OR equivalent in `--dry-run` mode.
 
-- **AC-03 (drift detection abort):** Given anchored block exists in CLAUDE.md but user added text inside the anchored region (sha mismatch), when `soma install . --tool=claude` runs without `--force-resync` or `--allow-local-edits`, then exit code is 2 AND stderr contains literal substring "soma rollback" OR "force-resync" hint with snapshot-id.
+- **AC-03 (drift detection abort):** Given anchored block exists in CLAUDE.md but user added text inside the anchored region (sha mismatch), when `soma install . --tool=claude` runs without `--allow-local-edits`, then exit code is 2 AND stderr contains literal substring "soma rollback" OR "--allow-local-edits" hint with snapshot-id.
 
 - **AC-04 (partial state recovery):** Given `.soma/` directory exists but anchored block missing in CLAUDE.md, when `soma install` runs, then exit code is 0 AND anchored block is injected AND init step is skipped (verified via timing or log entry).
 
@@ -88,7 +88,7 @@ v2.2 **adds** a new project-scoped block (`block.claude.CLAUDE_md.project-bootlo
 
 - **AC-11 (Codex equivalent activation):** Given Codex CLI session, when user invokes equivalent skill activation per Codex convention (mechanism per AC-NEEDS-CLARIFICATION-1), then Codex invokes same backbone CLI with identical args schema as Claude skill (verified via transcript inspection or test harness).
 
-- **AC-15 (cross-harness args schema parity):** Given args schema defined in `install.cjs`, when Claude skill `core/adapters/claude/commands/soma-install.md` and Codex AGENTS.md entry both expose the install command, then both expose identical flags: `--tool`, `--dry-run`, `--merge-claude-md`, `--replace-claude-md`, `--force-resync`, `--allow-local-edits` (verified via skill metadata frontmatter diff modulo translation).
+- **AC-15 (cross-harness args schema parity, v2.2.0 reduced):** Given args schema defined in `install.cjs`, when Claude skill `core/adapters/claude/commands/soma-install.md` and Codex AGENTS.md entry both expose the install command, then both expose identical flags: `--tool`, `--dry-run`, `--merge-claude-md`, `--replace-claude-md`, `--allow-local-edits` (5 flags; `--force-resync` DEPRECATED in v2.2.0 — to be re-added in v2.3 with proper end-to-end wire-up + TDD).
 
 ### Slash command guard (Layer 3)
 
@@ -102,7 +102,7 @@ v2.2 **adds** a new project-scoped block (`block.claude.CLAUDE_md.project-bootlo
 
 - **AC-14 (BF-06 sync.cjs abort behavior):** Given anchored block sha mismatch in target file, when `soma sync --apply` runs without `--allow-local-edits` flag, then sync aborts with exit code 2 AND stderr contains snapshot-id reference for recovery AND `core/scripts/__tests__/sync-bf06-abort.test.js` covers 3 test cases (sha match → proceed exit 0; sha mismatch no flag → abort exit 2; sha mismatch with `--allow-local-edits` → proceed with warning exit 0). **Closes Spec 011 AC-13.**
 
-- **AC-19 (conflict error msg w/ resolution guidance — paired with BF-06):** Given conflict detected (sha mismatch from BF-06), when error msg displayed, then output contains: target file path AND block_id AND expected sha256 (from manifest) AND actual sha256 (current state) AND manual resolution guidance naming both options ("inspect block + run `soma rollback --snapshot-id <X>` to revert OR re-extract content into source doc + re-sync OR pass `--force-resync` to overwrite"). **Closes Spec 011 AC-14.** Test: `core/scripts/__tests__/sync-bf06-abort.test.js` extended to assert error message contains all 5 elements via grep.
+- **AC-19 (conflict error msg w/ resolution guidance — paired with BF-06):** Given conflict detected (sha mismatch from BF-06), when error msg displayed, then output contains: target file path AND block_id AND expected sha256 (from manifest) AND actual sha256 (current state) AND manual resolution guidance naming both options ("inspect block + run `soma rollback --snapshot-id <X>` to revert OR re-extract content into source doc + re-sync OR pass `--allow-local-edits` for intentional drift override"). **Closes Spec 011 AC-14.** Test: `core/scripts/__tests__/sync-bf06-abort.test.js` extended to assert error message contains all 5 elements via grep.
 
 ### State + invariants
 
@@ -138,7 +138,7 @@ v2.2 **adds** a new project-scoped block (`block.claude.CLAUDE_md.project-bootlo
 - **Symlink global `/usr/local/bin/soma`** — separable, ships independent post-v2.2 if Felipe wants.
 - **Snapshot retention policy / cleanup** — `~/.soma-v2/.snapshots/` accumulation handled in v2.3.
 - **Spec 011 PARTIAL ACs not bundled in v2.2** (NCL-7 RESOLVED): AC-13 (BF-06) ✅ bundled (Layer 6) + AC-14 (conflict error msg) ✅ bundled (paired with BF-06). DEFERRED to v2.3: AC-03 (Claude position+wrapper BF-01/BF-02), AC-05 (manifest schema rich BF-04/BF-05), AC-21 (Article IV evidence post_write_sha256 logging). Capture-Before-Defer: tracked in plan file Out of Scope + Risks R22.
-- **Legacy v2.1.x bootloader migration** (NCL-3 RESOLVED — no migration support; user cleans manually OR uses --force-resync flag).
+- **Legacy v2.1.x bootloader migration** (NCL-3 RESOLVED — no migration support; user cleans manually).
 - **Reescrever todos os 11 slash command prereq stanzas** — só os 3 críticos (`run.md`, `specify.md`, `plan-sdd.md`) em v2.2; outros 8 ficam pra v2.3 polish pass.
 - **Migrar `soma-v2-build-68-test/install.sh` pra canonical** — system-level install já é solved problem; v2.2 foco em project-level install.
 - **Concurrent install lockfile mechanism implementation** — flagged Open Question; design decided in plan-sdd if NEEDS_CLARIFICATION-4 resolved.
@@ -157,7 +157,7 @@ v2.2 **adds** a new project-scoped block (`block.claude.CLAUDE_md.project-bootlo
   Felipe distinção crítica: target project's runtime (Bun for hydra, Python for X, etc.) é INDEPENDENTE de install command runtime. Install requires **Node v22+ on host machine** (hard requirement; documented in INSTALL.md prereqs). Every Claude Code dev already has Node — non-issue practically. SOMA does NOT impose Bun/Node choice on the project.
 
 - ✅ **[NCL-3: Legacy migration v2.1.x] RESOLVED via Felipe — OUT OF SCOPE**
-  v2.2 install does NOT support v2.1.x bootloader format upgrade. If pre-existing v2.1.x bootloader detected → abort with hint "manual cleanup required OR use --force-resync to overwrite". No `--migrate` flag. Out-of-Scope item updated to reflect this.
+  v2.2 install does NOT support v2.1.x bootloader format upgrade. If pre-existing v2.1.x bootloader detected → abort with hint "manual cleanup required OR use --allow-local-edits to overwrite intentionally". No `--migrate` flag. Out-of-Scope item updated to reflect this.
 
 - ✅ **[NCL-4: Concurrent install lockfile] RESOLVED via Felipe — confirmed approach**
   File-based lock at `<project>/.soma/install.lock` (~10 LOC implementation). On install start: check lock exists → if yes, abort exit 2 + name PID/timestamp from lock content. On install end (success or failure): lock removed. Stale lock detection: if lock older than 60min, treat as orphan + auto-clean with warning.

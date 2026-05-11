@@ -8,7 +8,7 @@
  * Exercises AC-01 through AC-09 in a single lifecycle sequence:
  *   T-33-S1: Greenfield install → block injected, exit 0             (AC-01)
  *   T-33-S2: Idempotent re-run → exit 0, no duplicate, "no changes"  (AC-02)
- *   T-33-S3: Drift detection → exit 2, force-resync hint, state=drift-detected (AC-03)
+ *   T-33-S3: Drift detection → exit 2, soma rollback/allow-local-edits hint, state=drift-detected (AC-03)
  *   T-33-S4: --merge-claude-md with hydra fixture → exit 0, original preserved + appended (AC-07)
  *   T-33-S5: Full lifecycle .soma/ artifacts intact (AC-16 composite)
  *
@@ -132,7 +132,7 @@ test('T-33-S2: AC-02 idempotent re-run → exit 0, no duplicate block, "no chang
 
 // ── T-33-S3: Drift detection (AC-03) ──────────────────────────────────────────
 
-test('T-33-S3: AC-03 drift detection → exit 2, force-resync/soma rollback hint, state=drift-detected', () => {
+test('T-33-S3: AC-03 drift detection → exit 2, soma rollback/allow-local-edits hint, state=drift-detected', () => {
   const d = freshTmpDir('soma-test-drift');
   try {
     // Install first so state=complete and block has sha256
@@ -168,11 +168,11 @@ test('T-33-S3: AC-03 drift detection → exit 2, force-resync/soma rollback hint
       `Drift-detected install must exit 2. Got ${second.status}.\nstdout: ${second.stdout}\nstderr: ${second.stderr}`
     );
 
-    // stderr must contain force-resync or soma rollback hint (AC-03)
+    // stderr must contain soma rollback or --allow-local-edits hint (AC-03)
     const combined = second.stdout + second.stderr;
     assert.ok(
-      combined.includes('force-resync') || combined.includes('soma rollback'),
-      `AC-03: output must contain "force-resync" or "soma rollback" hint. Got:\nstdout: ${second.stdout}\nstderr: ${second.stderr}`
+      combined.includes('soma rollback') || combined.includes('--allow-local-edits'),
+      `AC-03: output must contain "soma rollback" or "--allow-local-edits" hint. Got:\nstdout: ${second.stdout}\nstderr: ${second.stderr}`
     );
 
     // install-state.json must have status=drift-detected

@@ -805,7 +805,7 @@ function runApplyMode(flags, somaHome, allFindings, totalEntries, adapters, useJ
           process.stderr.write(`        Inspect block content, decide what to keep, re-run soma sync --apply\n`);
           process.stderr.write(`\n`);
           process.stderr.write(`    (3) Force overwrite (loses in-block edits):\n`);
-          process.stderr.write(`        soma sync --apply --force-resync OR --allow-local-edits\n`);
+          process.stderr.write(`        soma sync --apply --allow-local-edits\n`);
           process.exit(2);
         }
         return;

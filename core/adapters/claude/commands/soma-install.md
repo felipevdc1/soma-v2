@@ -18,8 +18,7 @@ args_schema:
   dry_run: "boolean — default: false — preview without writing"
   merge_claude_md: "boolean — default: null — preserve+append on free-text CLAUDE.md"
   replace_claude_md: "boolean — default: false — snapshot+replace on free-text CLAUDE.md"
-  force_resync: "boolean — default: false — bypass drift detection"
-  allow_local_edits: "boolean — default: false — pass-through to sync escape hatch"
+  allow_local_edits: "boolean — default: false — pass-through to sync escape hatch (intentional drift override)"
 ---
 
 # /soma:install — Install SOMA in a project
@@ -54,7 +53,6 @@ node ~/.soma-v2/scripts/soma.cjs install <project_path> \
   [--dry-run] \
   [--merge-claude-md] \
   [--replace-claude-md] \
-  [--force-resync] \
   [--allow-local-edits]
 ```
 
@@ -67,8 +65,7 @@ node ~/.soma-v2/scripts/soma.cjs install <project_path> \
 | `dry_run` | `--dry-run` | Preview without writing. Shows diff of what would change. |
 | `merge_claude_md` | `--merge-claude-md` | Preserve existing free-text content, append anchored blocks. |
 | `replace_claude_md` | `--replace-claude-md` | Snapshot existing CLAUDE.md, then replace with SOMA-managed version. |
-| `force_resync` | `--force-resync` | Bypass drift detection, re-sync all anchored blocks. |
-| `allow_local_edits` | `--allow-local-edits` | Pass-through escape hatch for projects with local edits outside anchored zones. |
+| `allow_local_edits` | `--allow-local-edits` | Pass-through escape hatch for intentional drift override. |
 
 ### Examples
 
@@ -82,8 +79,8 @@ node ~/.soma-v2/scripts/soma.cjs install /path/to/my-project --tool=both --dry-r
 # Install replacing existing CLAUDE.md (snapshot created automatically)
 node ~/.soma-v2/scripts/soma.cjs install /path/to/my-project --replace-claude-md
 
-# Force re-sync on already-installed project
-node ~/.soma-v2/scripts/soma.cjs install /path/to/my-project --force-resync
+# Install with intentional drift override (user accepts local edits will be preserved)
+node ~/.soma-v2/scripts/soma.cjs install /path/to/my-project --allow-local-edits
 ```
 
 ## Post-invocation
