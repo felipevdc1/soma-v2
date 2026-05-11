@@ -38,8 +38,7 @@ ls .soma/install-state.json && grep -c '<!-- soma-v2:start' CLAUDE.md
 | `--dry-run` | Show what would be installed without modifying anything |
 | `--merge-claude-md` | Append SOMA block after existing CLAUDE.md content (preserves your lines) |
 | `--replace-claude-md` | Snapshot original CLAUDE.md then replace with SOMA block only |
-| `--force-resync` | Overwrite existing anchored block even if drift detected |
-| `--allow-local-edits` | Proceed with sync even if local edits detected in anchored region |
+| `--allow-local-edits` | Proceed with sync even if local edits detected in anchored region (intentional override) |
 
 Install is idempotent — re-running on an already-installed project is a no-op (exits 0, logs "no changes").
 
@@ -81,19 +80,16 @@ After install, confirm SOMA is properly wired:
 
 ### Error: drift detected (exit 2, "soma rollback" in stderr)
 
-**Symptoms:** Install aborts with exit code 2. Stderr mentions `force-resync` and includes a snapshot ID.
+**Symptoms:** Install aborts with exit code 2. Stderr includes a snapshot ID and recovery options.
 
 **Cause:** The anchored block in `CLAUDE.md` has been edited locally since last install — sha mismatch detected (BF-06 protection).
 
 **Remediation:**
 ```bash
-# Option A — Overwrite block, discarding your edits
-node ~/.soma-v2/scripts/install.cjs . --tool=claude --force-resync
-
-# Option B — Keep your edits, mark as approved local state
+# Option A — Keep your edits, mark as approved local state
 node ~/.soma-v2/scripts/install.cjs . --tool=claude --allow-local-edits
 
-# Option C — Roll back to snapshot then re-install
+# Option B — Roll back to snapshot then re-install
 node ~/.soma-v2/scripts/soma.cjs rollback --snapshot-id <id-from-stderr>
 node ~/.soma-v2/scripts/install.cjs . --tool=claude
 ```

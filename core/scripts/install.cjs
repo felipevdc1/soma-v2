@@ -19,8 +19,7 @@
  *   --dry-run                   Preview only, no mutations
  *   --merge-claude-md           Preserve free-text CLAUDE.md + append anchor
  *   --replace-claude-md         Snapshot + replace CLAUDE.md with anchor only
- *   --force-resync              Bypass sha-mismatch abort
- *   --allow-local-edits         Pass-through escape hatch for sync drift
+ *   --allow-local-edits         Pass-through escape hatch for sync drift (intentional override)
  *
  * Exit codes:
  *   0 — success (or dry-run preview complete)
@@ -444,7 +443,7 @@ function writeInstallState(projectPathAbs, state) {
  * Handles:
  *   - Positional: first non-flag arg = project-path
  *   - Boolean flags: --dry-run, --merge-claude-md, --replace-claude-md,
- *                    --force-resync, --allow-local-edits
+ *                    --allow-local-edits
  *   - Value flags:  --tool=<value>
  *   - Quoted paths with spaces or leading hyphens (Node already handles this
  *     since argv is pre-split by the shell; no special treatment needed here)
@@ -458,7 +457,6 @@ function parseArgs(argv) {
     dryRun: false,
     mergeClaudioMd: false,
     replaceClaudioMd: false,
-    forceResync: false,
     allowLocalEdits: false,
   };
   const errors = [];
@@ -471,8 +469,6 @@ function parseArgs(argv) {
       flags.mergeClaudioMd = true;
     } else if (arg === '--replace-claude-md') {
       flags.replaceClaudioMd = true;
-    } else if (arg === '--force-resync') {
-      flags.forceResync = true;
     } else if (arg === '--allow-local-edits') {
       flags.allowLocalEdits = true;
     } else if (arg.startsWith('--tool=')) {
@@ -509,7 +505,7 @@ function printUsage() {
   process.stderr.write(
     'usage: soma install <project-path> [--tool=<claude|codex|both>] ' +
     '[--dry-run] [--merge-claude-md | --replace-claude-md] ' +
-    '[--force-resync] [--allow-local-edits]\n'
+    '[--allow-local-edits]\n'
   );
 }
 
@@ -821,12 +817,12 @@ function orchestrate(projectPathAbs, flags) {
       // (for forward-compat with older sync builds or edge cases).
       //
       // IMPORTANT: sync.cjs stderr must NOT be swallowed — propagate it to our stderr
-      // so AC-03 assertions ("soma rollback" / "force-resync") pass through to the caller.
+      // so AC-03 assertions ("soma rollback" / recovery hints) pass through to the caller.
       // The 5-element BF-06 message from sync.cjs (T-17) contains all required AC-03 hints.
       const syncStderr = syncResult.stderr || '';
       const syncStdout = syncResult.stdout || '';
 
-      // Propagate sync.cjs stderr verbatim (unswallowed) for AC-03 / AC-19 substring checks.
+      // Propagate sync.cjs stderr verbatim (unswallowed) for AC-03 / AC-19 recovery hint checks.
       if (syncStderr) {
         process.stderr.write(syncStderr);
       }
@@ -923,7 +919,7 @@ function orchestrate(projectPathAbs, flags) {
       // When user edits inside the anchored block (sha mismatch), BF-06 fires here with exit 2.
       // This is a HARD failure (drift abort), not "non-fatal" — propagate exit 2 + drift state.
       //
-      // IMPORTANT: propagate sync.cjs stderr verbatim (AC-03 requires "soma rollback"/"force-resync").
+      // IMPORTANT: propagate sync.cjs stderr verbatim (AC-03 requires "soma rollback" recovery hint).
       const projectSyncStderr = projectSyncResult.stderr || '';
       const projectSyncStdout = projectSyncResult.stdout || '';
 

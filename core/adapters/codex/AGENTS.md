@@ -127,8 +127,7 @@ node ~/.soma-v2/scripts/soma.cjs install <project-path> [flags]
 | `--dry-run` | boolean | false | Preview without writing |
 | `--merge-claude-md` | boolean | null | Preserve+append on free-text CLAUDE.md |
 | `--replace-claude-md` | boolean | false | Snapshot+replace on free-text CLAUDE.md |
-| `--force-resync` | boolean | false | Bypass drift detection |
-| `--allow-local-edits` | boolean | false | Pass-through to sync escape hatch |
+| `--allow-local-edits` | boolean | false | Pass-through to sync escape hatch (intentional drift override) |
 
 ## Post-invocation
 

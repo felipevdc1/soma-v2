@@ -82,7 +82,6 @@ test('T-01-S2b: install with path + all flags exits 0 (stub)', () => {
     os.tmpdir(),
     '--tool=claude',
     '--dry-run',
-    '--force-resync',
     '--allow-local-edits',
   ]);
   assert.equal(r.status, 0,
@@ -1115,10 +1114,10 @@ test('T-13-S1: AC-05 mid-pipeline failure rollback (EACCES/MANIFEST_MISSING) —
 // Must FAIL until T-11 GREEN phase adds drift-specific state + propagation in install.cjs.
 //
 // AC-03 contract: Given anchored block exists in CLAUDE.md but user added text INSIDE
-// the anchored region (sha mismatch), when soma install runs WITHOUT --force-resync or
-// --allow-local-edits, then:
+// the anchored region (sha mismatch), when soma install runs WITHOUT --allow-local-edits,
+// then:
 //   1. exit code is 2 (drift abort)
-//   2. stderr contains literal "soma rollback" OR "force-resync" hint
+//   2. stderr contains literal "soma rollback" OR "--allow-local-edits" hint
 //   3. install-state.json has status="drift-detected"
 //   4. User's added text is preserved in CLAUDE.md (no overwrite happened)
 
@@ -1129,11 +1128,11 @@ test('T-13-S1: AC-05 mid-pipeline failure rollback (EACCES/MANIFEST_MISSING) —
  *   1st run: full greenfield install → CLAUDE.md has anchored block (clean sha)
  *   Mutation: insert user text INSIDE the anchored region (between start and end markers)
  *             This changes the block content sha → BF-06 conflict
- *   2nd run: soma install WITHOUT --force-resync or --allow-local-edits
+ *   2nd run: soma install WITHOUT --allow-local-edits (no bypass flag)
  *
  * Assertions (AC-03 literal):
  *   1. exit code is 2 (NOT 0, NOT 1)
- *   2. stderr contains "soma rollback" OR "force-resync" substring
+ *   2. stderr contains "soma rollback" OR "--allow-local-edits" substring
  *   3. .soma/install-state.json field status is "drift-detected"
  *   4. CLAUDE.md still contains the user-added text (no overwrite)
  *
@@ -1199,7 +1198,7 @@ test('T-11-S1: AC-03 drift detection abort — user edit inside anchor, no bypas
       `T-11-S1: setup: soma-v2:end marker must still be present after mutation`
     );
 
-    // ── 2nd run: WITHOUT --force-resync or --allow-local-edits ──────────────
+    // ── 2nd run: WITHOUT --allow-local-edits (no bypass flag) ──────────────
     const r2 = spawnSync('node', [INSTALL_CJS, freshDir, '--tool=claude'], {
       encoding: 'utf8',
       timeout: 30000,
@@ -1212,12 +1211,13 @@ test('T-11-S1: AC-03 drift detection abort — user edit inside anchor, no bypas
     );
 
     // AC-03 assertion 2: stderr must contain recovery hint
+    // Note: "force-resync" removed in v2.2.0 — "--allow-local-edits" is the intentional override flag.
     const hasRecoveryHint =
       r2.stderr.includes('soma rollback') ||
-      r2.stderr.includes('force-resync');
+      r2.stderr.includes('--allow-local-edits');
     assert.ok(
       hasRecoveryHint,
-      `[RED — T-11] AC-03: stderr must contain "soma rollback" OR "force-resync" substring.\n` +
+      `[RED — T-11] AC-03: stderr must contain "soma rollback" OR "--allow-local-edits" substring.\n` +
       `Got stderr: ${r2.stderr}`
     );
 

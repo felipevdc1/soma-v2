@@ -9,7 +9,7 @@
  * Contract covered: [CONTRACT:01] core/specs/015-soma-install/contracts/install-cli.md
  *
  * Test map:
- *   CC-01: argv parser exposes 7 flags (positional + 6 named)        → PASS (T-01 skeleton)
+ *   CC-01: argv parser exposes 6 fields (positional + 5 named flags)  → PASS (T-01 skeleton)
  *   CC-02: --tool enum validates claude|codex|both                    → PASS (T-01 skeleton)
  *   CC-03: missing project-path → exit 1 + usage hint                → PASS (T-01 skeleton)
  *   CC-04: --merge-claude-md + --replace-claude-md mutual exclusion  → PASS (T-01 skeleton)
@@ -55,7 +55,7 @@ function runInstall(args = [], opts = {}) {
 // Contract: project-path (positional) + 6 named flags.
 // Article II note: This PASSES on T-01 skeleton (parseArgs is fully implemented).
 
-test('CC-01: parseArgs returns all 7 contract fields with correct defaults', () => {
+test('CC-01: parseArgs returns all 6 contract fields with correct defaults (v2.2.0: 5 flags + positional)', () => {
   const result = installModule.parseArgs([os.tmpdir()]);
 
   // 1. positional: project-path captured
@@ -80,22 +80,17 @@ test('CC-01: parseArgs returns all 7 contract fields with correct defaults', () 
   assert.ok('replaceClaudioMd' in result.flags, 'flags must include replaceClaudioMd key (--replace-claude-md)');
   assert.equal(result.flags.replaceClaudioMd, false, '--replace-claude-md default must be false');
 
-  // 6. --force-resync present with default false
-  assert.ok('forceResync' in result.flags, 'flags must include "forceResync" key');
-  assert.equal(result.flags.forceResync, false, '--force-resync default must be false');
-
-  // 7. --allow-local-edits present with default false
+  // 6. --allow-local-edits present with default false (--force-resync REMOVED in v2.2.0)
   assert.ok('allowLocalEdits' in result.flags, 'flags must include "allowLocalEdits" key');
   assert.equal(result.flags.allowLocalEdits, false, '--allow-local-edits default must be false');
 });
 
-test('CC-01b: parseArgs parses all 6 flags simultaneously (full set)', () => {
+test('CC-01b: parseArgs parses all 5 flags simultaneously (full set v2.2.0)', () => {
   const result = installModule.parseArgs([
     os.tmpdir(),
     '--tool=both',
     '--dry-run',
     '--merge-claude-md',
-    '--force-resync',
     '--allow-local-edits',
   ]);
 
@@ -103,7 +98,6 @@ test('CC-01b: parseArgs parses all 6 flags simultaneously (full set)', () => {
   assert.equal(result.flags.tool, 'both', '--tool=both parsed');
   assert.equal(result.flags.dryRun, true, '--dry-run parsed as true');
   assert.equal(result.flags.mergeClaudioMd, true, '--merge-claude-md parsed as true');
-  assert.equal(result.flags.forceResync, true, '--force-resync parsed as true');
   assert.equal(result.flags.allowLocalEdits, true, '--allow-local-edits parsed as true');
   // No mutual exclusion error (--replace-claude-md not present)
   assert.equal(result.errors.length, 0,
@@ -304,11 +298,11 @@ test('CC-06: pre-existing .soma/install.lock → exit 2 with contention message'
 });
 
 // ── CC-07: drift abort → exit 2 ──────────────────────────────────────────────
-// Contract: anchored block exists but sha mismatch + no --force-resync flag
-// → exit 2 with "BF-06 ABORT: anchored block sha mismatch." message.
+// Contract: anchored block exists but sha mismatch → exit 2 with
+// "BF-06 ABORT: anchored block sha mismatch." message.
 // RED phase — FAILS until T-11 + T-17 implement drift detection.
 
-test('CC-07: existing CLAUDE.md with modified anchored block + no --force-resync → exit 2', () => {
+test('CC-07: existing CLAUDE.md with modified anchored block → exit 2', () => {
   const driftDir = fs.mkdtempSync(path.join(os.tmpdir(), 'soma-cc07-'));
   try {
     // Simulate post-install state: CLAUDE.md with a tampered anchored block
@@ -325,7 +319,7 @@ test('CC-07: existing CLAUDE.md with modified anchored block + no --force-resync
     const somaSubDir = path.join(driftDir, '.soma');
     fs.mkdirSync(somaSubDir, { recursive: true });
 
-    const r = runInstall([driftDir, '--tool=claude']); // no --force-resync
+    const r = runInstall([driftDir, '--tool=claude']);
 
     // RED-phase assertion: exit 2 required for drift
     assert.equal(r.status, 2,
@@ -338,34 +332,6 @@ test('CC-07: existing CLAUDE.md with modified anchored block + no --force-resync
     assert.ok(
       combined.includes('BF-06') || combined.includes('sha mismatch') || combined.includes('ABORT'),
       `[RED — depends T-11+T-17] stderr must contain BF-06 ABORT message. Got: ${combined}`
-    );
-  } finally {
-    try { fs.rmSync(driftDir, { recursive: true, force: true }); } catch (_) {}
-  }
-});
-
-test('CC-07b: drift + --force-resync → exit 0 (bypass)', () => {
-  // When --force-resync is passed, drift should be overwritten (exit 0)
-  const driftDir = fs.mkdtempSync(path.join(os.tmpdir(), 'soma-cc07b-'));
-  try {
-    const claudeMd = path.join(driftDir, 'CLAUDE.md');
-    const tamperedContent = [
-      '<!-- soma:start id=block.claude.CLAUDE.md version=2.2.0 sha256=000000000000000000000000000000000000000000000000000000000000dead -->',
-      '# SOMA Block — tampered',
-      '<!-- soma:end id=block.claude.CLAUDE.md -->',
-    ].join('\n');
-    fs.writeFileSync(claudeMd, tamperedContent, 'utf8');
-
-    const somaSubDir = path.join(driftDir, '.soma');
-    fs.mkdirSync(somaSubDir, { recursive: true });
-
-    const r = runInstall([driftDir, '--tool=claude', '--force-resync']);
-
-    // RED-phase: --force-resync bypass requires full pipeline → exit 0
-    // This also FAILS until T-08+T-11 implement the pipeline.
-    assert.equal(r.status, 0,
-      `[RED — depends T-08+T-11] --force-resync must bypass drift and exit 0. ` +
-      `Got ${r.status}. stderr: ${r.stderr} stdout: ${r.stdout}`
     );
   } finally {
     try { fs.rmSync(driftDir, { recursive: true, force: true }); } catch (_) {}
