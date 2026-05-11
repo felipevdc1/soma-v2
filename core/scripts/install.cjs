@@ -892,7 +892,10 @@ function orchestrate(projectPathAbs, flags) {
 
   const templateVars = {
     version: SOMA_INSTALLED_VERSION,
-    soma_home: SOURCE_CORE,
+    // Fix-05: soma_home must be the INSTALLED location (~/.soma-v2), not SOURCE_CORE.
+    // SOURCE_CORE is the repo source path (for lab use); the template renders
+    // path references that users will use at runtime (post-install).
+    soma_home: path.join(os.homedir(), '.soma-v2'),
     harness: flags.tool === 'both' ? 'claude+codex' : flags.tool,
     install_timestamp: now,
     manifest_sha_short: manifestShaShort,
