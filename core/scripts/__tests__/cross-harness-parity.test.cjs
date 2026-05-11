@@ -13,9 +13,9 @@
  *   CP-02: Codex anchored block exists in AGENTS.md
  *          (id=block.codex.AGENTS.soma-install)
  *          → FAIL (RED — pending T-28)
- *   CP-03: Args schema parity — 7 args present in both Claude frontmatter and
+ *   CP-03: Args schema parity — 6 args present in both Claude frontmatter and
  *          Codex Args table (project_path, tool, dry_run, merge_claude_md,
- *          replace_claude_md, force_resync, allow_local_edits)
+ *          replace_claude_md, allow_local_edits; --force-resync REMOVED v2.2.0)
  *          → FAIL (RED — pending T-27 + T-28)
  *   CP-04: Triggers list parity — set equality after normalization (8 phrasings)
  *          → FAIL (RED — pending T-27 + T-28)
@@ -42,14 +42,17 @@ const CODEX_AGENTS_PATH = path.join(REPO_ROOT, 'core', 'adapters', 'codex', 'AGE
 
 // ── Expected contract values (from skill-cross-harness.md) ───────────────────
 
-/** 7 args required by CONTRACT:04 §Parity Contract (AC-15) */
+/** 6 args required by CONTRACT:04 §Parity Contract (AC-15) — v2.2.0 reduced set
+ * Note: force_resync REMOVED in v2.2.0 (AC-15 deprecated, --force-resync deferred to v2.3).
+ * Only 5 named flags remain: tool, dry_run, merge_claude_md, replace_claude_md, allow_local_edits.
+ * Total args including project_path = 6.
+ */
 const EXPECTED_ARGS = [
   'project_path',
   'tool',
   'dry_run',
   'merge_claude_md',
   'replace_claude_md',
-  'force_resync',
   'allow_local_edits',
 ];
 
@@ -331,7 +334,7 @@ test(`CP-02 [T-05]: Codex AGENTS.md contains anchored block id=${CODEX_BLOCK_ID}
 // ── CP-03: Args schema parity (7 args present in both) ────────────────────────
 // RED — FAILS until T-27 + T-28 both complete
 
-test('CP-03 [T-05]: Args schema parity — 7 args present in both Claude frontmatter and Codex Args table', () => {
+test('CP-03 [T-05]: Args schema parity — 6 args present in both Claude frontmatter and Codex Args table (v2.2.0: 5 flags + project_path)', () => {
   // ── Step 1: Read + parse Claude skill frontmatter ────────────────────────────
   assert.ok(
     fs.existsSync(CLAUDE_SKILL_PATH),
