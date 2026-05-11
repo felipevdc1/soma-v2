@@ -4,13 +4,17 @@
  *
  * Verifies that:
  * 1. No .no-execute references exist in core/scripts/ runtime code.
- * 2. No .no-execute references exist in ~/.claude/hooks/ hook code.
- * 3. The lab orphan file ~/.soma-v2/.no-execute has been deleted.
+ * 2. The lab orphan file ~/.soma-v2/.no-execute has been deleted.
  *
  * Historical context: .no-execute was a guard file used in early soma-v2
  * development to prevent accidental execution. It was removed from source
  * but the lab file persisted at ~/.soma-v2/.no-execute. This test closes
  * AC-13 by asserting the orphan is gone and no runtime code references it.
+ *
+ * NOTE: The original test 2 scanned ~/.claude/hooks/ for .no-execute refs.
+ * That scan was env-dependent (devs with legacy hooks would fail unrelated to
+ * v2.2 code). Removed in v2.2.1 (Bucket B) — AC-13 spec wording only mandates
+ * absence in core/ runtime code and removal of the lab file, not user hook dirs.
  *
  * @spec [SPEC:AC-13] [T-30] [015-soma-install]
  */
@@ -46,15 +50,6 @@ test('AC-13: no .no-execute references in core/scripts/ runtime code', () => {
   assert.equal(result.trim(), '', `Found .no-execute references in core/scripts/ runtime code:\n${result}`);
 });
 
-test('AC-13: no .no-execute references in ~/.claude/hooks/', () => {
-  const hooksDir = path.join(process.env.HOME, '.claude', 'hooks');
-  if (!fs.existsSync(hooksDir)) {
-    // No hooks dir = trivially passes (no orphan refs possible)
-    return;
-  }
-  const result = grepDir('.no-execute', hooksDir, null);
-  assert.equal(result.trim(), '', `Found .no-execute references in ~/.claude/hooks/:\n${result}`);
-});
 
 test('AC-13: ~/.soma-v2/.no-execute lab file deleted', () => {
   const labFile = path.join(process.env.HOME, '.soma-v2', '.no-execute');
