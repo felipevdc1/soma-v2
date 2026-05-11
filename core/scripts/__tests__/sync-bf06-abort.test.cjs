@@ -36,7 +36,7 @@ const { computeBlockSha256 } = require('../lib/anchored-blocks.cjs');
 // ── Paths ─────────────────────────────────────────────────────────────────────
 
 const SOMA_HOME = path.join(os.homedir(), '.soma-v2');
-const SYNC_CJS = path.join(SOMA_HOME, 'scripts', 'sync.cjs');
+const SYNC_CJS = path.resolve(__dirname, '..', 'sync.cjs');
 const FIXTURE_BASE = `/tmp/soma-test-bf06-${process.pid}`;
 
 // ── Fixture helpers ───────────────────────────────────────────────────────────
