@@ -1566,6 +1566,56 @@ test('T-16-S1: AC-09 abort default non-interactive — free-text CLAUDE.md + no 
   }
 });
 
+// ── T-Fix04: Step 0 skip for --tool=codex ─────────────────────────────────────
+// @spec [SPEC:AC-09] — Step 0 free-text detection applies to Claude harness only
+// @task Fix-04 (SONAR spec_violation fix — pre-Gate-#2)
+// Article II HARD: RED phase first.
+//
+// Bug: classifyClaudeMd runs unconditionally even when --tool=codex is passed.
+// When project has a free-text CLAUDE.md + no --merge-claude-md/--replace-claude-md,
+// Step 0 incorrectly aborts with exit 2 even though the codex harness targets AGENTS.md.
+//
+// Fix: add early-return guard before classifier when flags.tool === 'codex'.
+
+const CODEX_FREETEXT_AGENTS_FIXTURE = path.join(__dirname, 'fixtures', 'codex-freetext-AGENTS.md');
+
+test('T-Fix04-S1: Step 0 skip on codex — free-text CLAUDE.md with --tool=codex must NOT exit 2 [RED until Fix-04 GREEN]', () => {
+  const freshDir = fs.mkdtempSync(path.join(os.tmpdir(), 'soma-fix04-'));
+  try {
+    // Create a free-text CLAUDE.md (no soma anchors) in the project dir
+    // This would trigger Step 0 abort with exit 2 if --tool=claude (correct behavior).
+    // But with --tool=codex, Step 0 must be skipped (codex targets AGENTS.md, not CLAUDE.md).
+    const claudeMdPath = path.join(freshDir, 'CLAUDE.md');
+    fs.writeFileSync(claudeMdPath, '# My custom rules\nNo soma anchors.\n', 'utf8');
+
+    // Also copy the codex fixture as AGENTS.md to give codex something to work with
+    const agentsMdPath = path.join(freshDir, 'AGENTS.md');
+    if (fs.existsSync(CODEX_FREETEXT_AGENTS_FIXTURE)) {
+      fs.copyFileSync(CODEX_FREETEXT_AGENTS_FIXTURE, agentsMdPath);
+    }
+
+    const r = spawnSync('node', [INSTALL_CJS, freshDir, '--tool=codex'], {
+      encoding: 'utf8',
+      timeout: 30000,
+    });
+
+    // Must NOT exit 2 with "CLAUDE.md has free-text content" error
+    // (Step 0 should be completely skipped for codex).
+    const combined = r.stdout + r.stderr;
+    const isFalseStep0Abort = (r.status === 2) && (
+      combined.includes('free-text content') ||
+      combined.includes('merge-claude-md') ||
+      combined.includes('replace-claude-md')
+    );
+    assert.equal(isFalseStep0Abort, false,
+      `[RED — Fix-04] --tool=codex must NOT trigger Step 0 CLAUDE.md free-text abort.\n` +
+      `Got exit ${r.status}.\nstdout: ${r.stdout}\nstderr: ${r.stderr}`
+    );
+  } finally {
+    try { fs.rmSync(freshDir, { recursive: true, force: true }); } catch (_) {}
+  }
+});
+
 // ── T-Fix02: AC-08 snapshot path must be under SOMA_HOME (no parent traversal) ──
 // @spec [SPEC:AC-08]
 // @task Fix-02 (SONAR spec_violation fix — pre-Gate-#2)
