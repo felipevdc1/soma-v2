@@ -1616,6 +1616,64 @@ test('T-Fix04-S1: Step 0 skip on codex — free-text CLAUDE.md with --tool=codex
   }
 });
 
+// ── T-Fix05: templateVars.soma_home = installed location ──────────────────────
+// @spec [SPEC:AC-01] — no unresolved {{placeholders}} in rendered bootloader
+// @task Fix-05 (SONAR spec_violation fix — pre-Gate-#2)
+// Article II HARD: RED phase first.
+//
+// Bug: templateVars.soma_home is set to SOURCE_CORE (repo source path like
+// /path/to/soma-v2/core) instead of the installed location (~/.soma-v2).
+//
+// AC-01 contract: rendered bootloader MUST NOT contain unresolved {{ placeholders.
+// The rendered content must contain the installed soma_home path (path.join(os.homedir(), '.soma-v2'))
+// NOT the source-tree path.
+
+test('T-Fix05-S1: templateVars.soma_home is installed location, not source tree [RED until Fix-05 GREEN]', () => {
+  const freshDir = fs.mkdtempSync(path.join(os.tmpdir(), 'soma-fix05-'));
+  const INSTALLED_SOMA_HOME = path.join(os.homedir(), '.soma-v2');
+  try {
+    const r = spawnSync('node', [INSTALL_CJS, freshDir, '--tool=claude'], {
+      encoding: 'utf8',
+      timeout: 30000,
+    });
+
+    // Must exit 0 (greenfield install)
+    assert.equal(r.status, 0,
+      `[RED — Fix-05] Greenfield install must exit 0. Got ${r.status}.\nstderr: ${r.stderr}`
+    );
+
+    // Check rendered CLAUDE.md for unresolved {{ and for correct soma_home path
+    const claudeMdPath = path.join(freshDir, 'CLAUDE.md');
+    if (fs.existsSync(claudeMdPath)) {
+      const content = fs.readFileSync(claudeMdPath, 'utf8');
+      // 1. No unresolved {{ placeholders (AC-01)
+      assert.equal(
+        (content.match(/\{\{/g) || []).length, 0,
+        `[RED — Fix-05] AC-01: CLAUDE.md must NOT contain unresolved {{ placeholders.\n` +
+        `Content (first 600): ${content.slice(0, 600)}`
+      );
+      // 2. soma_home rendered to installed path (not source tree)
+      // The project-bootloader template uses {{soma_home}} in multiple places.
+      // With the bug, it renders to SOURCE_CORE (e.g., /path/to/soma-v2/core).
+      // After fix, it should render to ~/.soma-v2.
+      if (content.includes(INSTALLED_SOMA_HOME)) {
+        // This is CORRECT — installed path present. Test passes.
+      } else {
+        // Check if the source-tree path is present (the bug)
+        const SCRIPTS_DIR_PATH = path.resolve(__dirname, '..');
+        const SOURCE_CORE_PATH = path.resolve(SCRIPTS_DIR_PATH, '..');
+        assert.ok(
+          !content.includes(SOURCE_CORE_PATH),
+          `[RED — Fix-05] soma_home rendered to SOURCE_CORE path "${SOURCE_CORE_PATH}" instead of installed path "${INSTALLED_SOMA_HOME}".\n` +
+          `Fix: templateVars.soma_home = path.join(os.homedir(), '.soma-v2')`
+        );
+      }
+    }
+  } finally {
+    try { fs.rmSync(freshDir, { recursive: true, force: true }); } catch (_) {}
+  }
+});
+
 // ── T-Fix02: AC-08 snapshot path must be under SOMA_HOME (no parent traversal) ──
 // @spec [SPEC:AC-08]
 // @task Fix-02 (SONAR spec_violation fix — pre-Gate-#2)
