@@ -1744,3 +1744,58 @@ test('T-Fix02-S1: AC-08 snapshot path starts with SOMA_HOME (no parent traversal
     try { fs.rmSync(fakeSomaHome, { recursive: true, force: true }); } catch (_) {}
   }
 });
+
+// ── T-Fix-A: block_id regex underscore-form support ──────────────────────────
+
+/**
+ * T-Fix-A: install-state.json blockIds must contain a real block_id matching the
+ * underscore-form `block.claude.CLAUDE_md.project-bootloader` pattern introduced
+ * in T-08bis, NOT the placeholder "(injected)".
+ *
+ * Bug: parseSyncBlockIds() regex only matched dotted-form CLAUDE.md.* but not
+ * underscore-form CLAUDE_md.* — causing fallback placeholder "(injected)" to be
+ * written in install-state.json for T-08bis project-bootloader installs.
+ *
+ * @spec [SPEC:AC-01b] [T-08bis] [015-soma-v2.2.1 Bucket A]
+ */
+test('T-Fix-A: install-state.json blockIds contains real block_id (underscore-form CLAUDE_md), not placeholder [RED until Bucket A GREEN]', async (t) => {
+  const freshDir = fs.mkdtempSync(path.join(os.tmpdir(), 'soma-fix-a-'));
+  try {
+    const r = spawnSync('node', [INSTALL_CJS, freshDir, '--tool=claude'], {
+      encoding: 'utf8',
+      timeout: 30000,
+    });
+
+    assert.equal(r.status, 0,
+      `T-Fix-A: install must exit 0. Got ${r.status}. stderr: ${r.stderr}`);
+
+    const stateFile = path.join(freshDir, '.soma', 'install-state.json');
+    assert.ok(
+      fs.existsSync(stateFile),
+      `T-Fix-A: install-state.json must exist at ${stateFile}`
+    );
+
+    const state = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
+    assert.ok(
+      Array.isArray(state.blockIds) && state.blockIds.length > 0,
+      `T-Fix-A: blockIds must be a non-empty array. Got: ${JSON.stringify(state.blockIds)}`
+    );
+
+    // Must NOT be the placeholder written when regex fails to parse
+    assert.notDeepStrictEqual(
+      state.blockIds,
+      ['(injected)'],
+      `T-Fix-A: blockIds must NOT be placeholder "(injected)". Regex doesn't match underscore-form CLAUDE_md.`
+    );
+
+    // At least one entry must match the underscore-form or dotted-form block_id pattern
+    const blockIdPattern = /^block\.[a-z]+\.[A-Z_]+(\.md|_md)\./;
+    const hasRealBlockId = state.blockIds.some(id => blockIdPattern.test(id));
+    assert.ok(
+      hasRealBlockId,
+      `T-Fix-A: blockIds[0] must match real block_id pattern (block.claude.CLAUDE_md.* or block.claude.CLAUDE.md.*). Got: ${JSON.stringify(state.blockIds)}`
+    );
+  } finally {
+    try { fs.rmSync(freshDir, { recursive: true, force: true }); } catch (_) {}
+  }
+});
