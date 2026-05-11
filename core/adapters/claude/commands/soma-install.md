@@ -41,7 +41,7 @@ Do NOT attempt to modify CLAUDE.md or create `.soma/` files manually. Always del
 ## Prereqs
 
 - SOMA v2 installed at `~/.soma-v2/` (verify with `ls ~/.soma-v2/scripts/soma.cjs`)
-- Node.js ≥ 18 on PATH
+- Node.js ≥ 22 on PATH
 
 ## Invocation
 

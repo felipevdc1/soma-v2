@@ -509,6 +509,44 @@ test(`CP-05 [T-05]: Both files contain backbone CLI literal "${BACKBONE_CLI_LITE
   );
 });
 
+// ── CP-07: Node prereq version parity ────────────────────────────────────────
+// RED until Bucket C updates AGENTS.md soma-install block with Node ≥ 22 prereq.
+
+test('CP-07 [Bucket-C]: Node.js prereq version parity — both Claude skill and Codex block declare ≥ 22', () => {
+  // ── Claude skill: check ## Prereqs section for Node.js ≥ 22 ─────────────────
+  assert.ok(
+    fs.existsSync(CLAUDE_SKILL_PATH),
+    `Claude skill not found at ${CLAUDE_SKILL_PATH}`
+  );
+
+  const claudeContent = fs.readFileSync(CLAUDE_SKILL_PATH, 'utf8');
+  assert.ok(
+    claudeContent.includes('Node.js ≥ 22'),
+    `[RED — Bucket C] Claude skill Prereqs must declare "Node.js ≥ 22". ` +
+    `Found: ${(claudeContent.match(/Node\.js[^\\n]*/g) || ['(no Node.js line)'])[0]}`
+  );
+
+  // ── Codex AGENTS.md soma-install block: check for Node ≥ 22 prereq ─────────
+  assert.ok(
+    fs.existsSync(CODEX_AGENTS_PATH),
+    `Codex AGENTS.md not found at ${CODEX_AGENTS_PATH}`
+  );
+
+  const codexContent = fs.readFileSync(CODEX_AGENTS_PATH, 'utf8');
+  const blockContent = extractAnchoredBlock(codexContent, CODEX_BLOCK_ID);
+  assert.notEqual(
+    blockContent,
+    null,
+    `Codex anchored block ${CODEX_BLOCK_ID} not found. Cannot verify Node prereq.`
+  );
+
+  assert.ok(
+    blockContent.includes('Node.js ≥ 22') || blockContent.includes('Node.js >= 22'),
+    `[RED — Bucket C] Codex soma-install block must declare "Node.js ≥ 22" in a Prereqs section. ` +
+    `Block content (first 600): ${blockContent.slice(0, 600)}`
+  );
+});
+
 // ── CP-06: Anchored block format validation ───────────────────────────────────
 // GREEN — AGENTS.md exists and already uses the anchored block format.
 // This test validates the FORMAT of the existing blocks and will validate
