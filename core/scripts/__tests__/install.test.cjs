@@ -1565,3 +1565,74 @@ test('T-16-S1: AC-09 abort default non-interactive — free-text CLAUDE.md + no 
     try { fs.rmSync(freshDir, { recursive: true, force: true }); } catch (_) {}
   }
 });
+
+// ── T-Fix02: AC-08 snapshot path must be under SOMA_HOME (no parent traversal) ──
+// @spec [SPEC:AC-08]
+// @task Fix-02 (SONAR spec_violation fix — pre-Gate-#2)
+// Article II HARD: RED phase first.
+//
+// Current bug: snapshotClaudeMd() computes somaHome as path.resolve(SOMA_HOME, '..')
+// (drops one directory level), so snapshot lands in parent of .soma-v2 instead of
+// inside .soma-v2/.snapshots/.
+//
+// AC-08 contract: snapshot MUST land at ~/.soma-v2/.snapshots/<ISO>/CLAUDE.md.original
+//
+// Test: run install --replace-claude-md on a project with free-text CLAUDE.md.
+//   Assert: the snapshot path emitted in stdout STARTS WITH the SOMA_HOME dir
+//   (path.join(os.homedir(), '.soma-v2')) — NOT the parent.
+
+test('T-Fix02-S1: AC-08 snapshot path starts with SOMA_HOME (no parent traversal) when SOMA_HOME env set [RED until Fix-02 GREEN]', () => {
+  // This test exercises the BUG path: when SOMA_HOME env is set, snapshotClaudeMd uses
+  // path.resolve(SOMA_HOME, '..') which drops one directory level (parent traversal).
+  // AC-08 contract: snapshot MUST land at <SOMA_HOME>/.snapshots/<ISO>/CLAUDE.md.original
+  // (no traversal to parent of SOMA_HOME).
+  const freshDir = fs.mkdtempSync(path.join(os.tmpdir(), 'soma-fix02-'));
+  // Simulate an installed SOMA_HOME that's a subdirectory (e.g., ~/.soma-v2/scripts)
+  // The bug: path.resolve(fakeSomaHome, '..') = fakeSomaParent instead of fakeSomaHome
+  const fakeSomaHome = path.join(os.tmpdir(), 'soma-fix02-home-' + process.pid);
+  const fakeSomaScriptsDir = path.join(fakeSomaHome, 'scripts');
+  fs.mkdirSync(fakeSomaScriptsDir, { recursive: true });
+
+  try {
+    // Create a free-text CLAUDE.md so --replace-claude-md triggers snapshot
+    const claudeMdPath = path.join(freshDir, 'CLAUDE.md');
+    fs.writeFileSync(claudeMdPath, '# My free-text rules\nNo soma anchors.\n', 'utf8');
+
+    const r = spawnSync('node', [INSTALL_CJS, freshDir, '--tool=claude', '--replace-claude-md'], {
+      encoding: 'utf8',
+      timeout: 30000,
+      env: { ...process.env, SOMA_HOME: fakeSomaScriptsDir },
+    });
+
+    // Must succeed (exit 0) — if it fails it may be for other reasons (no templates), so
+    // we focus on snapshot path assertion only when stdout has it.
+    const combined = r.stdout + r.stderr;
+    const snapMatch = combined.match(/Original preserved at ([^\n]+)/);
+    if (snapMatch) {
+      const snapPath = snapMatch[1].trim();
+      // With the bug: SOMA_HOME=<fakeSomaScriptsDir> → path.resolve('..')= fakeSomaHome
+      // → snapshot goes to fakeSomaHome/.snapshots/ (parent of scripts)
+      // Fix: SOMA_HOME should be used directly, NOT path.resolve(SOMA_HOME, '..')
+      // The snapshot path MUST start with fakeSomaScriptsDir (the declared SOMA_HOME)
+      assert.ok(
+        snapPath.startsWith(fakeSomaScriptsDir),
+        `[RED — Fix-02] AC-08: snapshot path must start with SOMA_HOME="${fakeSomaScriptsDir}" (no parent traversal).\n` +
+        `Got: "${snapPath}"\n` +
+        `Bug: snapshotClaudeMd uses path.resolve(SOMA_HOME, '..') instead of SOMA_HOME directly.`
+      );
+    }
+    // If snapshot wasn't emitted (install failed for other reasons in test env),
+    // check that at least there's no snapshot under the PARENT directory.
+    const parentSnapshots = path.join(fakeSomaHome, '.snapshots');
+    if (fs.existsSync(parentSnapshots)) {
+      // Bug would create snapshot here — this is the WRONG location.
+      const entries = fs.readdirSync(parentSnapshots);
+      assert.equal(entries.length, 0,
+        `[RED — Fix-02] Bug: snapshot created under PARENT of SOMA_HOME at ${parentSnapshots}. Should be under SOMA_HOME directly.`
+      );
+    }
+  } finally {
+    try { fs.rmSync(freshDir, { recursive: true, force: true }); } catch (_) {}
+    try { fs.rmSync(fakeSomaHome, { recursive: true, force: true }); } catch (_) {}
+  }
+});
