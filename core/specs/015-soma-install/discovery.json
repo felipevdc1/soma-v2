@@ -1,0 +1,82 @@
+{
+  "auditTimestamp": "2026-05-09T14:45:00Z",
+  "auditedBy": "haiku-layer0-v2.2-install",
+  "sourceRepoSha": "51c3272",
+
+  "noExecuteSentinel": {
+    "exists": true,
+    "filePath": "~/.soma-v2/.no-execute",
+    "fileContents": "(empty file)",
+    "consumers": [],
+    "verdict": "orphan-safe-to-delete",
+    "verdictRationale": "File exists but is empty and has zero consumers in codebase. No hooks, scripts, or sync logic reference it. Safe to delete as part of v2.2 cleanup if deemed obsolete."
+  },
+
+  "adapterLayout": {
+    "rootPath": "/Users/felipevdc1/Documents/- projetos claude code/soma-v2/core/adapters/",
+    "claude": {
+      "exists": true,
+      "rootPath": "/Users/felipevdc1/Documents/- projetos claude code/soma-v2/core/adapters/claude",
+      "commandsDir": "/Users/felipevdc1/Documents/- projetos claude code/soma-v2/core/adapters/claude/commands",
+      "bootloaderFile": "/Users/felipevdc1/Documents/- projetos claude code/soma-v2/core/adapters/claude/bootloader.md",
+      "syncManifest": null,
+      "filesFound": [
+        "bootloader.md",
+        "commands/sonar-audit.md",
+        "commands/plan-sdd.md",
+        "commands/soma-run.md",
+        "commands/specify.md",
+        "commands/hyd.md",
+        "install-targets.json (config, not .md)"
+      ]
+    },
+    "codex": {
+      "exists": true,
+      "rootPath": "/Users/felipevdc1/Documents/- projetos claude code/soma-v2/core/adapters/codex",
+      "commandsDir": null,
+      "bootloaderFile": "/Users/felipevdc1/Documents/- projetos claude code/soma-v2/core/adapters/codex/bootloader.md",
+      "syncManifest": null,
+      "filesFound": [
+        "AGENTS.md",
+        "bootloader.md",
+        "install-targets.json (config, not .md)"
+      ],
+      "activationMechanism": "unknown — NEEDS_CLARIFICATION. Codex activation mechanism not documented in adapter layout. Codex spec 011 and phase 4b logs mention AGENTS.md as registry but exact how Codex CLI resolves and loads skills from AGENTS.md is not visible in audit scope."
+    }
+  },
+
+  "syncBehavior": {
+    "bf06AbortOnSha": false,
+    "bf06Evidence": "sync.cjs line 765-766: 'BF-06: Pre-write conflict scan — abort on sha256 mismatch when --allow-local-edits not set.' BUT line 482-489 path D4 (LOCAL_EDITS_DETECTED) emits WARNING and writes anyway. Spec 011 AC-13 requires ABORT; current behavior overwrites with local-edits warning. Code comment intention (abort) contradicts actual behavior (warn+overwrite).",
+    "customClaudeMdConflict": "force-required",
+    "anchorMarkers": {
+      "startPattern": "<!-- soma-v2:start id={anchorId} version=1.0 sha256={hex64} -->",
+      "endPattern": "<!-- soma-v2:end id={anchorId} -->"
+    }
+  },
+
+  "bucketAStatus": {
+    "v215Shipped": false,
+    "evidence": "From ~/.claude/plans/handoff-soma-v2.1.md — Bucket A YELLOW (open). Context: v2.1.4 shipped tooling (soma manifest baseline CLI subcommand) but only applied to LAB (~/.soma-v2/manifest.json). Source repo core/manifest.json still has pre-Bucket-B stale shas. Resume prompt: 'bora pra v2.1.5: re-baseline o source manifest'",
+    "manifestBaselineBehaviorChanged": false,
+    "blocking": false,
+    "blockingRationale": "v2.1.5 work (Bucket A) is orthogonal to v2.2 install command spec. Bucket A is a source-manifest fix, not a behavior change. v2.2 can proceed in parallel. Recommendation: v2.1.5 = 30min fix (run baseline on core/), v2.2 = feature-parallel. Both target v2.1.5 release but do not hard-block each other."
+  },
+
+  "hydraConflictPreview": {
+    "hydraClaudeMdPath": "/Users/felipevdc1/Documents/- projetos claude code/hydra/CLAUDE.md",
+    "currentClaudeMdSha": "d388fcc2c80207798aefbec38cc2fd1cd6e922986e1949de039db25b925546c2",
+    "currentClaudeMdLineCount": 35,
+    "containsAnchorMarkers": false,
+    "containsSomaManagedText": true,
+    "anchoredBlockInjectionResult": "would-conflict",
+    "recoveryPath": "force-merge"
+  },
+
+  "spec011Reference": {
+    "exists": true,
+    "title": "Spec: Phase 5 Codex+Claude Bootloader Operational Install",
+    "scope": "Sync infrastructure write-mode (--apply flag), conflict detection (BF-06 abort vs overwrite), rollback infrastructure, manifest schema, snapshot management. 6 DONE ACs (verify only) + 5 PARTIAL ACs (require bug fixes) + 10 NEW ACs (implement rollback, migration, sandbox, evidence).",
+    "overlapWithV22": "partial — Spec 011 owns Phase 5 write-mode (sync --apply for Codex/Claude). v2.2 soma install will leverage Spec 011 infrastructure (sync apply is the write mechanism). But Spec 011 scope is cross-adapter operationalization, not new project install UX. v2.2 scope is install command entry point (choose adapter, dispatch sync apply, manage Hydra bootstrap). Overlap: Spec 011 BF-06 conflict handling must be RESOLVED before v2.2 goes live — conflict detection currently warns-and-overwrites but spec says abort."
+  }
+}
