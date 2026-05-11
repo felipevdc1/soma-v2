@@ -1,4 +1,4 @@
-<!-- soma-v2:start id=block.codex.AGENTS.codebase-memory-mcp version=2.1.0-draft sha256=a233f5675e73e4dd672065cd4c01b5c319ac5dda0630187b3b61e1ccf283f285 -->
+<!-- soma-v2:start id=block.codex.AGENTS.codebase-memory-mcp version=2.1.0-draft sha256=de76bf0664923630696399a582630b060a7f002158306b9761868d70b5d3cc5b -->
 # Codebase Knowledge Graph (codebase-memory-mcp)
 
 This project uses codebase-memory-mcp to maintain a knowledge graph of the codebase.
@@ -22,7 +22,7 @@ ALWAYS prefer MCP graph tools over grep/glob/file-search for code discovery.
 - Read source: `get_code_snippet(qualified_name="pkg/orders.OrderHandler")`
 <!-- soma-v2:end id=block.codex.AGENTS.codebase-memory-mcp -->
 
-<!-- soma-v2:start id=block.codex.AGENTS.hyd-v2 version=2.1.0-draft sha256=bb02d6fbacb199f70ba016e2f724cff2f08dd9fc3b171f507e57552685bf33e7 -->
+<!-- soma-v2:start id=block.codex.AGENTS.hyd-v2 version=2.1.0-draft sha256=1e135e9f494de71fef5923a07fca6d5f2a8132bcfadaa1a7186cf0ddf7941bfc -->
 # HYD v2 Cognitive Discipline
 
 Use HYD v2 as the default anti-shallowness loop before planning or implementation on non-trivial work.
@@ -46,7 +46,7 @@ Use HYD v2 as the default anti-shallowness loop before planning or implementatio
 - Do not stop on a polished answer if the underlying reasoning is still weak.
 <!-- soma-v2:end id=block.codex.AGENTS.hyd-v2 -->
 
-<!-- soma-v2:start id=block.codex.AGENTS.soma-stsd version=2.1.0-draft sha256=6905d130b11f0ca1cd7085d6f732fd7bf34fc03837602a25d345b66493261c5b -->
+<!-- soma-v2:start id=block.codex.AGENTS.soma-stsd version=2.1.0-draft sha256=32870d8875d7cc2a98bbce5edb35b88a56ddcfc0964b91c00ed065f917f5d0ee -->
 # SOMA / STSD Operating Lens
 
 Use SOMA v2 as the default execution philosophy for non-trivial work. Treat it as an always-on lens, not mandatory ceremony for tiny commands. Scale the artifacts to the risk and size of the task, but keep the core discipline: spec first, tests tied to acceptance criteria, execution in safe waves, validation before claims, audit before done.
