@@ -225,8 +225,9 @@ v2.2 **adds** a new project-scoped block (`block.claude.CLAUDE_md.project-bootlo
 | AC-07 | `core/scripts/__tests__/install.test.cjs` (T-14-S1) | integration (--merge-claude-md) |
 | AC-08 | `core/scripts/__tests__/install.test.cjs` (T-15-S1) | integration (--replace-claude-md) |
 | AC-09 | `core/scripts/__tests__/install.test.cjs` (T-16-S1) | integration (abort default) |
-| AC-10 | `core/adapters/claude/commands/soma-install.md` (T-27) + smoke transcript inspection | manual + future hook test |
-| AC-11 | `core/adapters/codex/AGENTS.md` block `id=block.codex.AGENTS.soma-install` (T-28) | manual + parse anchored block |
+| AC-01..09 | `core/scripts/__tests__/install-e2e.test.cjs` (T-33) — 5-sub-test lifecycle composite (S1=greenfield, S2=idempotent, S3=drift, S4=merge, S5=artifacts) | integration (full lifecycle) |
+| AC-10 | `core/adapters/claude/commands/soma-install.md` (T-27) + `core/scripts/__tests__/skill-activation.smoke.md` (T-34) + smoke transcript inspection | manual + future hook test |
+| AC-11 | `core/adapters/codex/AGENTS.md` block `id=block.codex.AGENTS.soma-install` (T-28) + `core/scripts/__tests__/skill-activation.smoke.md` (T-34, Codex section stubbed) | manual + parse anchored block |
 | AC-12 | `core/scripts/__tests__/slash-prereq-guard.test.cjs` (T-26) + 3 slash command sources + 2 bootloaders (T-21..T-25) | integration + manual review |
 | AC-13 | `core/scripts/__tests__/no-execute-deletion.test.cjs` (T-30) | unit (deletion + grep) |
 | AC-14 | `core/scripts/__tests__/sync-bf06-abort.test.cjs` (T-17 closes) | contract (BF-06 abort) |
