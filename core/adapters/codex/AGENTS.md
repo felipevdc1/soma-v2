@@ -100,7 +100,7 @@ Pause and re-plan when:
 - implementation drifts from the spec.
 <!-- soma-v2:end id=block.codex.AGENTS.soma-stsd -->
 
-<!-- soma-v2:start id=block.codex.AGENTS.soma-install version=2.2.0 sha256=b354afbc56321be0e0c8ecaebde0514ba5526a0d5d0b420af3725b0af58b04b7 -->
+<!-- soma-v2:start id=block.codex.AGENTS.soma-install version=2.2.0 sha256=f9a2a72d76720906ee55ace065fdc82c0f380236dbf8e95d7350610178123586 -->
 # Soma Install Skill (Codex)
 
 When user requests "instalar SOMA" / "install soma" (PT or EN, see triggers list below), invoke:
@@ -117,6 +117,11 @@ node ~/.soma-v2/scripts/soma.cjs install <project-path> [flags]
 - "install soma here"
 - "soma install"
 - "add SOMA to this project"
+
+## Prereqs
+
+- SOMA v2 installed at `~/.soma-v2/` (verify with `ls ~/.soma-v2/scripts/soma.cjs`)
+- Node.js ≥ 22 on PATH
 
 ## Args (parity with Claude skill)
 
