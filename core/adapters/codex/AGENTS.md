@@ -100,7 +100,7 @@ Pause and re-plan when:
 - implementation drifts from the spec.
 <!-- soma-v2:end id=block.codex.AGENTS.soma-stsd -->
 
-<!-- soma-v2:start id=block.codex.AGENTS.soma-install version=2.2.0 sha256=696e825cee7f462ae18d15ef65e1d0d1ee84723b689bf81dd821d0a7b3ba1c86 -->
+<!-- soma-v2:start id=block.codex.AGENTS.soma-install version=2.2.0 sha256=b354afbc56321be0e0c8ecaebde0514ba5526a0d5d0b420af3725b0af58b04b7 -->
 # Soma Install Skill (Codex)
 
 When user requests "instalar SOMA" / "install soma" (PT or EN, see triggers list below), invoke:
