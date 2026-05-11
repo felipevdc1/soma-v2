@@ -137,7 +137,7 @@ function classifyClaudeMd(claudeMdPath) {
  */
 function snapshotClaudeMd(claudeMdPath) {
   const somaHome = process.env.SOMA_HOME
-    ? path.resolve(process.env.SOMA_HOME, '..')
+    ? path.resolve(process.env.SOMA_HOME)
     : path.join(os.homedir(), '.soma-v2');
   const snapshotsBase = path.join(somaHome, '.snapshots');
 
