@@ -673,6 +673,9 @@ function orchestrate(projectPathAbs, flags) {
   // This prevents false-positive "free-text" detection on SOMA-generated headings that remain
   // after the anchored block is stripped (e.g., "## SOMA Bootloader (managed by soma sync)").
   //
+  // SKIP for codex: Step 0 protects free-text CLAUDE.md (Claude harness only).
+  // For codex/AGENTS.md, classifier is deferred to v2.3 generalization.
+  //
   // @task T-14 T-15 T-16
   // @spec [SPEC:AC-07] [SPEC:AC-08] [SPEC:AC-09]
   const claudeMdPath = path.join(projectPathAbs, 'CLAUDE.md');
@@ -683,7 +686,11 @@ function orchestrate(projectPathAbs, flags) {
   const somaDirExistsForStep0 = fs.existsSync(path.join(projectPathAbs, '.soma'));
   const stateFilePathForStep0 = path.join(projectPathAbs, '.soma', 'install-state.json');
   const hasSomaPriorState = somaDirExistsForStep0;
-  const claudeMdClass = hasSomaPriorState ? 'anchor-only' : classifyClaudeMd(claudeMdPath);
+  // Fix-04: codex tool targets AGENTS.md, not CLAUDE.md.
+  // Step 0 free-text classifier only applies to the Claude harness.
+  // Deferred to v2.3 to generalize to AGENTS.md.
+  const skipStep0ForCodex = (flags.tool === 'codex');
+  const claudeMdClass = (hasSomaPriorState || skipStep0ForCodex) ? 'anchor-only' : classifyClaudeMd(claudeMdPath);
 
   if (claudeMdClass === 'free-text') {
     if (flags.replaceClaudioMd) {
