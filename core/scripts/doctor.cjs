@@ -476,6 +476,10 @@ function scanContextRouting(projectPath) {
   // Validate each route
   const { parseFrontMatter } = require(path.join(os.homedir(), '.soma-v2', 'scripts', 'lib', 'module-store.cjs'));
   for (const route of routes) {
+    // C-fu-1: skip template placeholder rows — keyword or slug starting with '#' are
+    // documentation examples in the greenfield CONTEXT.md template, not real routing entries.
+    if (route.keyword.trim().startsWith('#') || route.slug.trim().startsWith('#')) continue;
+
     const modulePath = path.join(projectPath, '.soma', 'modules', `${route.slug}.md`);
 
     // Check module file exists
