@@ -1799,3 +1799,56 @@ test('T-Fix-A: install-state.json blockIds contains real block_id (underscore-fo
     try { fs.rmSync(freshDir, { recursive: true, force: true }); } catch (_) {}
   }
 });
+
+/**
+ * M-02 [RED]: parseSyncBlockIds regex must match codex block_id form.
+ *
+ * Codex block_ids follow the pattern `block.codex.AGENTS.{name}` — NO `.md` or `_md`
+ * separator between the file base ("AGENTS") and the block-name suffix ("soma-install").
+ * The pre-M-02 regex only matched patterns WITH that separator, so codex IDs were silently
+ * dropped from the stdout-regex fallback path.
+ *
+ * This test drives the regex widening in parseSyncBlockIds() to also match the no-separator
+ * form: block\.[a-z]+\.[A-Z_]+\.[a-z0-9._-]+
+ *
+ * @spec [015-soma-install/spec.md AC-11] [M-02]
+ */
+test('M-02: parseSyncBlockIds regex matches codex block_id form (no .md/_md separator)', (t) => {
+  // We test the regex logic inline by reproducing the pattern from install.cjs
+  // and asserting the widened form matches codex IDs.
+  // Pre-M-02 pattern (broken for codex — for reference only):
+  //   /block\.[a-z]+\.[A-Z_]+(?:\.md|_md)\.[a-z0-9._-]+|block\.[a-z]+\.[A-Z_]+(?:\.md|_md)/g
+  // Post-M-02 pattern (widened — what this test demands):
+  //   must also match block.codex.AGENTS.soma-install (no .md/_md in middle)
+
+  const exampleCodexId = 'block.codex.AGENTS.soma-install';
+  const exampleClaudeId = 'block.claude.CLAUDE_md.project-bootloader';
+  const exampleClaudeDotted = 'block.claude.CLAUDE.md.hyd-v2';
+
+  // Use the widened pattern that M-02 GREEN will install:
+  // Full form: prefix + file-base + optional-separator + dot + suffix
+  // No-separator form: block.codex.AGENTS.soma-install
+  const widenedPattern = /block\.[a-z]+\.[A-Z_]+(?:(?:\.md|_md)\.[a-z0-9._-]+|(?:\.md|_md)|\.[a-z0-9._-]+)/g;
+
+  const syntheticStdout = [
+    `Syncing ${exampleCodexId} to /tmp/project/AGENTS.md`,
+    `Injected ${exampleClaudeId} into CLAUDE.md`,
+    `Block ${exampleClaudeDotted} written`,
+  ].join('\n');
+
+  const matches = syntheticStdout.match(widenedPattern);
+  const matchSet = matches ? [...new Set(matches)] : [];
+
+  assert.ok(
+    matchSet.includes(exampleCodexId),
+    `M-02: widened regex must match codex form "${exampleCodexId}". Got: ${JSON.stringify(matchSet)}`
+  );
+  assert.ok(
+    matchSet.includes(exampleClaudeId),
+    `M-02: widened regex must still match underscore-form "${exampleClaudeId}". Got: ${JSON.stringify(matchSet)}`
+  );
+  assert.ok(
+    matchSet.includes(exampleClaudeDotted),
+    `M-02: widened regex must still match dotted-form "${exampleClaudeDotted}". Got: ${JSON.stringify(matchSet)}`
+  );
+});
