@@ -60,7 +60,8 @@ function parseArgs(argv) {
     json: false,
     quiet: false,
     verbose: false,
-    somaHome: null
+    somaHome: null,
+    rollback: false,
   };
   const errors = [];
   let targetPath = null;
@@ -73,6 +74,7 @@ function parseArgs(argv) {
     else if (arg === '--json') flags.json = true;
     else if (arg === '--quiet') flags.quiet = true;
     else if (arg === '--verbose') flags.verbose = true;
+    else if (arg === '--rollback') flags.rollback = true;
     else if (arg.startsWith('--soma-home=')) flags.somaHome = arg.slice('--soma-home='.length);
     else if (arg.startsWith('--soma-home')) {
       // Handle space-separated --soma-home PATH (not supported; require = form)
@@ -608,6 +610,48 @@ function main() {
     validateTargetPath(targetPath);
   } catch (err) {
     emitError('TARGET_PATH_INVALID', err.message, useJson);
+    return;
+  }
+
+  // ---- BRANCH: --rollback mode (C-fu-3) ----
+  // Cleans up an aborted or incomplete init by removing .soma/ AND .soma.lock.
+  // Idempotent: no-ops cleanly when both already absent.
+  if (flags.rollback) {
+    const somaDir   = path.join(targetPath, '.soma');
+    const lockFile  = path.join(targetPath, '.soma.lock');
+    const removed   = [];
+
+    try {
+      if (fs.existsSync(somaDir)) {
+        fs.rmSync(somaDir, { recursive: true, force: true });
+        removed.push('.soma/');
+      }
+      if (fs.existsSync(lockFile)) {
+        fs.rmSync(lockFile, { force: true });
+        removed.push('.soma.lock');
+      }
+    } catch (err) {
+      emitError('IO_ERROR', `Rollback cleanup failed: ${err.message}`, useJson);
+      return;
+    }
+
+    process.exitCode = 0;
+    if (useJson) {
+      process.stdout.end(JSON.stringify({
+        tool: 'init',
+        mode: 'rollback',
+        target_path: targetPath,
+        removed,
+      }, null, 2) + '\n');
+    } else if (!flags.quiet) {
+      if (removed.length === 0) {
+        process.stdout.end(`SOMA init --rollback: nothing to clean at ${targetPath}\n`);
+      } else {
+        process.stdout.end(`SOMA init --rollback: removed ${removed.join(', ')} from ${targetPath}\n`);
+      }
+    } else {
+      process.stdout.end();
+    }
     return;
   }
 
