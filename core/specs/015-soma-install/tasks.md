@@ -106,7 +106,7 @@
 
 | ID | Description | spec_ref | files | depends_on | Status |
 |---|---|---|---|---|---|
-| T-30 | Delete `core/.no-execute` (if exists in source) + delete `~/.soma-v2/.no-execute` (lab). Add CI-ish grep test: `grep -rn '\.no-execute' core/ ~/.claude/hooks/` returns 0 matches. | [SPEC:AC-13] | `core/.no-execute` (deleted), `core/scripts/__tests__/no-execute-deletion.test.js` (or one-shot CI assertion) | T-08 | TODO |
+| T-30 | Delete `core/.no-execute` (if exists in source) + delete `~/.soma-v2/.no-execute` (lab). Add CI-ish grep test: `grep -rn '\.no-execute' core/` returns 0 matches (scope: soma-controlled repo tree only — user env hooks out of scope per v2.2.1 traceability alignment). | [SPEC:AC-13] | `core/.no-execute` (deleted), `core/scripts/__tests__/no-execute-deletion.test.js` (or one-shot CI assertion) | T-08 | TODO |
 | T-31 | [P] Verify frozen libs invariant per AC-17: assert sha256 of `core/scripts/lib/{anchored-blocks,manifest,template-engine}.cjs` matches baselines `6db9bbcb...`/`08a0f164...`/`f13ae144...`. Reuse existing v2.1.4 invariant test if present. | [SPEC:AC-17] | `core/scripts/__tests__/frozen-libs-invariant.test.js` (existing per v2.1.4 — verify present, extend if needed) | T-01 | TODO |
 | T-32 | [P] Static AC-18 check: assert `plan.md` cites discovery.json fields. Optional automated check OR manual SONAR step. | [SPEC:AC-18] | (static, plan.md already cites in "Layer 0 Discovery Findings" section) | T-01 | TODO |
 
