@@ -575,16 +575,18 @@ function runDryRun(projectPathAbs, flags) {
  * @returns {string[]} array of block_ids (may be empty if none found)
  */
 function parseSyncBlockIds(syncStdout) {
-  // Supports both dotted-form (CLAUDE.md.block-id) and underscore-form (CLAUDE_md.block-id)
-  // introduced in T-08bis for project-bootloader blocks.
-  // Pattern breakdown:
-  //   block\.[a-z]+\.   — prefix e.g. "block.claude."
-  //   [A-Z_]+           — file base e.g. "CLAUDE" or "AGENTS"
-  //   (?:\.md|_md)      — separator: dotted ".md" or underscore "_md"
-  //   \.                — literal dot before block-name suffix
-  //   [a-z0-9._-]+      — block-name suffix e.g. "project-bootloader"
-  // Second alternative handles bare form: block.claude.CLAUDE.md or block.claude.CLAUDE_md
-  const pattern = /block\.[a-z]+\.[A-Z_]+(?:\.md|_md)\.[a-z0-9._-]+|block\.[a-z]+\.[A-Z_]+(?:\.md|_md)/g;
+  // Supports all block_id forms emitted in sync stdout:
+  //   1. Dotted-form:      block.claude.CLAUDE.md.hyd-v2         (separator = ".md.")
+  //   2. Underscore-form:  block.claude.CLAUDE_md.project-bootloader (separator = "_md.")
+  //   3. No-separator:     block.codex.AGENTS.soma-install        (no .md/_md middle segment)
+  //
+  // Pattern breakdown (all alternatives are tried left-to-right):
+  //   block\.[a-z]+\.[A-Z_]+  — prefix + file-base, e.g. "block.claude.CLAUDE"
+  //   Then one of:
+  //     (?:\.md|_md)\.[a-z0-9._-]+   — separator present + block-name suffix
+  //     (?:\.md|_md)                  — bare form (no suffix), e.g. "block.claude.CLAUDE.md"
+  //     \.[a-z0-9._-]+               — no separator (codex): "block.codex.AGENTS.soma-install"
+  const pattern = /block\.[a-z]+\.[A-Z_]+(?:(?:\.md|_md)\.[a-z0-9._-]+|(?:\.md|_md)|\.[a-z0-9._-]+)/g;
   const matches = syncStdout.match(pattern);
   return matches ? [...new Set(matches)] : [];
 }
@@ -608,18 +610,6 @@ function readBlockIdsFromTargetsFile(targetsFilePath) {
   } catch (_) {
     return [];
   }
-}
-
-/**
- * Parse the first block_id from sync.cjs stdout output.
- * Kept for backward compatibility with T-08 success output line.
- *
- * @param {string} syncStdout
- * @returns {string} block_id or placeholder string
- */
-function parseSyncBlockId(syncStdout) {
-  const ids = parseSyncBlockIds(syncStdout);
-  return ids.length > 0 ? ids[0] : '(injected)';
 }
 
 /**
