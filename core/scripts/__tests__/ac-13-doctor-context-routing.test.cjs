@@ -177,3 +177,66 @@ test('AC-13: doctor --check-context-routing with no CONTEXT.md → graceful (no 
   const parsed = JSON.parse(result.stdout);
   assert.ok(parsed !== null, 'Output should be valid JSON');
 });
+
+// ── C-fu-1: doctor skips #-prefixed CONTEXT.md rows ──────────────────────────
+test('C-fu-1: doctor skips #-prefixed rows — greenfield template (3 placeholder rows) → 0 BROKEN_CONTEXT_ROUTING findings', () => {
+  const proj = tmpProject();
+  // Greenfield CONTEXT.md as rendered from template: 3 #-prefixed placeholder rows
+  // None of these modules exist — if parser does NOT skip them, all 3 become BROKEN findings
+  writeContextMd(proj, [
+    ['# example:', '# example:'],
+    ['# auth',     '# auth-system'],
+    ['# billing',  '# billing'],
+  ]);
+  // No modules created — confirms the test is checking skip logic, not module existence
+
+  const result = runDoctor(proj);
+  assert.equal(result.status, 0, `Doctor must exit 0. stderr: ${result.stderr}`);
+
+  let parsed;
+  try { parsed = JSON.parse(result.stdout); } catch (e) {
+    assert.fail(`Expected JSON output. Got: ${result.stdout.slice(0, 300)}\nstderr: ${result.stderr}`);
+  }
+
+  const brokenFindings = (parsed.findings || []).filter(f => f.code === 'BROKEN_CONTEXT_ROUTING');
+  assert.equal(
+    brokenFindings.length,
+    0,
+    `Expected 0 BROKEN_CONTEXT_ROUTING findings for #-prefixed rows. Got ${brokenFindings.length}: ${JSON.stringify(brokenFindings)}`
+  );
+
+  // Also check context_routing summary: 0 broken_refs
+  const brokenRefs = parsed.context_routing?.broken_refs ?? [];
+  assert.equal(
+    brokenRefs.length,
+    0,
+    `Expected 0 broken_refs for #-prefixed rows. Got: ${JSON.stringify(brokenRefs)}`
+  );
+});
+
+test('C-fu-1: doctor skips ONLY #-prefixed rows — mixed table: 2 real broken + 3 placeholder → exactly 2 findings', () => {
+  const proj = tmpProject();
+  // Mix: 3 #-prefixed (should skip) + 2 real broken refs (no module files)
+  writeContextMd(proj, [
+    ['# example:',  '# example:'],
+    ['# auth',      '# auth-system'],
+    ['# billing',   '# billing'],
+    ['payments',    'payments-service'],  // real ref — module does NOT exist → BROKEN
+    ['reporting',   'reports-module'],    // real ref — module does NOT exist → BROKEN
+  ]);
+  // No modules created
+
+  const result = runDoctor(proj);
+  assert.equal(result.status, 0);
+
+  const parsed = JSON.parse(result.stdout);
+  const brokenFindings = (parsed.findings || []).filter(f => f.code === 'BROKEN_CONTEXT_ROUTING');
+
+  assert.equal(
+    brokenFindings.length,
+    2,
+    `Expected exactly 2 BROKEN_CONTEXT_ROUTING findings (real broken refs only). Got ${brokenFindings.length}: ${JSON.stringify(brokenFindings)}`
+  );
+  const slugs = brokenFindings.map(f => f.slug).sort();
+  assert.deepEqual(slugs, ['payments-service', 'reports-module'].sort());
+});
