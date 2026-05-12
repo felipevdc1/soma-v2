@@ -261,7 +261,8 @@ function enumerateModules(modulesDir, somaHome) {
 
   let files;
   try {
-    files = fs.readdirSync(modulesDir).filter(f => f.endsWith('.md'));
+    // C-fu-2: exclude index.md (D-C9 — index is a navigation file, not a module)
+    files = fs.readdirSync(modulesDir).filter(f => f.endsWith('.md') && f !== 'index.md');
   } catch (err) {
     return [];
   }
