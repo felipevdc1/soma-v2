@@ -96,7 +96,7 @@ v2.2 **adds** a new project-scoped block (`block.claude.CLAUDE_md.project-bootlo
 
 ### Cleanup (Layer 0 confirmed orphan)
 
-- **AC-13 (`.no-execute` deletion):** Given Layer 0 discovery.json field `noExecuteSentinel.verdict === "orphan-safe-to-delete"` AND zero consumers found via grep audit, when v2.2 ships, then `core/.no-execute` (if exists) AND `~/.soma-v2/.no-execute` are removed AND post-merge `grep -rn '\.no-execute' core/ ~/.claude/hooks/` returns zero matches.
+- **AC-13 (`.no-execute` deletion):** Given Layer 0 discovery.json field `noExecuteSentinel.verdict === "orphan-safe-to-delete"` AND zero consumers found via grep audit, when v2.2 ships, then `core/.no-execute` (if exists) AND `~/.soma-v2/.no-execute` are removed AND post-merge `grep -rn '\.no-execute' core/` returns zero matches (verification scope limited to soma-controlled repository tree — user environment hooks are out of scope per v2.2.1 traceability alignment).
 
 ### BF-06 fix (Layer 6 — bundled per Felipe decision)
 
