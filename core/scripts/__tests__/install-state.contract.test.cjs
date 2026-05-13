@@ -82,7 +82,9 @@ function makeTempDir(suffix = '') {
   const base = path.join(os.tmpdir(), `soma-test-state-${process.pid}`);
   fs.mkdirSync(base, { recursive: true });
   const dir = fs.mkdtempSync(path.join(base, `sc-${suffix}-`));
-  return dir;
+  // Normalize macOS /tmp symlink (/var/folders → /private/var/folders) so
+  // assertions using fs.realpathSync(file).startsWith(dir) work consistently.
+  return fs.realpathSync(dir);
 }
 
 /** Recursively removes the test temp root (best-effort). */
