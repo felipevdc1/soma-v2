@@ -27,7 +27,7 @@ The **10-step protocol** (STSD) structures every feature:
 9. **INTEGRATE** — wire components and run integration/smoke checks
 10. **SONAR / FIX / COMMIT** — multi-territory audit, fix blocking findings, finalize with evidence
 
-SOMA dogfooded its own workflow during construction: Wave A and Wave B of v2.1 were executed via `TeamCreate` + `addBlockedBy`, producing 838 tests (836 pass, 0 fail, 2 skip) across 22+ Sonnet/Haiku dispatches without a single frozen-lib drift incident.
+SOMA dogfooded its own workflow during construction: Wave A and Wave B of v2.1 were executed via agent teams (`addBlockedBy` + parallel dispatches; then via `TeamCreate`, since removed — teammates are now named via `Agent name:`), producing 838 tests (836 pass, 0 fail, 2 skip) across 22+ Sonnet/Haiku dispatches without a single frozen-lib drift incident.
 
 ---
 
@@ -63,7 +63,7 @@ SOMA ships **17 SOMA-CORE hooks** installed to `~/.claude/hooks/` — 16 event-r
 | Hook | Event | Role |
 |---|---|---|
 | `subagent-init.cjs` | PreToolUse (Agent) | Injects Constitution, FAMILY_DOC, and run context into every subagent prompt. **Must run first** — other hooks depend on its context setup. |
-| `thermal-guard.cjs` | PreToolUse (Agent/TeamCreate) | Counts in-flight compile/test agents; blocks 4th with exit 2 (Article V HARD) |
+| `thermal-guard.cjs` | PreToolUse (Agent) | Counts in-flight compile/test agents; blocks 4th with exit 2 (Article V HARD). Slot released on real agent termination via `SubagentStop` → `subagent-stop-thermal.cjs` (FIFO; 15min TTL as fallback) |
 | `spec-completeness-gate.cjs` | PreToolUse (Bash `git commit`) | Blocks commit if spec has `[NEEDS CLARIFICATION]` open or ACs without test references |
 | `spec-test-traceability.cjs` | PreToolUse (Bash) | Scans test files for `// @spec AC-XX` annotations; produces coverage/orphan/uncovered-AC report |
 | `cognitive-gate.cjs` | PreToolUse (Edit/Write) | Warns orchestrator when attempting to write implementation code directly (Orchestrator Mode anti-pattern) |
@@ -78,7 +78,7 @@ SOMA ships **17 SOMA-CORE hooks** installed to `~/.claude/hooks/` — 16 event-r
 | `session-init.cjs` | UserPromptSubmit (first) | Runs wake-up: loads handoff if active, emits memory context |
 | `session-end.cjs` | Stop | Prompts diary write if significant work was done; checks for open handoff buckets |
 | `write-compact-marker.cjs` | PreToolUse (Bash) | Writes compact marker on PreCompact for context continuity |
-| `agent-mode-gate.cjs` | PreToolUse (Agent/TeamCreate) | Enforces dispatch limits (max 3 standalone agents + 3 team agents before requiring override) |
+| `agent-mode-gate.cjs` | PreToolUse (Agent, Task) | Enforces dispatch budget over a 4h window: max 3 anonymous subagents + 8 distinct named teammates (repeat names free — reuse via SendMessage); `soma-` prefixed teammates exempt |
 
 **Dependency note:** `subagent-init.cjs` must execute before other hooks that rely on its context injection. `thermal-guard.cjs` reads agent count from the session state that `subagent-init.cjs` tracks. Installing the full bundle (rather than individual hooks) is the only supported configuration.
 

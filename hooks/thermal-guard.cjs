@@ -2,7 +2,7 @@
 /**
  * PreToolUse Hook — Thermal Guard
  *
- * Fires: Before every Agent or TeamCreate tool call
+ * Fires: Before every Agent tool call
  * Purpose: Limit concurrent compile/test agents to max 3 (Article V, SOMA v2)
  *
  * State file: /tmp/claude-thermal-state-{sessionId}.json
@@ -34,7 +34,6 @@ const COMPILE_KEYWORDS = [
   'cargo', 'go build', 'go test',
   'tsc', 'vitest', 'jest', 'pytest',
   'node --test', 'mocha',
-  'apply',
 ];
 
 // ---------------------------------------------------------------------------
@@ -139,9 +138,9 @@ async function main() {
   }
 
   try {
-    // Only intercept Agent and TeamCreate tool calls
+    // Only intercept Agent tool calls (TeamCreate foi removido do Claude Code)
     const toolName = payload.tool_name || payload.tool || '';
-    if (!/^(Agent|TeamCreate)$/i.test(toolName)) {
+    if (!/^Agent$/i.test(toolName)) {
       process.exit(0);
     }
 
@@ -195,7 +194,7 @@ async function main() {
 
     // ALLOW — register the new agent in state
     const agentId =
-      toolInput.id || toolInput.name || toolInput.team_name || `agent-${Date.now()}`;
+      toolInput.id || toolInput.name || `agent-${Date.now()}`;
     state.active.push({
       id: agentId,
       type: 'compile-test',

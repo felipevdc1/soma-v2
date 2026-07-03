@@ -55,7 +55,7 @@ Se state file já existe e `currentState != DONE && currentState != FAILED_ROLLB
   "lastTransitionAt": "<ISO now>",
   "featureSlug": null,
   "specPath": null, "planPath": null, "tasksPath": null, "contractsDir": null,
-  "activeTeamId": null, "activeDispatchIds": [],
+  "teammateNamePrefix": null, "activeDispatchIds": [],
   "failureCountsByStep": {}, "fixLoopIterations": 0,
   "snapshots": [],
   "humanGatesApproved": { "gate1_spec": {"approved": false}, "gate2_deploy": {"approved": false} },
@@ -114,7 +114,7 @@ Senão, crie `.soma.lock` com `{sessionId, runId, startedAt}`.
 
 ### AWAITING_HUMAN_CLARIFICATION
 
-Poll: compare `fs.stat(specPath).mtime` com `state.lastTransitionAt`. Se mtime ≥ lastTransitionAt + 10s → the user edited, reentre STEP_1A (re-check markers). Intervalo de polling: 30s. Timeout: 24h (então PushNotification ou idle).
+Poll: compare `fs.stat(specPath).mtime` com `state.lastTransitionAt`. Se mtime ≥ lastTransitionAt + 10s → the user editou, reentre STEP_1A (re-check markers). Intervalo de polling: 30s. Timeout: 24h (então PushNotification ou idle).
 
 ---
 
@@ -158,7 +158,7 @@ Poll: compare `fs.stat(specPath).mtime` com `state.lastTransitionAt`. Se mtime �
 
 **Ação:**
 1. Escreva `/tmp/soma-spec-request-{runId}` contendo paths de `specPath`, `planPath`, `tasksPath`, `contractsDir` + sumário (N ACs, N tasks, N [P], N [FOUNDATION]).
-2. Emita mensagem visível ao usuário:
+2. Emita mensagem visível ao the user:
    > **SOMA Gate 1 — Spec Approval**
    > Revise os artefatos em `{specPath}`, `{planPath}`, `{tasksPath}`.
    > Para aprovar: `touch /tmp/soma-spec-approved-{runId}`
@@ -166,23 +166,23 @@ Poll: compare `fs.stat(specPath).mtime` com `state.lastTransitionAt`. Se mtime �
 3. **Polling loop**: a cada 30s, teste existência de um dos dois markers. Timeout 24h.
 
 **Transições:**
-- `soma-spec-approved-{runId}` detectado → **snapshot-lock Constitution** → `STEP_2_TEAM`. Log `GATE1_APPROVED`.
+- `soma-spec-approved-{runId}` detectado → **snapshot-lock Constitution** → `STEP_2_TASKS`. Log `GATE1_APPROVED`.
 - `soma-spec-rejected-{runId}` detectado → leia conteúdo (opcional feedback) → `STEP_1A_SPECIFY` com contexto.
 - Timeout → PushNotification + idle hibernate (mantém state, usuário resume depois).
 
 ---
 
-## 5. STEP_2_TEAM
+## 5. STEP_2_TASKS
 
 **Ação:**
-- `TeamCreate({ name: "soma-run-{featureSlug}", description: "SOMA run {runId}" })`.
-- Persiste `activeTeamId` no state.
+- **Time implícito** (Claude Code ≥2.1.x): não há setup de team. `TeamCreate` foi removido — teammates se criam direto via `Agent({ name: "soma-{featureSlug}-T-NN", ... })` nas waves (STEP_4). Persiste `teammateNamePrefix: "soma-{featureSlug}"` no state; os names dos dispatches vão em `activeDispatchIds`.
 - Para cada task em `tasks.md`, `TaskCreate({ subject, description, ... })` com metadata `{ taskLocalId: "T-NN", spec_refs, files, parallel: bool, foundation: bool, wiring: bool }`.
 - Valide DAG: tasks com `blockedBy` não entram em Wave 1.
 
 **Transições:**
-- TeamCreate OK + DAG válido → `STEP_3_FOUNDATION`.
-- TeamCreate error **OU** agent-mode-gate bloqueou (tentar override só se the user authorized explicitly no bootstrap) → `PAUSED_DIAGNOSTIC` (snapshot com `failureReason: "team creation blocked"`).
+- TaskCreate OK + DAG válido → `STEP_3_FOUNDATION`.
+- TaskCreate error → `PAUSED_DIAGNOSTIC` (snapshot com `failureReason: "task setup blocked"`).
+- Nota: teammates com prefixo `soma-` são isentos do agent-mode-gate (R6) — um run aprovado no bootstrap não trava nas waves por causa do budget do gate. O gate/thermal ainda pode pausar nos STEP_3/4/9 (onde `Agent` roda), não neste step.
 
 ---
 
@@ -242,7 +242,7 @@ Para **cada merge candidato** (cada worktree de agent DONE):
 **Contabilidade por wave:**
 - 0 REJECT → approve all → `STEP_6_CONSOLIDATE`.
 - 1 REJECT (1ª vez) → retry agent com feedback estruturado (volta a STEP_4, mesma wave).
-- 1 REJECT (2ª vez mesma task) → ESCALATE Sonnet→Opus, re-dispatch.
+- 1 REJECT (2ª vez mesma task) → ESCALATE Sonnet→Opus, re-dispatch. (Cap: Opus. NUNCA escale pra Fable automaticamente — human gate obrigatório.)
 - 2+ REJECTs na mesma wave **OU** 3ª falha na mesma task → `PAUSED_DIAGNOSTIC` (R5).
 
 ---
@@ -254,8 +254,8 @@ Para **cada merge candidato** (cada worktree de agent DONE):
 2. **Merge FAMILY_DOC APPEND-ONLY**: se agents geraram `FAMILY_DOC.md` em seus worktrees, faça merge semantico com `{project-root}/FAMILY_DOC.md`:
    - Dedupe por `{slug}` + first-line hash (skip duplicate).
    - Detector de conflito semântico: regex negação direta entre entries de mesmo slug → flag para human review antes de commit.
-3. `SendMessage({ to: <each teammate>, message: { type: "shutdown_request", request_id, reason: "consolidate done" } })`. Aguarde `shutdown_response`.
-4. `TeamDelete({ teamId: activeTeamId })` se todos confirmaram (fallback: cleanup nuclear se idle-stuck).
+3. `SendMessage({ to: <each teammate name>, message: { type: "shutdown_request", request_id, reason: "consolidate done" } })` para cada name em `activeDispatchIds`. Aguarde `shutdown_response`.
+4. Para teammate que não responder (idle-stuck): `TaskStop` por name — equivalente direcionado do antigo TeamDelete "nuclear". Se falhar, log e prossiga: no time implícito um teammate órfão não vaza recurso estrutural (só token burn, coberto pelo TaskStop). `TeamDelete` foi removido do Claude Code.
 5. Rode build+test no repo base — **must pass** pós-merge.
 
 **Transições:**
@@ -286,7 +286,7 @@ Para **cada merge candidato** (cada worktree de agent DONE):
 ## 11. STEP_8_SONAR
 
 **Ação:**
-- Invoque `/sonar-audit {repo-path}` → despacha 5 agents read-only em paralelo (Architecture/Opus, Modules/Sonnet, Tests/Haiku, Config/Haiku, Spec-Adherence/Opus).
+- Invoque `/sonar-audit {repo-path}` → despacha 5 agents read-only em paralelo (Architecture/Opus, Modules/Sonnet, Tests/Haiku, Config/Haiku, Spec-Adherence/Opus). Cada agent com `model:` pinado explicitamente — omissão herda o modelo da main session (Fable, 2× custo).
 - Aguarde consolidação do relatório em `sonar-report-{runId}-{TS}.{md,json}`.
 - Parse JSON: `summary.critical_count`, `summary.spec_violations_count`, `findings[]`.
 
@@ -334,7 +334,7 @@ Para **cada merge candidato** (cada worktree de agent DONE):
 
 **Ação:**
 1. Escreva `/tmp/soma-deploy-request-{runId}` com PR URL + commit SHA + summary do SONAR final.
-2. Emita ao usuário:
+2. Emita ao the user:
    > **SOMA Gate 2 — Deploy Approval**
    > PR: `{pr-url}`. Commit: `{sha}`. SONAR final: 0 CRIT / 0 spec_violations.
    > Aprovar: `touch /tmp/soma-deploy-approved-{runId}`
@@ -349,7 +349,7 @@ Para **cada merge candidato** (cada worktree de agent DONE):
 
 ## 15. DEPLOY_EXECUTING
 
-**Observação v1 (Q8 out-of-scope):** The user executes deploy manually. Controller apenas aguarda confirmation marker.
+**Observação v1 (Q8 out-of-scope):** the user executa deploy manual. Controller apenas aguarda confirmation marker.
 
 **Ação:**
 - Emita: "Deploy executing. Aguardando confirmation marker: `touch /tmp/soma-deploy-success-{runId}` (ou `...-fail-{runId}`)".
@@ -368,7 +368,7 @@ Para **cada merge candidato** (cada worktree de agent DONE):
 - Delete `.soma.lock`.
 - Append final event em log: `DONE`.
 - **Mantenha** state file por 7 dias (análise post-mortem). Archive em `/tmp/soma-state-{runId}.archive.json`.
-- Emita sumário final ao usuário: steps executados, agentes dispatchados, SONAR findings resolvidos, FAMILY_DOC version bump.
+- Emita sumário final ao the user: steps executados, agentes dispatchados, SONAR findings resolvidos, FAMILY_DOC version bump.
 
 ---
 
@@ -384,7 +384,7 @@ if count == 1: RETRY
   - Volta ao step.
 
 if count == 2: ESCALATE
-  - Re-dispatch com model upgrade: Sonnet → Opus (ou Haiku → Sonnet).
+  - Re-dispatch com model upgrade: Sonnet → Opus (ou Haiku → Sonnet). Cap: Opus — Fable requer human gate.
   - Prompt inclui: "Tentativa anterior com {prev-model} falhou por {reason}".
 
 if count >= 3: STOP AND REPLAN
@@ -411,14 +411,14 @@ Polling 60s em três markers:
 ## Worked example — invocação
 
 ```
-User: /soma-run "add dark mode toggle to settings page"
+the user: /soma-run "add dark mode toggle to settings page"
 
 [IDLE → STEP_1A_SPECIFY]
   → /specify invoked
   → spec criado: specs/0004-dark-mode-settings-page/spec.md
   → 2 [NEEDS CLARIFICATION] detectados
 [STEP_1A → AWAITING_HUMAN_CLARIFICATION]
-  (the user edits spec, remove markers)
+  (the user edita spec, remove markers)
 [AWAITING_HUMAN_CLARIFICATION → STEP_1A → STEP_1B_PLAN]
   → /plan-sdd invoked
   → plan.md + contracts/toggle-api.yaml + tasks.md criados
@@ -430,10 +430,10 @@ User: /soma-run "add dark mode toggle to settings page"
 
 SOMA Gate 1 — aguardando aprovação. touch /tmp/soma-spec-approved-run-260420-1830-a1b2c3
 
-(the user approves)
+(the user aprova)
 
-[GATE1 APPROVED — Constitution v1.0.0 snapshot-locked → STEP_2_TEAM]
-  → TeamCreate soma-run-dark-mode-settings-page
+[GATE1 APPROVED — Constitution v1.0.0 snapshot-locked → STEP_2_TASKS]
+  → time implícito (sem TeamCreate); prefixo de teammates: soma-dark-mode-settings-page
   → 6 tasks criadas
 [STEP_2 → STEP_3_FOUNDATION]
   → T-01 [FOUNDATION] dispatched (Sonnet)
@@ -447,7 +447,7 @@ SOMA Gate 1 — aguardando aprovação. touch /tmp/soma-spec-approved-run-260420
   → RED phase evidence ok
 [STEP_5 → STEP_6_CONSOLIDATE]
   → merge clean, FAMILY_DOC bump v3→v4
-  → TeamDelete ok
+  → teammates finalizados (shutdown_request + TaskStop fallback)
 [STEP_6 → STEP_7_INTEGRATE]
   → T-06 [WIRING] single-agent, integration tests pass
 [STEP_7 → STEP_8_SONAR]
@@ -460,7 +460,7 @@ SOMA Gate 1 — aguardando aprovação. touch /tmp/soma-spec-approved-run-260420
 
 SOMA Gate 2 — PR #127 pronto. touch /tmp/soma-deploy-approved-run-260420-1830-a1b2c3
 
-(the user approves + executes deploy manually + touch .../soma-deploy-success-...)
+(the user aprova + executa deploy manual + touch .../soma-deploy-success-...)
 
 [DEPLOY_EXECUTING → DONE]
   Sumário: 6 tasks, 0 retries, 0 escalates, FAMILY_DOC v3→v4, 1 SONAR iteration.
@@ -470,7 +470,7 @@ SOMA Gate 2 — PR #127 pronto. touch /tmp/soma-deploy-approved-run-260420-1830-
 
 ## Gaps / deferred (canary Phase 4)
 
-- **Adapter para deploy execution** (v2): hoje the user confirms via marker manual. Futuros adapters para [project C] (VPS PM2), [project B] (npm publish), etc.
+- **Adapter para deploy execution** (v2): hoje the user confirma via marker manual. Futuros adapters para [project C] (VPS PM2), [project B] (npm publish), etc.
 - **Multi-session concurrent runs no mesmo repo** (Q7): v1 single-session; R3 mitigado por `.soma.lock`.
 - **Timeout hibernation/PushNotification**: design usa polling simples; refinar em Phase 4 canary com dogfood real.
 - **PAUSED_DIAGNOSTIC continue com hint estruturado**: hoje hint é opcional; Phase 4 pode formalizar schema.

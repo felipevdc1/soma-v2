@@ -1,9 +1,9 @@
-# SOMA Constitution v1.0.0
+# SOMA Constitution v1.2.0
 
-**Versão:** 1.0.0
-**Data:** 2026-04-19
+**Versão:** 1.2.0
+**Data:** 2026-04-19 (amendments: 1.1.0 era-Fable 2026-07-02; 1.2.0 time implícito 2026-07-03 — ver `constitution-amendments/`)
 **Status:** Ratified 2026-05-05
-**Escopo:** Governa toda run do SOMA Executor Autônomo. Aplica-se ao orchestrator (Opus), aos executores (Sonnet/Haiku) e aos auditores SONAR.
+**Escopo:** Governa toda run do SOMA Executor Autônomo. Aplica-se ao orchestrator (main model — Fable 5+; antes Opus), aos executores (Sonnet/Haiku) e aos auditores SONAR. Todo dispatch DEVE pinar `model:` explicitamente; omissão herda o modelo da main session (Fable, 2× Opus em custo) — violação.
 
 ---
 
@@ -35,7 +35,7 @@ A Constitution é um **documento vivo** — ver Epílogo para o Amendment Protoc
 ## Article I — Spec as Source of Truth
 
 ### (a) Statement
-Toda feature executada pelo SOMA DEVE ter um `spec.md` aprovado antes de Step 2 (TEAM). O código SERVE à spec, não o inverso. Divergência entre código e spec = defeito do código, nunca da spec. Se spec está errada, abre-se emenda de spec via Gate 1 (re-approval humano), não patch direto de código.
+Toda feature executada pelo SOMA DEVE ter um `spec.md` aprovado antes de Step 2 (TASKS). O código SERVE à spec, não o inverso. Divergência entre código e spec = defeito do código, nunca da spec. Se spec está errada, abre-se emenda de spec via Gate 1 (re-approval humano), não patch direto de código.
 
 ### (b) Rationale
 Failure Mode #3 do CLAUDE.md ("Assumed understanding") é o modo de falha mais caro empiricamente — Claude tende a pattern-matchar intenção sem verificar. Spec.md formal + acceptance criteria numerados (AC-01, AC-02, ...) removem a assumption silenciosa, forçando articulação. Deriva-se também da observação de Fowler/Böckeler: "profession struggles with separating functional from technical requirements" — o spec é o artefato que força essa separação.
@@ -73,7 +73,7 @@ Referência: Spec Kit Article III; CLAUDE.md Failure Mode #4; `superpowers:test-
 
 ### (d) Violation handling
 - Step 5 detecta teste sem RED evidence → **REJECT** merge + retry com agente sendo instruído a refazer no worktree seguindo TDD estrito.
-- 2 retries falham → ESCALATE modelo (Sonnet → Opus) por Recovery Protocol.
+- 2 retries falham → ESCALATE modelo (Sonnet → Opus) por Recovery Protocol. Escalation cap é Opus; Fable requer human gate (amendment 1.1.0).
 - 3 falhas → STOP AND REPLAN (Article X).
 
 ---
@@ -137,7 +137,7 @@ Hardware-level: Brunão (Mac user) reportou que compilar em paralelo frita o Mac
 Referência: `feedback_thermal_guard.md`; `reference_orchestrator_template.md`.
 
 ### (c) Enforcement mechanism (HARD)
-- **Hook `thermal-guard.cjs`** (a criar — Fase 3.1; PreToolUse em `Agent` e `TeamCreate`):
+- **Hook `thermal-guard.cjs`** (existente; PreToolUse em `Agent`; slot liberado no término real via hook `SubagentStop` → `subagent-stop-thermal.cjs`, remoção FIFO — TTL 15min vira fallback):
   - Classifica agentes in-flight por keyword matching no prompt.
   - `compile_test_count >= 3` + novo agente compile/test → exit 2.
   - Read-only sempre passa.
@@ -200,7 +200,7 @@ Referência: Spec Kit Article VII + VIII; CLAUDE.md Failure Mode #4.
 ## Article VIII — FAMILY_DOC Persistence
 
 ### (a) Statement
-Todo team / subagent DEVE receber o FAMILY_DOC do projeto (`{project}/FAMILY_DOC.md`, persistente) no contexto. Teams mantêm adicionalmente um FAMILY_DOC próprio (`~/.claude/teams/{team}/FAMILY_DOC.md`, temporário). Ao final da consolidação (Step 6), o team-lead DEVE mergear learnings novos do team doc no project doc (Patterns | Pitfalls | Decisions | Sessions).
+Todo teammate (`Agent name:`) / subagent DEVE receber o FAMILY_DOC do projeto (`{project}/FAMILY_DOC.md`, persistente) no contexto. O time implícito da sessão mantém adicionalmente um FAMILY_DOC próprio (`~/.claude/teams/{team}/FAMILY_DOC.md`, temporário). Ao final da consolidação (Step 6), o orchestrator DEVE mergear learnings novos do team doc no project doc (Patterns | Pitfalls | Decisions | Sessions).
 
 ### (b) Rationale
 Sem FAMILY_DOC persistente, cada nova run parte do zero — learnings de "YAML dos agentes precisa de parser progressivo" são redescobertos. Com, acumulam cross-session. Empirical: [project B] Phase 1 rodou sem FAMILY_DOC populado; Phase 2 rodará com ele.
@@ -210,7 +210,7 @@ Referência: `feedback_family_doc.md`; `reference_orchestrator_template.md`.
 ### (c) Enforcement mechanism (HARD para injeção, SOFT para merge)
 - **Hook `subagent-init.cjs`** (existente, estender na Fase 3.2):
   - Detecta `{CWD}/FAMILY_DOC.md` → injeta relevant section (~500 tokens max) no prompt.
-  - Detecta `name@team-name` → injeta instrução leitura+escrita do team doc.
+  - Detecta `name@team-name` no agentId (teammate nomeado no time implícito) → injeta instrução leitura+escrita do team doc.
   - SEMPRE injeta Constitution articles.
 - **Step 6 CONSOLIDATE** roda validator `family-doc-merge` (a criar, parte da Fase 3.2 extend):
   - Lê team doc + project doc.
@@ -228,7 +228,7 @@ Referência: `feedback_family_doc.md`; `reference_orchestrator_template.md`.
 
 ### (a) Statement
 SOMA tem **exatamente 2 gates humanos obrigatórios**:
-1. **Gate 1 — Spec Approval**: após Step 1c (TASKS), antes de Step 2 (TEAM). The user approves `spec.md` + `plan.md` + `contracts/` + `tasks.md`. Marker: `/tmp/soma-spec-approved-{runId}`.
+1. **Gate 1 — Spec Approval**: após Step 1c (TASKS), antes de Step 2 (TASKS — task setup). The user approves `spec.md` + `plan.md` + `contracts/` + `tasks.md`. Marker: `/tmp/soma-spec-approved-{runId}`.
 2. **Gate 2 — Deploy Approval**: após Step 10 (COMMIT), antes de deploy prod. The user approves commit/PR. Marker: `/tmp/soma-deploy-approved-{runId}`.
 
 Controller PAUSA em estados `AWAITING_SPEC_APPROVAL` e `AWAITING_DEPLOY_APPROVAL` respectivamente. **Nenhum outro gate humano é obrigatório** — tudo entre os dois gates roda autônomo (sujeito a PAUSED_DIAGNOSTIC em falha não-recuperável, Article X).
@@ -251,7 +251,7 @@ Referência: `onde-t-salvo-os-idempotent-robin.md` §Human Gates.
 ## Article X — Stop and Replan
 
 ### (a) Statement
-Quando primitivas detectam **3 falhas consecutivas** no mesmo step (mesmo task, mesmo agente ou after ESCALATE), controller transita pra `PAUSED_DIAGNOSTIC` com snapshot estruturado e PARA. Retry automático não é permitido além de 2 tentativas por step (1 retry + 1 escalate Sonnet→Opus). 3ª falha = decisão humana.
+Quando primitivas detectam **3 falhas consecutivas** no mesmo step (mesmo task, mesmo agente ou after ESCALATE), controller transita pra `PAUSED_DIAGNOSTIC` com snapshot estruturado e PARA. Retry automático não é permitido além de 2 tentativas por step (1 retry + 1 escalate Sonnet→Opus; escalation cap é Opus — escalate pra Fable NUNCA é automático, requer human gate). 3ª falha = decisão humana.
 
 ### (b) Rationale
 Regra R5 do 10-step workflow. Adaptado com 2-layer Recovery Protocol do CLAUDE.md: 1ª falha retry com feedback, 2ª falha escalate modelo, 3ª falha stop. Previne loop infinito de retry — "3 fixes failing = approach is wrong, not the attempt" (Brunão). Também implementa Failure Mode #5 ("Action bias") como guard estrutural: `soma-run` bloqueia action quando thinking is needed.

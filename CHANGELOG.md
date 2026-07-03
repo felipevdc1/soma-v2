@@ -5,6 +5,25 @@ All notable changes to SOMA v2.1 will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.2] - 2026-07-03
+
+### Changed
+
+- **Implicit-team model migration** (Claude Code 2.1.199 removed `TeamCreate`/`TeamDelete`; teammates are now spawned via the Agent tool's `name` parameter — implicit per-session team):
+  - `hooks/agent-mode-gate.cjs` — rewritten name-aware: 2-axis 4h dispatch budget (anonymous subagents cap 3 / distinct named teammates cap 8; repeat names free; `soma-` prefix exempt). Messages no longer recommend the removed `TeamCreate`.
+  - `hooks/thermal-guard.cjs` — removed `'apply'` false-positive keyword and dead `team_name` fallback; matcher is `Agent` only.
+  - **New hook `hooks/subagent-stop-thermal.cjs`** (`SubagentStop` event) — releases the thermal slot on real agent termination (FIFO; the 15min TTL becomes a fallback). Fixes false-positive thermal blocks.
+  - `commands/soma-run.md` (+ `core/adapters` mirror) — STEP_2_TEAM → STEP_2_TASKS; `activeTeamId` → `teammateNamePrefix`; STEP_6 layered cleanup (`SendMessage shutdown_request` → `TaskStop` → log) replaces `TeamDelete`.
+  - `commands/plan-sdd.md` (+ mirror) — Step 2 wording updated to named teammates.
+  - `install/soma-hooks-map.json` — thermal matcher `Agent|TeamCreate` → `Agent`; new `SubagentStop` entry registering `subagent-stop-thermal.cjs`.
+  - `core/docs/constitution.md` — **Constitution 1.2.0** (amendment `core/docs/constitution-amendments/1.2.0-implicit-teams.md`; also ships the previously missing `1.1.0-fable-era-topology.md`). Articles I, V, VIII, IX updated to the implicit-team model.
+  - Docs (`ARCHITECTURE.md`, `QUICKSTART.md`, `crescer-limpo.md`) aligned.
+
+### Upgrade notes
+
+- On machines with a previous install, `merge-settings.cjs` dedupes by command path, so the stale `Agent|TeamCreate` matcher entry in existing `settings.json` is kept as-is — harmless (the regex still matches `Agent`). The new `SubagentStop` entry IS added. `rsync` replaces the hook files themselves, so all machines get the name-aware gate + slot release on re-install.
+- `VERSION` file was stale at 2.1.0 (CHANGELOG already had 2.1.1); both now read 2.1.2.
+
 ## [2.1.1] - 2026-05-06
 
 ### BREAKING

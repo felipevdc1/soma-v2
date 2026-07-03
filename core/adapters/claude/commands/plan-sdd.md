@@ -164,7 +164,7 @@ Apresentar ao usuário:
 ### Próximo passo
 Revisar artefatos e aprovar via:
   touch /tmp/soma-spec-approved-{runId}
-Após aprovação, prosseguir com Step 2 TEAM (TeamCreate ou /dispatch).
+Após aprovação, prosseguir com Step 2 TASKS (task setup + teammates nomeados via Agent name: ou /dispatch).
 ```
 
 ---

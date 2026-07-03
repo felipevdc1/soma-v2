@@ -42,7 +42,7 @@ Se state file já existe e `currentState != DONE && currentState != FAILED_ROLLB
   "lastTransitionAt": "<ISO now>",
   "featureSlug": null,
   "specPath": null, "planPath": null, "tasksPath": null, "contractsDir": null,
-  "activeTeamId": null, "activeDispatchIds": [],
+  "teammateNamePrefix": null, "activeDispatchIds": [],
   "failureCountsByStep": {}, "fixLoopIterations": 0,
   "snapshots": [],
   "humanGatesApproved": { "gate1_spec": {"approved": false}, "gate2_deploy": {"approved": false} },
@@ -153,23 +153,23 @@ Poll: compare `fs.stat(specPath).mtime` com `state.lastTransitionAt`. Se mtime �
 3. **Polling loop**: a cada 30s, teste existência de um dos dois markers. Timeout 24h.
 
 **Transições:**
-- `soma-spec-approved-{runId}` detectado → **snapshot-lock Constitution** → `STEP_2_TEAM`. Log `GATE1_APPROVED`.
+- `soma-spec-approved-{runId}` detectado → **snapshot-lock Constitution** → `STEP_2_TASKS`. Log `GATE1_APPROVED`.
 - `soma-spec-rejected-{runId}` detectado → leia conteúdo (opcional feedback) → `STEP_1A_SPECIFY` com contexto.
 - Timeout → PushNotification + idle hibernate (mantém state, usuário resume depois).
 
 ---
 
-## 5. STEP_2_TEAM
+## 5. STEP_2_TASKS
 
 **Ação:**
-- `TeamCreate({ name: "soma-run-{featureSlug}", description: "SOMA run {runId}" })`.
-- Persiste `activeTeamId` no state.
+- **Time implícito** (Claude Code ≥2.1.x): não há setup de team. `TeamCreate` foi removido — teammates se criam direto via `Agent({ name: "soma-{featureSlug}-T-NN", ... })` nas waves (STEP_4). Persiste `teammateNamePrefix: "soma-{featureSlug}"` no state; os names dos dispatches vão em `activeDispatchIds`.
 - Para cada task em `tasks.md`, `TaskCreate({ subject, description, ... })` com metadata `{ taskLocalId: "T-NN", spec_refs, files, parallel: bool, foundation: bool, wiring: bool }`.
 - Valide DAG: tasks com `blockedBy` não entram em Wave 1.
 
 **Transições:**
-- TeamCreate OK + DAG válido → `STEP_3_FOUNDATION`.
-- TeamCreate error **OU** agent-mode-gate bloqueou (tentar override só se the user autorizou explicitamente no bootstrap) → `PAUSED_DIAGNOSTIC` (snapshot com `failureReason: "team creation blocked"`).
+- TaskCreate OK + DAG válido → `STEP_3_FOUNDATION`.
+- TaskCreate error → `PAUSED_DIAGNOSTIC` (snapshot com `failureReason: "task setup blocked"`).
+- Nota: teammates com prefixo `soma-` são isentos do agent-mode-gate (R6) — um run aprovado no bootstrap não trava nas waves por causa do budget do gate. O gate/thermal ainda pode pausar nos STEP_3/4/9 (onde `Agent` roda), não neste step.
 
 ---
 
@@ -229,7 +229,7 @@ Para **cada merge candidato** (cada worktree de agent DONE):
 **Contabilidade por wave:**
 - 0 REJECT → approve all → `STEP_6_CONSOLIDATE`.
 - 1 REJECT (1ª vez) → retry agent com feedback estruturado (volta a STEP_4, mesma wave).
-- 1 REJECT (2ª vez mesma task) → ESCALATE Sonnet→Opus, re-dispatch.
+- 1 REJECT (2ª vez mesma task) → ESCALATE Sonnet→Opus, re-dispatch. (Cap: Opus. NUNCA escale pra Fable automaticamente — human gate obrigatório.)
 - 2+ REJECTs na mesma wave **OU** 3ª falha na mesma task → `PAUSED_DIAGNOSTIC` (R5).
 
 ---
@@ -241,8 +241,8 @@ Para **cada merge candidato** (cada worktree de agent DONE):
 2. **Merge FAMILY_DOC APPEND-ONLY**: se agents geraram `FAMILY_DOC.md` em seus worktrees, faça merge semantico com `{project-root}/FAMILY_DOC.md`:
    - Dedupe por `{slug}` + first-line hash (skip duplicate).
    - Detector de conflito semântico: regex negação direta entre entries de mesmo slug → flag para human review antes de commit.
-3. `SendMessage({ to: <each teammate>, message: { type: "shutdown_request", request_id, reason: "consolidate done" } })`. Aguarde `shutdown_response`.
-4. `TeamDelete({ teamId: activeTeamId })` se todos confirmaram (fallback: cleanup nuclear se idle-stuck).
+3. `SendMessage({ to: <each teammate name>, message: { type: "shutdown_request", request_id, reason: "consolidate done" } })` para cada name em `activeDispatchIds`. Aguarde `shutdown_response`.
+4. Para teammate que não responder (idle-stuck): `TaskStop` por name — equivalente direcionado do antigo TeamDelete "nuclear". Se falhar, log e prossiga: no time implícito um teammate órfão não vaza recurso estrutural (só token burn, coberto pelo TaskStop). `TeamDelete` foi removido do Claude Code.
 5. Rode build+test no repo base — **must pass** pós-merge.
 
 **Transições:**
@@ -273,7 +273,7 @@ Para **cada merge candidato** (cada worktree de agent DONE):
 ## 11. STEP_8_SONAR
 
 **Ação:**
-- Invoque `/sonar-audit {repo-path}` → despacha 5 agents read-only em paralelo (Architecture/Opus, Modules/Sonnet, Tests/Haiku, Config/Haiku, Spec-Adherence/Opus).
+- Invoque `/sonar-audit {repo-path}` → despacha 5 agents read-only em paralelo (Architecture/Opus, Modules/Sonnet, Tests/Haiku, Config/Haiku, Spec-Adherence/Opus). Cada agent com `model:` pinado explicitamente — omissão herda o modelo da main session (Fable, 2× custo).
 - Aguarde consolidação do relatório em `sonar-report-{runId}-{TS}.{md,json}`.
 - Parse JSON: `summary.critical_count`, `summary.spec_violations_count`, `findings[]`.
 
@@ -371,7 +371,7 @@ if count == 1: RETRY
   - Volta ao step.
 
 if count == 2: ESCALATE
-  - Re-dispatch com model upgrade: Sonnet → Opus (ou Haiku → Sonnet).
+  - Re-dispatch com model upgrade: Sonnet → Opus (ou Haiku → Sonnet). Cap: Opus — Fable requer human gate.
   - Prompt inclui: "Tentativa anterior com {prev-model} falhou por {reason}".
 
 if count >= 3: STOP AND REPLAN
@@ -419,8 +419,8 @@ SOMA Gate 1 — aguardando aprovação. touch /tmp/soma-spec-approved-run-260420
 
 (the user aprova)
 
-[GATE1 APPROVED — Constitution v1.0.0 snapshot-locked → STEP_2_TEAM]
-  → TeamCreate soma-run-dark-mode-settings-page
+[GATE1 APPROVED — Constitution v1.0.0 snapshot-locked → STEP_2_TASKS]
+  → time implícito (sem TeamCreate); prefixo de teammates: soma-dark-mode-settings-page
   → 6 tasks criadas
 [STEP_2 → STEP_3_FOUNDATION]
   → T-01 [FOUNDATION] dispatched (Sonnet)
@@ -434,7 +434,7 @@ SOMA Gate 1 — aguardando aprovação. touch /tmp/soma-spec-approved-run-260420
   → RED phase evidence ok
 [STEP_5 → STEP_6_CONSOLIDATE]
   → merge clean, FAMILY_DOC bump v3→v4
-  → TeamDelete ok
+  → teammates finalizados (shutdown_request + TaskStop fallback)
 [STEP_6 → STEP_7_INTEGRATE]
   → T-06 [WIRING] single-agent, integration tests pass
 [STEP_7 → STEP_8_SONAR]

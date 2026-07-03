@@ -8,9 +8,9 @@
  * Logic:
  *   - Exempt types (explore, plan, etc.) → allow (exit 0), no marker created
  *   - Override marker present + valid → allow, create marker for counting history
- *   - standaloneCount >= MAX_STANDALONE (standalone new call) → BLOCK (exit 2)
- *   - teamCount >= MAX_TEAMS (new distinct team) → BLOCK (exit 2)
- *   - Otherwise → create marker with team_name → allow (exit 0)
+ *   - anonCount >= MAX_ANON (novo Agent sem name) → BLOCK (exit 2)
+ *   - namedCount >= MAX_NAMED (novo name distinto) → BLOCK (exit 2)
+ *   - Otherwise → create marker with name → allow (exit 0)
  *
  * State: marker files in /tmp/claude-agent-gate-{sessionId}-{N}.marker
  * Override: /tmp/claude-agent-gate-{sessionId}.override
@@ -35,8 +35,8 @@ const EXEMPT_TYPES = new Set([
 const MARKER_PREFIX = 'claude-agent-gate-';
 const MARKER_MAX_AGE_MS = 4 * 60 * 60 * 1000; // 4 hours
 
-const MAX_STANDALONE = 3;
-const MAX_TEAMS = 3;
+const MAX_ANON = 3;    // Agent sem `name` — subagents anônimos descartáveis (fan-out descoordenado)
+const MAX_NAMED = 8;   // Agent com `name` — teammates nomeados do time implícito (modelo novo)
 
 function getSessionId() {
   return process.env.CK_SESSION_ID || process.env.CLAUDE_SESSION_ID || `pid-${process.ppid}`;
@@ -53,8 +53,8 @@ function getMarkerPattern(sessionId) {
 function computeCounts(sessionId) {
   const prefix = getMarkerPattern(sessionId);
   const tmpDir = os.tmpdir();
-  const teamSet = new Set();
-  let standaloneCount = 0;
+  const nameSet = new Set();
+  let anonCount = 0;
 
   try {
     const files = fs.readdirSync(tmpDir);
@@ -80,21 +80,22 @@ function computeCounts(sessionId) {
         continue;
       }
 
-      // Parse marker content to get team_name
-      let teamName = null;
+      // Parse marker content: modelo novo usa `name`; compat com markers antigos `team_name`.
+      let name = null;
       try {
         const raw = fs.readFileSync(filePath, 'utf-8');
         const parsed = JSON.parse(raw);
-        teamName = parsed.team_name !== undefined ? parsed.team_name : null;
+        name = parsed.name !== undefined ? parsed.name
+             : (parsed.team_name !== undefined ? parsed.team_name : null);
       } catch (_) {
-        // Backward compat: unparseable marker = treat as standalone
-        console.warn(`[agent-gate] warn: could not parse marker ${file}, treating as standalone`);
+        // Backward compat: unparseable marker = treat as anonymous
+        console.warn(`[agent-gate] warn: could not parse marker ${file}, treating as anonymous`);
       }
 
-      if (teamName) {
-        teamSet.add(teamName);
+      if (name) {
+        nameSet.add(name);
       } else {
-        standaloneCount++;
+        anonCount++;
       }
     }
   } catch (_) {
@@ -102,9 +103,9 @@ function computeCounts(sessionId) {
   }
 
   return {
-    teamCount: teamSet.size,
-    standaloneCount,
-    activeTeams: Array.from(teamSet),
+    namedCount: nameSet.size,
+    anonCount,
+    activeNames: Array.from(nameSet),
   };
 }
 
@@ -134,9 +135,9 @@ function checkOverride(sessionId) {
 }
 
 /**
- * Cria marker file com team_name (ou null para standalone).
+ * Cria marker file com name (ou null para anônimo).
  */
-function createMarker(sessionId, { team_name }) {
+function createMarker(sessionId, { name }) {
   const tmpDir = os.tmpdir();
   // Count existing markers to determine N
   const prefix = getMarkerPattern(sessionId);
@@ -152,7 +153,7 @@ function createMarker(sessionId, { team_name }) {
     fs.writeFileSync(markerPath, JSON.stringify({
       created: new Date().toISOString(),
       sessionId,
-      team_name: team_name || null,
+      name: name || null,
     }));
   } catch (_) {
     // Fail silently — don't break the hook
@@ -167,13 +168,13 @@ async function main() {
     const payload = JSON.parse(stdin);
     const toolInput = payload.tool_input || {};
     const subagentType = (toolInput.subagent_type || 'general-purpose').toLowerCase();
-    const teamName = toolInput.team_name || null; // undefined → null
+    const agentName = toolInput.name || null; // modelo novo: `name` = teammate nomeado do time implícito
 
     // 1. Exempt types: allow with light reminder, NO marker created
     if (EXEMPT_TYPES.has(subagentType)) {
       console.log(
         `[agent-gate] Tipo isento: ${subagentType}. ` +
-        `Lembrete: se forem 2+ tasks paralelas de implementação, use TeamCreate.`
+        `Lembrete: se forem 2+ tasks paralelas de implementação, dê name: aos teammates (Agent name:).`
       );
       process.exit(0);
     }
@@ -184,39 +185,49 @@ async function main() {
 
     // 2. Check override — if active, allow and still create marker for counting history
     if (checkOverride(sessionId)) {
-      createMarker(sessionId, { team_name: teamName });
+      createMarker(sessionId, { name: agentName });
       const counts = computeCounts(sessionId);
       console.log(
         `[agent-gate] override ativo — bypass autorizado pelo the user. ` +
-        `teams=${counts.teamCount}/${MAX_TEAMS}, standalone=${counts.standaloneCount}/${MAX_STANDALONE}`
+        `named=${counts.namedCount}/${MAX_NAMED}, anon=${counts.anonCount}/${MAX_ANON}`
       );
+      process.exit(0);
+    }
+
+    // R6: teammates de /soma-run autônomo (prefixo `soma-`) são isentos do budget do gate.
+    // Um run aprovado no bootstrap não deve travar no meio por causa do cap de names.
+    if (agentName && agentName.startsWith('soma-')) {
+      createMarker(sessionId, { name: agentName });
+      console.log(`[agent-gate] isento (soma-run teammate): ${agentName}`);
       process.exit(0);
     }
 
     // 3. Compute counts
     const counts = computeCounts(sessionId);
-    const { teamCount, standaloneCount, activeTeams } = counts;
+    const { namedCount, anonCount, activeNames } = counts;
 
-    // 4. Block standalone if limit reached
-    if (!teamName && standaloneCount >= MAX_STANDALONE) {
+    // 4. Block anonymous subagents if the anon budget is reached (janela de 4h)
+    if (!agentName && anonCount >= MAX_ANON) {
       console.error(
-        `\n\x1b[31mBLOQUEADO\x1b[0m: ${MAX_STANDALONE}º subagent standalone detectado.\n\n` +
-        `  Você já tem ${standaloneCount} subagents standalone ativos nesta sessão.\n` +
-        `  Isso sugere que o trabalho é paralelo — use TeamCreate em vez de subagents soltos.\n\n` +
+        `\n\x1b[31mBLOQUEADO\x1b[0m: ${MAX_ANON}º subagent anônimo nesta janela.\n\n` +
+        `  Você já disparou ${anonCount} subagents anônimos (sem name) nas últimas 4h.\n` +
+        `  Fan-out paralelo? Dê name: aos teammates (Agent name:) — são endereçáveis e contam\n` +
+        `  noutro eixo (até ${MAX_NAMED}). Ou continue um agente existente via SendMessage.\n\n` +
         `  Se a autorização do the user liberar: peça "destrava o gate" e rode:\n` +
         `    touch ${overridePath}\n`
       );
       process.exit(2);
     }
 
-    // 5. Block new team if team limit reached
-    const isNewTeam = teamName && !activeTeams.includes(teamName);
-    if (isNewTeam && teamCount >= MAX_TEAMS) {
-      const teamsDisplay = activeTeams.length > 0 ? activeTeams.join(', ') : '(nenhum)';
+    // 5. Block new named teammate if the named budget is reached
+    const isNewName = agentName && !activeNames.includes(agentName);
+    if (isNewName && namedCount >= MAX_NAMED) {
+      const namesDisplay = activeNames.length > 0 ? activeNames.join(', ') : '(nenhum)';
       console.error(
-        `\n\x1b[31mBLOQUEADO\x1b[0m: ${MAX_TEAMS}º team paralelo detectado.\n\n` +
-        `  Teams ativos: ${teamsDisplay}\n` +
-        `  Rodar mais que ${MAX_TEAMS - 1} teams em paralelo quase sempre é depth decay.\n\n` +
+        `\n\x1b[31mBLOQUEADO\x1b[0m: ${MAX_NAMED}º teammate nomeado distinto nesta janela.\n\n` +
+        `  Nomes ativos: ${namesDisplay}\n` +
+        `  Mais que ${MAX_NAMED} teammates distintos em 4h quase sempre é depth decay —\n` +
+        `  reuse um teammate existente via SendMessage em vez de spawnar outro nome.\n\n` +
         `  Se a autorização do the user liberar: peça "destrava o gate" e rode:\n` +
         `    touch ${overridePath}\n`
       );
@@ -224,12 +235,12 @@ async function main() {
     }
 
     // 6. Allow — create marker and report
-    createMarker(sessionId, { team_name: teamName });
+    createMarker(sessionId, { name: agentName });
     // Re-compute after creating to get accurate post-create count
     const updatedCounts = computeCounts(sessionId);
-    const context = teamName ? `team=${teamName}` : 'standalone';
+    const context = agentName ? `named=${agentName}` : 'anon';
     console.log(
-      `[agent-gate] ${context}: teams=${updatedCounts.teamCount}/${MAX_TEAMS}, standalone=${updatedCounts.standaloneCount}/${MAX_STANDALONE}`
+      `[agent-gate] ${context}: named=${updatedCounts.namedCount}/${MAX_NAMED}, anon=${updatedCounts.anonCount}/${MAX_ANON}`
     );
     process.exit(0);
 

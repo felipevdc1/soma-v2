@@ -1,6 +1,6 @@
 {
   "schema": "soma-hooks-map/v1",
-  "version": "2.1.0",
+  "version": "2.1.2",
   "hooks": {
     "UserPromptSubmit": [
       {
@@ -27,7 +27,7 @@
         ]
       },
       {
-        "matcher": "Agent|TeamCreate",
+        "matcher": "Agent",
         "hooks": [
           {
             "type": "command",
@@ -155,6 +155,17 @@
           {
             "type": "command",
             "command": "node \"${CLAUDE_HOME}/hooks/insight-action-coupling.cjs\""
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_HOME}/hooks/subagent-stop-thermal.cjs\""
           }
         ]
       }

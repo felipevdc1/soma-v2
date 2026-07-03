@@ -112,7 +112,7 @@ After a SOMA run, here is what exists on disk:
 
 ### Parallel team dispatch
 
-When your spec has 3+ independent components, `/soma:run` automatically uses `TeamCreate` to dispatch parallel agents. Thermal Guard limits simultaneous compile/test agents to 3 to avoid CPU contention.
+When your spec has 3+ independent components, `/soma:run` automatically dispatches parallel agents as **named teammates** (`Agent` tool with `name:` — every session has an implicit team; Claude Code 2.1.199 removed `TeamCreate`/`TeamDelete`). Thermal Guard limits simultaneous compile/test agents to 3 to avoid CPU contention.
 
 ### Single targeted dispatch
 

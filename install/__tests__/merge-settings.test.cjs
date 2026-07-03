@@ -41,7 +41,7 @@ const FULL_MAP = {
         hooks: [{ type: 'command', command: 'node "${CLAUDE_HOME}/hooks/pre-commit-gate.cjs"' }]
       },
       {
-        matcher: 'Agent|TeamCreate',
+        matcher: 'Agent',
         hooks: [{ type: 'command', command: 'node "${CLAUDE_HOME}/hooks/thermal-guard.cjs"' }]
       }
     ],

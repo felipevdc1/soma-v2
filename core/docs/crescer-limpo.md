@@ -47,7 +47,7 @@ Each parallel agent operates in isolated git worktree. Merge happens only after 
 | 1. DEFINIR BASE | Step 0 (SPECIFY) + /specify command | `/specify "feature description"` → spec.md with ACs |
 | 2. CRESCER LIMPO | Step 4 (FOUNDATION) | First task implemented + tested cleanly before next |
 | 3. VALIDAR TUDO CLEAN | Step 5 (VALIDATE) + Step 8 (SONAR) | Tests + 5-territory sonar audit |
-| 4. EXPANDIR COM AGENTES | Step 6 (WAVES) + TeamCreate + thermal-guard | Parallel Sonnets in worktrees |
+| 4. EXPANDIR COM AGENTES | Step 6 (WAVES) + named teammates (`Agent name:`) + thermal-guard | Parallel Sonnets in worktrees |
 | 5. INTEGRAR SEM QUEBRAR | Step 9 (INTEGRATE) | Sequential merge with validation gates |
 | 6. PRÓXIMA ETAPA | Step 10 (COMMIT) → next feature | git commit + handoff for next session/feature |
 
