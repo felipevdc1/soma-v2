@@ -1,7 +1,7 @@
 {
   "name": "soma",
-  "version": "2.2.0",
-  "description": "SOMA v2.1 — Spec-Test-Steps-Driven orchestration framework",
+  "version": "2.3.0",
+  "description": "SOMA — Spec-Test-Steps-Driven orchestration framework",
   "license": "MIT",
   "author": "Felipe Carneiro",
   "contributors": [

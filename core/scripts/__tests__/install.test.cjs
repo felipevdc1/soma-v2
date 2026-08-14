@@ -532,9 +532,12 @@ test('T-08bis-S1: AC-01b project-bootloader block contains all required literal 
       !content.includes('{{version}}'),
       `[RED — T-08bis] AC-01b: {{version}} must be resolved in CLAUDE.md. Content: ${content.slice(0, 600)}`
     );
+    const repoPkgVersion = JSON.parse(
+      fs.readFileSync(path.join(SCRIPTS_DIR, '..', '..', 'package.json'), 'utf8')
+    ).version;
     assert.ok(
-      content.includes('2.2.0'),
-      `[RED — T-08bis] AC-01b: version 2.2.0 must appear in CLAUDE.md. Content: ${content.slice(0, 600)}`
+      content.includes(repoPkgVersion),
+      `[RED — T-08bis] AC-01b: repo version ${repoPkgVersion} must appear in CLAUDE.md. Content: ${content.slice(0, 600)}`
     );
 
     // {{harness}} must be resolved to 'claude'

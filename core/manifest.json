@@ -1,7 +1,7 @@
 {
   "schema": "soma-manifest/v1",
-  "version": "2.1.0",
-  "release": "soma-v2.1-lab-mvp",
+  "version": "2.3.0",
+  "release": "soma-v3-fase0",
   "files": [
     {
       "id": "core.constitution",

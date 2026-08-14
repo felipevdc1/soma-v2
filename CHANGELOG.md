@@ -1,9 +1,33 @@
 # Changelog
 
-All notable changes to SOMA v2.1 will be documented in this file.
+All notable changes to SOMA will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+> **Semver vs. "SOMA v3":** o `v3` das fases (Fase 0–5 do desenho em
+> `~/Documents/- forge/framework/08-desenho-soma-v3.md`) é a **geração conceitual** do framework, não o
+> semver deste repositório. O repo segue semver normal a partir de `2.3.0`. Não existe e não haverá uma
+> tag `v3.0.0` só por causa do nome do desenho — quando houver, será por breaking change de verdade.
+
+## [2.3.0] - 2026-08-14 — Fase 0 SOMA v3 (housekeeping + D23/D24)
+
+### Fixed
+
+- **Deriva de versão de 4 vias reconciliada** (F0.1). Antes: `VERSION`=2.1.2 · `package.json`=2.2.0 ·
+  `core/manifest.json`=2.1.0 · última tag=`v2.2.4`. Agora as quatro convergem em **2.3.0** (próxima minor
+  após a maior referência real, `v2.2.4`). Também corrigidos 2 rótulos stale de mesma origem:
+  `package.json.description` ("SOMA v2.1 —" → "SOMA —") e `core/manifest.json.release`
+  ("soma-v2.1-lab-mvp" → "soma-v3-fase0"). Verificado antes da troca que nenhum script consome
+  `manifest.version`/`manifest.release` (`install.cjs` lê `package.json`; os `attrs.version` do `sync.cjs`
+  são de doc-blocks ancorados, entidade distinta).
+
+### Notes
+
+- Fase 0 completa cobre F0.1–F0.9. Esta entrada é atualizada conforme cada task fecha.
+- Terreno re-verificado em 2026-08-14 contra o ground-truth de 2026-07-06 (`09-plano` §C): intacto,
+  com 3 divergências corrigidas no plano (36 hooks registrados em vez de 34; `handoff-forge.md`
+  inexistente; F0.8/F0.9 criadas).
 
 ## [2.1.2] - 2026-07-03
 
