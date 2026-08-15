@@ -40,15 +40,9 @@ AC-1: User can log in
 AC-2: User can log out
 `;
 
-// v3 preflight hotfix: markers realigned to their own bullet line (the
-// actual "Open Questions" convention — see templates/spec.md) instead of
-// trailing an AC line inline. Same 2-marker, block-on-commit semantics;
-// position matters now because the gate only counts open-position markers.
 const SPEC_WITH_MARKERS = `
-AC-1: User can log in
-- [NEEDS CLARIFICATION: which provider?]
-AC-2: User can log out
-- [NEEDS CLARIFICATION: session timeout?]
+AC-1: User can log in [NEEDS CLARIFICATION: which provider?]
+AC-2: User can log out [NEEDS CLARIFICATION: session timeout?]
 `;
 
 const TASKS_ALL_COVERED = `
@@ -422,5 +416,46 @@ test('26. Open-position: marker in open checklist item ("- [ ] [NEEDS CLARIFICAT
   const r = run('git commit -m "feat: x"');
   cleanup();
   assert.equal(r.status, 2, `Expected exit 2 (checklist-item marker counts), got ${r.status}. stderr: ${r.stderr}`);
+  assert.match(r.stderr, /SPEC INCOMPLETE: 1 marker open/);
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// v3 preflight hotfix — round 2: the "open position" rule (line must
+// BEGIN with the marker) was itself a false negative. `/specify`
+// (core/adapters/claude/commands/specify.md:100) explicitly instructs
+// inserting the marker INLINE in place of {user} inside a User Story
+// sentence ("Como [NEEDS CLARIFICATION: ...], quero..."), and :105 puts
+// no positional constraint on AC markers either. A marker embedded
+// mid-sentence — exactly what /specify produces — never starts the line,
+// so the position rule silently let it through uncounted. The cure
+// became a worse bug than the disease: unblockable specs, now with a
+// green test on top.
+// ─────────────────────────────────────────────────────────────────────────
+
+test('27. Marker inline inside a User Story sentence (replacing {user}, as /specify instructs) → counts 1, blocks', () => {
+  cleanup();
+  const spec = writeSpecFile('inline-user-story', [
+    '## User Stories',
+    '',
+    '- Como [NEEDS CLARIFICATION: qual tipo de usuário é o principal desta feature?], quero fazer X, pra Y.',
+  ].join('\n'));
+  writeState(spec, null);
+  const r = run('git commit -m "feat: x"');
+  cleanup();
+  assert.equal(r.status, 2, `Expected exit 2 (inline User Story marker must count), got ${r.status}. stderr: ${r.stderr}`);
+  assert.match(r.stderr, /SPEC INCOMPLETE: 1 marker open/);
+});
+
+test('28. Marker inline inside an AC SHALL clause → counts 1, blocks', () => {
+  cleanup();
+  const spec = writeSpecFile('inline-ac', [
+    '## Acceptance Criteria',
+    '',
+    '### AC-01: WHEN a request arrives, the system SHALL respond within [NEEDS CLARIFICATION: qual o limite de tempo?]',
+  ].join('\n'));
+  writeState(spec, null);
+  const r = run('git commit -m "feat: x"');
+  cleanup();
+  assert.equal(r.status, 2, `Expected exit 2 (inline AC marker must count), got ${r.status}. stderr: ${r.stderr}`);
   assert.match(r.stderr, /SPEC INCOMPLETE: 1 marker open/);
 });
