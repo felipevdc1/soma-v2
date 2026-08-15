@@ -121,9 +121,28 @@ function stripNonCountableRegions(specContent) {
     .replace(/`[^`\n]*`/g, '');
 }
 
+// Round 3 (independent review caught this too): dropping the position
+// rule in round 2 restored a plain "any surviving literal counts" scan,
+// which reintroduced a false positive the ORIGINAL bug already had —
+// core/specs/014-manifest-baseline/spec.md:63 is retrospective prose
+// ("These decisions resolve the original [NEEDS CLARIFICATION] markers")
+// that isn't backtick-quoted or commented out, yet isn't a real open
+// question either: it's the bare TOKEN `[NEEDS CLARIFICATION]` used as a
+// noun, with nothing between the words and the closing bracket.
+//
+// DO NOT "fix" this by requiring a colon (`\[NEEDS CLARIFICATION:`). A
+// real marker's content isn't always colon-punctuated — `/specify` and
+// hand-edited specs also produce `[NEEDS CLARIFICATION - question]` and
+// even `[NEEDS CLARIFICATION question]` with no punctuation at all (see
+// tests 30/31). A colon-required rule would silently miss those — an
+// invisible false negative, worse than the visible false positive it
+// would "fix". The correct signal is presence of ANY content before the
+// closing bracket, not a specific punctuation mark.
+const BARE_MARKER_TOKEN_RE = /\[NEEDS CLARIFICATION(?!\])/g;
+
 function countOpenClarificationMarkers(specContent) {
   const stripped = stripNonCountableRegions(specContent);
-  const matches = stripped.match(/\[NEEDS CLARIFICATION/g);
+  const matches = stripped.match(BARE_MARKER_TOKEN_RE);
   return matches ? matches.length : 0;
 }
 
