@@ -96,6 +96,41 @@ function parseCoveredAcs(tasksContent) {
   return covered;
 }
 
+// v3 preflight hotfix: only count [NEEDS CLARIFICATION markers in "open
+// position" — real, actionable occurrences — not every literal substring
+// match. The official spec.md template repeats the string inside
+// <!-- guidance: ... --> comments and inside the Completeness Checklist's
+// own backtick-quoted reminder line, so a naive substring count made
+// every templated spec unblockable (phantom markers a human can never
+// resolve). Three filters, applied in order:
+//   1. Strip HTML comments (<!-- ... -->, including multi-line) — author
+//      guidance, never a real marker.
+//   2. Strip inline code spans (single backticks, same line) — a marker
+//      quoted as literal text isn't an open marker.
+//   3. Only count occurrences on a line that, after trimming leading
+//      whitespace and an optional bullet (-/*) and/or checkbox
+//      ([ ]/[x]), begins with the marker — matching how markers are
+//      actually authored (their own bullet under "Open Questions").
+function stripNonCountableRegions(specContent) {
+  return specContent
+    .replace(/<!--[\s\S]*?-->/g, '')
+    .replace(/`[^`\n]*`/g, '');
+}
+
+const OPEN_MARKER_LINE_RE = /^\s*(?:[-*]\s+)?(?:\[[ xX]\]\s+)?\[NEEDS CLARIFICATION/;
+
+function countOpenClarificationMarkers(specContent) {
+  const stripped = stripNonCountableRegions(specContent);
+  let count = 0;
+  for (const line of stripped.split('\n')) {
+    if (OPEN_MARKER_LINE_RE.test(line)) {
+      const matches = line.match(/\[NEEDS CLARIFICATION/g);
+      count += matches ? matches.length : 0;
+    }
+  }
+  return count;
+}
+
 async function main() {
   try {
     const stdin = fs.readFileSync(0, 'utf-8').trim();
@@ -152,8 +187,9 @@ async function main() {
       process.exit(0);
     }
 
-    // 1. Count open [NEEDS CLARIFICATION markers
-    const markerCount = (specContent.match(/\[NEEDS CLARIFICATION/g) || []).length;
+    // 1. Count open [NEEDS CLARIFICATION markers (open-position only — see
+    // countOpenClarificationMarkers above)
+    const markerCount = countOpenClarificationMarkers(specContent);
     if (markerCount > 0) {
       process.stderr.write(
         `\nSPEC INCOMPLETE: ${markerCount} marker${markerCount > 1 ? 's' : ''} open in ${specPath}\n` +
