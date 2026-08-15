@@ -36,6 +36,29 @@ Se trigger detectado → MANDATORY pre-discovery (não pular, não rationalize p
 
 **Why this exists**: Phase 5 SOMA spec 011 (2026-05-02) escrita sem ler `~/.soma-v2/scripts/sync.cjs` (Phase 4b shipped 2 dias antes). Resultado: 30% scope redundante + 7 bugs empíricos missed. Failure Mode #9 doc'd em `~/.claude/CLAUDE.md`. Constitution Article XII enforces.
 
+### 0.5. Procure um brief (v3 Fase 1 — D3)
+
+Antes de coletar qualquer coisa, procure por `brief.md` no project root ou em `specs/{NNN}-{slug}/`.
+
+**Se existe** (foi gerado pelo `/elicit`): **leia primeiro**. Ele é a fonte, não sua interpretação da
+descrição. Pré-preencha do brief, transcrevendo e não reescrevendo:
+- `Problema real` + `Quem usa` → **User Stories**
+- `OUTCOME`, `APPETITE`, `NO-GOS` → seção **Outcome & Guardrails** (campos de mesmo nome)
+- `Big 3` → base dos **Acceptance Criteria**
+- `NO-GOS` + `Futuro (fora do MVP)` → **Out of Scope**
+- `Perguntas abertas` → **Open Questions**, preservando os `[NEEDS CLARIFICATION]` como estão
+- Se o brief tem **Veredito: kill** → **PARE**. Não gere spec. Diga: "esse brief foi morto em {data}
+  pelo motivo: {motivo}. Quer reabrir?"
+
+**Se NÃO existe** e a descrição recebida é vaga — menos de 2 frases, ou sem outcome observável, ou só
+nomeia uma solução sem dizer que problema resolve — **sugira `/elicit` antes de prosseguir**:
+
+> "Essa descrição ainda não tem OUTCOME claro. Rodar `/elicit` primeiro sai mais barato que
+> especificar no escuro. Quer que eu rode, ou prefere que eu siga com o que tem?"
+
+Se o usuário disser pra seguir, siga — mas marque os campos ausentes com `[NEEDS CLARIFICATION]`,
+nunca com suposição.
+
 ### 1. Determine o project root
 
 Use o diretório de trabalho atual (`cwd`). Se houver um `.git` num diretório pai, use esse pai como root.
