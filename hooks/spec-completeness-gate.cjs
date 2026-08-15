@@ -96,39 +96,35 @@ function parseCoveredAcs(tasksContent) {
   return covered;
 }
 
-// v3 preflight hotfix: only count [NEEDS CLARIFICATION markers in "open
-// position" — real, actionable occurrences — not every literal substring
-// match. The official spec.md template repeats the string inside
-// <!-- guidance: ... --> comments and inside the Completeness Checklist's
-// own backtick-quoted reminder line, so a naive substring count made
-// every templated spec unblockable (phantom markers a human can never
-// resolve). Three filters, applied in order:
+// v3 preflight hotfix: don't count every literal substring occurrence of
+// [NEEDS CLARIFICATION — the official spec.md template repeats the string
+// inside <!-- guidance: ... --> comments and inside the Completeness
+// Checklist's own backtick-quoted reminder line, so a naive substring
+// count made every templated spec unblockable (phantom markers a human
+// can never resolve). Two filters, applied before counting:
 //   1. Strip HTML comments (<!-- ... -->, including multi-line) — author
 //      guidance, never a real marker.
 //   2. Strip inline code spans (single backticks, same line) — a marker
 //      quoted as literal text isn't an open marker.
-//   3. Only count occurrences on a line that, after trimming leading
-//      whitespace and an optional bullet (-/*) and/or checkbox
-//      ([ ]/[x]), begins with the marker — matching how markers are
-//      actually authored (their own bullet under "Open Questions").
+//
+// Round 2 (independent review caught this): an earlier version of this
+// fix also required the marker to START its line ("open position"). That
+// broke on the real-world case `/specify` actually produces —
+// core/adapters/claude/commands/specify.md:100 inserts the marker INLINE
+// in place of {user} inside a User Story sentence, and :105 puts no
+// positional constraint on AC markers either. Position is NOT a valid
+// signal for "is this a real marker"; only comments and inline-code
+// quoting are.
 function stripNonCountableRegions(specContent) {
   return specContent
     .replace(/<!--[\s\S]*?-->/g, '')
     .replace(/`[^`\n]*`/g, '');
 }
 
-const OPEN_MARKER_LINE_RE = /^\s*(?:[-*]\s+)?(?:\[[ xX]\]\s+)?\[NEEDS CLARIFICATION/;
-
 function countOpenClarificationMarkers(specContent) {
   const stripped = stripNonCountableRegions(specContent);
-  let count = 0;
-  for (const line of stripped.split('\n')) {
-    if (OPEN_MARKER_LINE_RE.test(line)) {
-      const matches = line.match(/\[NEEDS CLARIFICATION/g);
-      count += matches ? matches.length : 0;
-    }
-  }
-  return count;
+  const matches = stripped.match(/\[NEEDS CLARIFICATION/g);
+  return matches ? matches.length : 0;
 }
 
 async function main() {
