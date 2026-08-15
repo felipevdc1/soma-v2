@@ -334,3 +334,10 @@ Próximo passo: revisar sonar-report-{TIMESTAMP}.md e despachar fixes via /dispa
 |----|-----------|-------------|----------|
 | AC-03 | HIGH | Logout endpoint não implementado — spec exige DELETE /sessions/:id | Implementar handler em auth.controller.ts |
 ```
+
+## Próximo passo (D18)
+
+Termine SEMPRE o output com a transição, derivada de `core/docs/workflow-chains.md` e do resultado:
+
+- Findings CRITICAL/HIGH em aberto → `**Próximo passo**: corrigir os {N} findings e re-auditar`
+- Auditoria limpa → `**Próximo passo**: `/handoff`` (ou fechar a fase, se for o caso)

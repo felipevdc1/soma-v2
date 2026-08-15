@@ -176,3 +176,9 @@ Após aprovação, prosseguir com Step 2 TASKS (task setup + teammates nomeados 
 - **Contract tests antes de tudo.** Nenhuma task de implementação começa antes das tasks de contract test correspondentes (Article III).
 - **Cobertura 100% antes de terminar.** Cada AC deve ter ao menos uma task. Não finalizar com coverage < 100%.
 - **Falhas são visíveis.** Se qualquer gate falha, exibir o problema claramente antes de prosseguir. Silenciar violações é a exata forma de falha que esta estrutura existe para prevenir.
+
+## Próximo passo (D18)
+
+Termine SEMPRE o output com a transição, derivada de `core/docs/workflow-chains.md`:
+
+`**Próximo passo**: `/soma-run`` — ou `/dispatch` manual, quando for uma task só.

@@ -26,6 +26,8 @@
 
 **Success criteria**: {how next Claude knows it's done}
 
+**Next command** (D18): `{comando literal que a próxima sessão roda primeiro, ou "nenhum — {o que fazer}"}`
+
 **Possíveis blockers**: {se aplicável}
 
 ---
@@ -41,6 +43,8 @@
 3. {command ou ação}
 
 **Success criteria**: {how next Claude knows it's done}
+
+**Next command** (D18): `{comando literal que a próxima sessão roda primeiro, ou "nenhum — {o que fazer}"}`
 
 ---
 

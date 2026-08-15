@@ -156,3 +156,11 @@ ACs esperados incluiriam:
 - NUNCA coloque detalhes de implementação (framework, biblioteca, SQL) nos ACs
 - O spec deve poder ser validado por alguém sem contexto técnico
 - Todo output ao usuário em português do Brasil
+
+## Próximo passo (D18)
+
+Termine SEMPRE o output com uma linha de transição, derivada de `core/docs/workflow-chains.md` e do
+**estado real** da spec — não do comando que você rodou:
+
+- Spec sem `[NEEDS CLARIFICATION]` em aberto → `**Próximo passo**: `/plan-sdd`` (ou `/elicit` de novo, se mudou de ideia)
+- Spec **com** markers em aberto → `**Próximo passo**: resolver os {N} `[NEEDS CLARIFICATION]` — ela não está APPROVED ainda`
