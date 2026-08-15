@@ -40,9 +40,15 @@ AC-1: User can log in
 AC-2: User can log out
 `;
 
+// v3 preflight hotfix: markers realigned to their own bullet line (the
+// actual "Open Questions" convention — see templates/spec.md) instead of
+// trailing an AC line inline. Same 2-marker, block-on-commit semantics;
+// position matters now because the gate only counts open-position markers.
 const SPEC_WITH_MARKERS = `
-AC-1: User can log in [NEEDS CLARIFICATION: which provider?]
-AC-2: User can log out [NEEDS CLARIFICATION: session timeout?]
+AC-1: User can log in
+- [NEEDS CLARIFICATION: which provider?]
+AC-2: User can log out
+- [NEEDS CLARIFICATION: session timeout?]
 `;
 
 const TASKS_ALL_COVERED = `
@@ -301,4 +307,120 @@ test('20. Spec with NO Created field + non-EARS AC → passes (treated as pre-ex
   const r = run('git commit -m "feat: x"');
   cleanup();
   assert.equal(r.status, 0, `Expected exit 0 (no Created field → not blocked), got ${r.status}. stderr: ${r.stderr}`);
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// v3 preflight hotfix: phantom [NEEDS CLARIFICATION] markers.
+//
+// Bug: markerCount used a naive substring scan of the WHOLE spec file
+// (`specContent.match(/\[NEEDS CLARIFICATION/g)`), so every occurrence
+// counted — including the literal string repeated inside the official
+// template's own <!-- guidance: ... --> comments and inside the
+// Completeness Checklist's backtick-quoted reminder line. Every spec born
+// from the template inherited markers that could never be resolved by a
+// human, because they aren't real open questions.
+//
+// Fix: only count a marker in "open position" — a line that, after
+// trimming leading whitespace and an optional bullet (-/*) and/or
+// checkbox ([ ]/[x]), begins with the marker itself. HTML comments are
+// stripped first (guidance text is never a real marker); inline code
+// spans (single backticks) are stripped too (a marker quoted as literal
+// text, e.g. the checklist line, isn't an open marker).
+// ─────────────────────────────────────────────────────────────────────────
+
+test('21. Open-position: 3 real markers in Open Questions + checklist backtick line → counts 3, blocks', () => {
+  cleanup();
+  const spec = writeSpecFile('open-position-3', [
+    '## Open Questions',
+    '',
+    '- [NEEDS CLARIFICATION: question one]',
+    '- [NEEDS CLARIFICATION: question two]',
+    '- [NEEDS CLARIFICATION: question three]',
+    '',
+    '## Completeness Checklist',
+    '',
+    '- [ ] Zero `[NEEDS CLARIFICATION]` markers remaining',
+  ].join('\n'));
+  writeState(spec, null);
+  const r = run('git commit -m "feat: x"');
+  cleanup();
+  assert.equal(r.status, 2, `Expected exit 2 (3 real markers), got ${r.status}. stderr: ${r.stderr}`);
+  assert.match(r.stderr, /SPEC INCOMPLETE: 3 markers open/, `Expected count of 3, got: ${r.stderr}`);
+});
+
+test('22. Open-position: marker only inside <!-- guidance comment --> → counts 0, does not block', () => {
+  cleanup();
+  const spec = writeSpecFile('comment-only', [
+    '<!-- guidance: Replace [NEEDS CLARIFICATION: ...] only when you have a real answer. -->',
+    '',
+    '## Open Questions',
+    '',
+    '(none — all resolved)',
+  ].join('\n'));
+  writeState(spec, null);
+  const r = run('git commit -m "feat: x"');
+  cleanup();
+  assert.equal(r.status, 0, `Expected exit 0 (marker only in guidance comment), got ${r.status}. stderr: ${r.stderr}`);
+});
+
+test('23. Open-position: marker inside inline code (backticks) mid-paragraph → counts 0, does not block', () => {
+  cleanup();
+  const spec = writeSpecFile('backtick-mid',
+    'Este texto menciona `[NEEDS CLARIFICATION: exemplo]` no meio do parágrafo, não como marker real.\n'
+  );
+  writeState(spec, null);
+  const r = run('git commit -m "feat: x"');
+  cleanup();
+  assert.equal(r.status, 0, `Expected exit 0 (marker inside inline code), got ${r.status}. stderr: ${r.stderr}`);
+});
+
+test('24. Open-position: full guidance-comment template present but 0 real markers → counts 0, commit not blocked', () => {
+  cleanup();
+  const spec = writeSpecFile('full-guidance-zero-real', [
+    '<!-- guidance: Fill every {PLACEHOLDER}. Replace [NEEDS CLARIFICATION: ...] only when you have a real answer from the human. Never assume. -->',
+    '',
+    '## Open Questions',
+    '',
+    '<!-- guidance: NEVER assume. Mark every ambiguity. Loop ends when this section is empty. -->',
+    '',
+    '(none — all resolved)',
+    '',
+    '## Completeness Checklist',
+    '',
+    '<!-- guidance: All boxes must be checked (or replaced with [NEEDS CLARIFICATION]) before Gate 1. -->',
+    '',
+    '- [ ] Zero `[NEEDS CLARIFICATION]` markers remaining',
+  ].join('\n'));
+  writeState(spec, null);
+  const r = run('git commit -m "feat: x"');
+  cleanup();
+  assert.equal(r.status, 0, `Expected exit 0 (only guidance/backtick occurrences, zero real markers), got ${r.status}. stderr: ${r.stderr}`);
+});
+
+test('25. Regression guard: a single real open-position marker still blocks (cure must not become permissive)', () => {
+  cleanup();
+  const spec = writeSpecFile('regression-single-real', [
+    '## Open Questions',
+    '',
+    '- [NEEDS CLARIFICATION: still a real open question]',
+  ].join('\n'));
+  writeState(spec, null);
+  const r = run('git commit -m "feat: x"');
+  cleanup();
+  assert.equal(r.status, 2, `Expected exit 2 (real marker must still block), got ${r.status}. stderr: ${r.stderr}`);
+  assert.match(r.stderr, /SPEC INCOMPLETE: 1 marker open/);
+});
+
+test('26. Open-position: marker in open checklist item ("- [ ] [NEEDS CLARIFICATION: ...]") → counts 1, blocks', () => {
+  cleanup();
+  const spec = writeSpecFile('checklist-item-marker', [
+    '## Open Questions',
+    '',
+    '- [ ] [NEEDS CLARIFICATION: unresolved item as checklist entry]',
+  ].join('\n'));
+  writeState(spec, null);
+  const r = run('git commit -m "feat: x"');
+  cleanup();
+  assert.equal(r.status, 2, `Expected exit 2 (checklist-item marker counts), got ${r.status}. stderr: ${r.stderr}`);
+  assert.match(r.stderr, /SPEC INCOMPLETE: 1 marker open/);
 });
