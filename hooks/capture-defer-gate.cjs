@@ -6,9 +6,11 @@
  * Scans assistant turn output for defer-phrases (en + pt-br), verifies capture
  * target references in current OR last turn, emits decision per mode:
  *   - soft-warn (default): stderr warning + exit 0
- *   - hard-block (ARTICLE_XI_HARD=1): stdout JSON + exit 1
+ *   - hard-block (ARTICLE_XI_HARD=1): stdout JSON + exit 2
  *
  * Logs every detection to ~/.claude/logs/article-xi-{YYYY-MM-DD}.jsonl (JSONL).
+ * Set ARTICLE_XI_LOG_DIR to redirect telemetry to an isolated directory
+ * (used by the test suite so it never pollutes the production log).
  *
  * @spec AC-01..AC-15
  * @contract CONTRACT-CAPTURE-DEFER-GATE-01
@@ -166,13 +168,25 @@ function detectCaptureTarget(text) {
 }
 
 /**
+ * Resolve the telemetry logs directory. Production default is
+ * ~/.claude/logs. Tests set ARTICLE_XI_LOG_DIR to an isolated tmp dir so
+ * the test suite never pollutes the real telemetry log (production behavior
+ * is unchanged when the var is unset).
+ */
+function getLogsDir(env) {
+  const override = ((env && env.ARTICLE_XI_LOG_DIR) || '').trim();
+  if (override) return override;
+  return path.join(os.homedir(), '.claude', 'logs');
+}
+
+/**
  * Append telemetry entry to JSONL log (AD-03 — daily-rotation, AD-03 append-only).
  */
-function appendTelemetry(entry) {
+function appendTelemetry(entry, env) {
   try {
     const today = new Date().toISOString().slice(0, 10);
-    const logPath = path.join(os.homedir(), '.claude', 'logs', `article-xi-${today}.jsonl`);
-    const logsDir = path.dirname(logPath);
+    const logsDir = getLogsDir(env || process.env);
+    const logPath = path.join(logsDir, `article-xi-${today}.jsonl`);
     if (!fs.existsSync(logsDir)) {
       fs.mkdirSync(logsDir, { recursive: true });
     }
@@ -277,7 +291,7 @@ async function main() {
     search_scope: captureMatch ? searchScope : 'current',
     hard_mode: hardMode,
     blocked
-  });
+  }, env);
 
   // Step 4: Emit decision
   if (captured) {
@@ -286,13 +300,13 @@ async function main() {
   }
 
   if (hardMode) {
-    // Hard-block: stdout JSON + exit 1 (AC-06, AC-13)
+    // Hard-block: stdout JSON + exit 2 (AC-06, AC-13)
     const blockMsg = `Article XI: defer-phrase '${deferMatch.matched}' detected without capture target. Add capture to ~/.claude/plans/handoff-*, specs/{NNN}/spec.md, .soma/decisions/ADR-*, or .soma/CONTEXT.md. Override: touch /tmp/article-xi-bypass-${sessionId}`;
     process.stdout.write(JSON.stringify({
       decision: 'block',
       reason: blockMsg
     }) + '\n');
-    process.exit(1);
+    process.exit(2);
   } else {
     // Soft-warn: stderr warning + exit 0 (AC-05, AC-12)
     process.stderr.write(

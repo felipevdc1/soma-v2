@@ -16,9 +16,11 @@
  *
  * Modes:
  *   - soft-warn (default): stderr warning + JSONL log + exit 0
- *   - hard-block (INSIGHT_COUPLING_HARD=1): stderr + JSONL + exit 1
+ *   - hard-block (INSIGHT_COUPLING_HARD=1): stderr + JSONL + exit 2
  *
  * Logs to ~/.claude/logs/insight-coupling-{YYYY-MM-DD}.jsonl (JSONL).
+ * Set INSIGHT_COUPLING_LOG_DIR to redirect telemetry to an isolated
+ * directory (mirrors capture-defer-gate.cjs's ARTICLE_XI_LOG_DIR).
  *
  * @spec ~/.soma-v2/docs/output-style.md §"Insight → Action Coupling (MANDATORY)"
  * @contract CONTRACT-INSIGHT-ACTION-COUPLING-01
@@ -204,13 +206,26 @@ function detectCouplingActions(text, toolNames, transcriptPath) {
 }
 
 /**
+ * Resolve the telemetry logs directory. Production default is
+ * ~/.claude/logs. Tests may set INSIGHT_COUPLING_LOG_DIR to an isolated
+ * tmp dir so a future test suite never pollutes the real telemetry log
+ * (production behavior is unchanged when the var is unset) — mirrors the
+ * same isolation mechanism used by capture-defer-gate.cjs.
+ */
+function getLogsDir(env) {
+  const override = ((env && env.INSIGHT_COUPLING_LOG_DIR) || '').trim();
+  if (override) return override;
+  return path.join(os.homedir(), '.claude', 'logs');
+}
+
+/**
  * Append telemetry entry to JSONL log.
  */
-function appendTelemetry(entry) {
+function appendTelemetry(entry, env) {
   try {
     const today = new Date().toISOString().slice(0, 10);
-    const logPath = path.join(os.homedir(), '.claude', 'logs', `insight-coupling-${today}.jsonl`);
-    const logsDir = path.dirname(logPath);
+    const logsDir = getLogsDir(env || process.env);
+    const logPath = path.join(logsDir, `insight-coupling-${today}.jsonl`);
     if (!fs.existsSync(logsDir)) {
       fs.mkdirSync(logsDir, { recursive: true });
     }
@@ -281,7 +296,7 @@ async function main() {
     violation_excerpt: coupled ? null : currentText.slice(0, 200)
   };
 
-  appendTelemetry(telemetryEntry);
+  appendTelemetry(telemetryEntry, env);
 
   // Step 4: Debug log when SOMA_DEBUG=1
   if ((env.SOMA_DEBUG || '').trim() === '1') {
@@ -308,8 +323,8 @@ async function main() {
   process.stderr.write(warnMessage);
 
   if (hardMode) {
-    // Hard-block: exit 1
-    process.exit(1);
+    // Hard-block: exit 2
+    process.exit(2);
   } else {
     // Soft-warn: exit 0
     process.exit(0);
