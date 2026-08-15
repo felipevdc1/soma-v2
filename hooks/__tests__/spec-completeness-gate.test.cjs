@@ -459,3 +459,57 @@ test('28. Marker inline inside an AC SHALL clause → counts 1, blocks', () => {
   assert.equal(r.status, 2, `Expected exit 2 (inline AC marker must count), got ${r.status}. stderr: ${r.stderr}`);
   assert.match(r.stderr, /SPEC INCOMPLETE: 1 marker open/);
 });
+
+// ─────────────────────────────────────────────────────────────────────────
+// v3 preflight hotfix — round 3: dropping the position rule (round 2)
+// restored a naive "any surviving literal counts" scan, which reintroduces
+// a false positive the ORIGINAL bug already had: core/specs/014-manifest-
+// baseline/spec.md:63 is retrospective prose — "These decisions resolve
+// the original [NEEDS CLARIFICATION] markers" — not backtick-quoted, not
+// in a comment, yet not a real open question either. It's the bare TOKEN
+// used as a noun, not an instantiated marker.
+//
+// Rule: count every `[NEEDS CLARIFICATION` EXCEPT the bare token
+// `[NEEDS CLARIFICATION]` (nothing between the words and the closing
+// bracket). A real marker always carries content — ": pergunta",
+// "- pergunta", or " pergunta" with no punctuation at all — so this still
+// catches every authored form without requiring a colon specifically.
+// (See the comment on countOpenClarificationMarkers for why a
+// colon-required rule was rejected — it would silently miss dash- or
+// space-punctuated markers.)
+// ─────────────────────────────────────────────────────────────────────────
+
+test('29. Bare token "[NEEDS CLARIFICATION]" used as a noun in retrospective prose → counts 0, does not block', () => {
+  cleanup();
+  const spec = writeSpecFile('bare-token-prose',
+    'Estas decisões resolvem os antigos [NEEDS CLARIFICATION] markers (aprovados por Felipe).\n'
+  );
+  writeState(spec, null);
+  const r = run('git commit -m "feat: x"');
+  cleanup();
+  assert.equal(r.status, 0, `Expected exit 0 (bare token, not a real marker), got ${r.status}. stderr: ${r.stderr}`);
+});
+
+test('30. Marker punctuated with a dash instead of a colon ("[NEEDS CLARIFICATION - pergunta]") → counts 1, blocks', () => {
+  cleanup();
+  const spec = writeSpecFile('dash-marker',
+    '- [NEEDS CLARIFICATION - qual limite?]\n'
+  );
+  writeState(spec, null);
+  const r = run('git commit -m "feat: x"');
+  cleanup();
+  assert.equal(r.status, 2, `Expected exit 2 (dash-punctuated marker must still count), got ${r.status}. stderr: ${r.stderr}`);
+  assert.match(r.stderr, /SPEC INCOMPLETE: 1 marker open/);
+});
+
+test('31. Marker with no punctuation at all ("[NEEDS CLARIFICATION pergunta]") → counts 1, blocks', () => {
+  cleanup();
+  const spec = writeSpecFile('no-punct-marker',
+    '- [NEEDS CLARIFICATION qual prazo?]\n'
+  );
+  writeState(spec, null);
+  const r = run('git commit -m "feat: x"');
+  cleanup();
+  assert.equal(r.status, 2, `Expected exit 2 (unpunctuated marker must still count), got ${r.status}. stderr: ${r.stderr}`);
+  assert.match(r.stderr, /SPEC INCOMPLETE: 1 marker open/);
+});
