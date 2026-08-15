@@ -38,11 +38,29 @@
 
 ## Acceptance Criteria
 
-<!-- guidance: Every AC must be testable: "Given X, when Y, then Z". No implementation details. No HOW — only WHAT and WHY. -->
+<!-- guidance: v3 Fase 1. O TÍTULO de cada AC usa gramática EARS — uma das 5 formas abaixo, e só essas.
+     A linha Given/When/Then vem embaixo como mapeamento pro teste. Sem HOW, só WHAT e WHY.
 
-- **AC-01:** Given {context}, when {trigger}, then {observable result}.
-- **AC-02:** Given {context}, when {trigger}, then {observable result}.
-<!-- Add more ACs as needed. Every AC must have a corresponding test in Step 5. -->
+     As 5 formas EARS (o "SHALL" é obrigatório em todas):
+       1. Ubíqua        — The {sistema} SHALL {resposta}.
+       2. Estado        — WHILE {estado}, the {sistema} SHALL {resposta}.
+       3. Evento        — WHEN {gatilho}, the {sistema} SHALL {resposta}.
+       4. Indesejado    — IF {condição}, THEN the {sistema} SHALL {resposta}.
+       5. Opcional      — WHERE {contexto/feature}, the {sistema} SHALL {resposta}.
+
+     Por que EARS: gramática fechada faz cada critério mapear 1:1 num teste. "O sistema deve ser rápido"
+     não vira teste; "WHEN a busca retorna, the sistema SHALL responder em <200ms" vira. -->
+
+### AC-01: WHEN {gatilho}, the {sistema} SHALL {resposta}
+
+Given {contexto} / When {ação} / Then {resultado observável}
+
+### AC-02: IF {condição}, THEN the {sistema} SHALL {resposta}
+
+Given {contexto} / When {ação} / Then {resultado observável}
+
+<!-- Adicione quantos ACs precisar. Todo AC precisa de teste correspondente no Step 5,
+     referenciado por [SPEC:AC-XX] no tasks.md e por // @spec AC-XX no teste. -->
 
 ---
 

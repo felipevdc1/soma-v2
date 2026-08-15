@@ -42,8 +42,13 @@ function findTestFiles(pattern) {
 
 function extractACs(specPath) {
   const ids = [];
+  // v3 Fase 1: also accept the "### AC-NN: ..." heading form used by the
+  // new EARS-grammar template, alongside the pre-existing bare/bullet-bold
+  // forms. Without this, a new-format spec yields zero AC ids here, which
+  // makes coveredSet/acSet empty and turns every @spec-annotated test into
+  // a false orphan (validate() would then fail specs that are fully covered).
   for (const line of fs.readFileSync(specPath, 'utf8').split('\n')) {
-    const m = line.match(/^-?\s*\*{0,2}(AC-\d+)\*{0,2}:/);
+    const m = line.match(/^\s*#{0,6}\s*-?\s*\*{0,2}(AC-\d+)\*{0,2}:/);
     if (m) ids.push(m[1]);
   }
   return [...new Set(ids)];
