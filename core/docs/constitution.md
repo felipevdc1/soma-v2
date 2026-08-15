@@ -1,7 +1,7 @@
-# SOMA Constitution v1.2.0
+# SOMA Constitution v1.2.1
 
-**Versão:** 1.2.0
-**Data:** 2026-04-19 (amendments: 1.1.0 era-Fable 2026-07-02; 1.2.0 time implícito 2026-07-03 — ver `constitution-amendments/`)
+**Versão:** 1.2.1
+**Data:** 2026-04-19 (amendments: 1.1.0 era-Fable 2026-07-02; 1.2.0 time implícito 2026-07-03; 1.2.1 higiene Fase 0 v3 2026-08-14 — ver `constitution-amendments/`)
 **Status:** Ratified 2026-05-05
 **Escopo:** Governa toda run do SOMA Executor Autônomo. Aplica-se ao orchestrator (main model — Fable 5+; antes Opus), aos executores (Sonnet/Haiku) e aos auditores SONAR. Todo dispatch DEVE pinar `model:` explicitamente; omissão herda o modelo da main session (Fable, 2× Opus em custo) — violação.
 
@@ -277,9 +277,13 @@ Referência: CLAUDE.md Recovery Protocol; `feedback_agent_teams_workflow.md` R5;
 
 ## Articles cortados (considerados e rejeitados)
 
-**Article XI (cogitado) — "Library-First"** (Spec Kit Article I): Rejeitado como Article obrigatório do SOMA porque o contexto do usuário é multi-project ([project C], [project B], vault-mcp, 4d-clients) com heterogeneidade de stacks — forçar library-first em projetos inerentemente aplicacionais (ex: Next.js page de marketing) adiciona atrito sem payoff. Pode ser reintroduzido por domínio via amendment.
+> **Nota de nomenclatura (F0.2, 2026-08-14):** esta seção reusava os rótulos "Article XI/XII" para
+> candidatos REJEITADOS, colidindo com os Articles reais de mesmo número. Os rótulos foram trocados por
+> "Candidato Rejeitado A/B". Nada de conteúdo mudou — só o nome, para acabar com a ambiguidade.
 
-**Article XII (cogitado) — "CLI Interface Mandate"** (Spec Kit Article II): Rejeitado pelo mesmo motivo (domínio-dependente: aplicações web não precisam de CLI interface). Substituído parcialmente pela exigência de contract tests quando contracts/ existe.
+**Candidato Rejeitado A — "Library-First"** (Spec Kit Article I): Rejeitado como Article obrigatório do SOMA porque o contexto do usuário é multi-project ([project C], [project B], vault-mcp, 4d-clients) com heterogeneidade de stacks — forçar library-first em projetos inerentemente aplicacionais (ex: Next.js page de marketing) adiciona atrito sem payoff. Pode ser reintroduzido por domínio via amendment.
+
+**Candidato Rejeitado B — "CLI Interface Mandate"** (Spec Kit Article II): Rejeitado pelo mesmo motivo (domínio-dependente: aplicações web não precisam de CLI interface). Substituído parcialmente pela exigência de contract tests quando contracts/ existe.
 
 ---
 
@@ -320,4 +324,9 @@ Alinhado com Self-Maintenance Protocol do CLAUDE.md: quando uma correção do us
 
 ## Fim do documento
 
-Ao ler esta Constitution como subagent, confirme no seu output inicial: "Constitution v1.0.0 lida; executando sob Articles I-X."
+Ao ler esta Constitution como subagent, confirme no seu output inicial: "Constitution v1.2.1 lida; executando sob Articles I-X e XII."
+
+> **Manutenção desta linha (instituído em F0.2, 2026-08-14):** esta linha estava stale desde a v1.1.0 —
+> dizia "v1.0.0 / Articles I-X" enquanto o header do topo já marcava v1.2.0 e o Article XII estava
+> ratificado. **Todo amendment futuro DEVE atualizar esta linha junto com o header.** Entra no checklist
+> de amendment.
