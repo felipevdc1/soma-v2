@@ -1,6 +1,6 @@
 # Spec: {FEATURE_TITLE}
 
-<!-- guidance: Fill every {PLACEHOLDER}. Replace [NEEDS CLARIFICATION: ...] only when you have a real answer from the human. Never assume. -->
+<!-- guidance: Fill every {PLACEHOLDER}. Replace NEEDS-CLARIFICATION markers only when you have a real answer from the human. Never assume. -->
 
 **Feature ID:** {NNNN-slug}
 **Branch:** `{branch-name}`
@@ -21,7 +21,7 @@
 
 <!-- guidance: v3 Fase 1 (D3). Se existe um brief.md gerado por /elicit, estes campos vêm DELE —
      não reescreva, transcreva. Se não existe brief e você não tem a resposta, marque
-     [NEEDS CLARIFICATION] em vez de inventar. Estes 3 campos são o guardrail de escopo da feature:
+     NEEDS-CLARIFICATION em vez de inventar. Estes 3 campos são o guardrail de escopo da feature:
      o OUTCOME diz quando parar, o APPETITE diz quanto gastar, os NO-GOS dizem o que recusar. -->
 
 **OUTCOME** — como o usuário SABE que deu certo, em comportamento observável (não em feature):
@@ -93,7 +93,7 @@ Given {contexto} / When {ação} / Then {resultado observável}
 
 ## Completeness Checklist
 
-<!-- guidance: All boxes must be checked (or replaced with [NEEDS CLARIFICATION]) before Gate 1. -->
+<!-- guidance: All boxes must be checked (or replaced with a NEEDS-CLARIFICATION marker) before Gate 1. -->
 
 - [ ] Every AC is testable (Given/When/Then, observable, not implementation)
 - [ ] No implementation details leaked into AC (no HOW, only WHAT)

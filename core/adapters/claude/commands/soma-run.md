@@ -105,7 +105,7 @@ Senão, crie `.soma.lock` com `{sessionId, runId, startedAt}`.
 **Postconditions:**
 - `spec.md` existe.
 - `≥1 AC numerado` com Given/When/Then (regex `^### AC-\d+:`).
-- Count de `[NEEDS CLARIFICATION]` markers.
+- Count de `[NEEDS CLARIFICATION]` markers em **posição aberta**: linha que, após remover indentação e um bullet/checkbox opcional (`-`, `*`, `[ ]`, `[x]`), começa com o marker. Ignore ocorrências dentro de comentários HTML (`<!-- ... -->`) e de trechos entre crases — são guidance/exemplo do template, não markers reais. Mesma regra do `hooks/spec-completeness-gate.cjs`.
 
 **Transições:**
 - 0 markers + ≥1 AC → `STEP_1B_PLAN`.
