@@ -105,7 +105,12 @@ Senão, crie `.soma.lock` com `{sessionId, runId, startedAt}`.
 **Postconditions:**
 - `spec.md` existe.
 - `≥1 AC numerado` com Given/When/Then (regex `^### AC-\d+:`).
-- Count de `[NEEDS CLARIFICATION]` markers, ignorando ocorrências dentro de comentários HTML (`<!-- ... -->`) e de trechos entre crases (são guidance/exemplo do template, não markers reais — inclusive markers inline dentro de uma User Story ou de um AC contam normalmente). Mesma regra do `hooks/spec-completeness-gate.cjs`.
+- Count de markers de esclarecimento. **Mesma regra do `hooks/spec-completeness-gate.cjs`** — se divergir dele, o hook é a autoridade. Três exclusões, e só três:
+  1. ocorrências dentro de comentários HTML (`<!-- ... -->`) — são guidance do template;
+  2. ocorrências entre crases — são exemplo/citação, incluindo a linha do Completeness Checklist;
+  3. o token nu sem conteúdo dentro, usado como substantivo em prosa (ex: "resolve the original `[NEEDS CLARIFICATION]` markers").
+
+  Tudo o mais conta, **inclusive marker inline no meio de uma User Story ou de um AC** — é a forma que o próprio `/specify` produz quando marca ambiguidade de usuário ou de comportamento. Não filtre por posição na linha e não exija dois-pontos: as duas coisas já foram tentadas e cada uma abriu um falso-negativo (ver testes 27-31 da suíte do hook).
 
 **Transições:**
 - 0 markers + ≥1 AC → `STEP_1B_PLAN`.
