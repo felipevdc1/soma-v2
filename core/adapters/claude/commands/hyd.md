@@ -6,121 +6,111 @@ O argumento passado com o comando é a descrição da tarefa. Se nenhum argument
 
 ### 1. Identifique o tipo de tarefa
 
-Classifique a tarefa em uma das categorias abaixo com base na descrição:
-
-- `ui` — Frontend/UI (páginas, componentes, telas, estilos)
-- `api` — Backend/API (endpoints, serviços, middleware, banco de dados)
-- `refactor` — Reestruturação de código sem mudança de comportamento
-- `bugfix` — Correção de bug ou problema específico
-- `infra` — DevOps, deploy, configuração, CI/CD
-- `skill` — Criação de skills, hooks ou commands do Claude Code
-- `general` — Qualquer coisa que não se encaixa acima
+`ui` · `api` · `refactor` · `bugfix` · `infra` · `skill` (skills, hooks, commands) · `general`
 
 ### 2. Avalie a complexidade
 
-Antes de listar dimensões, avalie:
-- **Trivial** (renomear variável, fix de typo, ajuste de cor pontual): 2-3 dimensões relevantes
+- **Trivial** (renomear variável, typo, ajuste pontual): 2-3 dimensões
 - **Médio** (novo componente, endpoint simples): 4-6 dimensões
-- **Complexo** (feature completa, migração, sistema novo): todas as dimensões relevantes
+- **Complexo** (feature completa, migração, sistema novo): todas as relevantes
 
-Complexidade escala com o checklist. Não liste dimensões mecânicamente — liste apenas as que se aplicam ao contexto específico da tarefa.
+Complexidade escala o checklist. Não liste dimensões mecanicamente.
 
 ### 3. Liste as dimensões de qualidade aplicáveis
 
-Use como referência as dimensões por tipo. Filtre apenas as relevantes para ESTA tarefa específica.
+Use a tabela como **cardápio, não como checklist**. Escolha só o que se aplica a ESTA tarefa e reescreva cada item contextualizado — a lista genérica é ponto de partida, nunca a saída.
 
-**UI:**
-- Funcionalidade completa (CRUD: qual operação se aplica aqui?)
-- Estados da UI (loading, error, empty, success, disabled)
-- Validação (client-side, formatos, limites de campo)
-- Design system (tokens, componentes, tipografia, espaçamento)
-- Responsividade (mobile, tablet, desktop)
-- Acessibilidade (keyboard nav, screen reader, contraste, ARIA)
-- Navegação (como o usuário chega e sai desta tela?)
-- Feedback visual (toasts, confirmações, undo)
+| Tipo | Dimensões |
+|---|---|
+| **ui** | funcionalidade completa (qual operação CRUD?) · estados (loading/error/empty/success/disabled) · validação · design system (tokens, tipografia, espaçamento) · responsividade · acessibilidade (teclado, leitor de tela, contraste, ARIA) · navegação (como entra e sai da tela?) · feedback visual (toast, confirmação, undo) |
+| **api** | endpoints completos (todos os verbos) · validação de input · autenticação e autorização · error handling (códigos, mensagens, edge cases) · rate limiting · paginação e filtros · testes (unit + integration) · documentação (OpenAPI) |
+| **refactor** | preservação de comportamento (zero mudança funcional) · cobertura de testes antes e depois · performance não degrada · backward compatibility · migration path se breaking · remoção de dead code |
+| **bugfix** | reprodução (steps claros) · root cause, não sintoma · fix mínimo e focado · teste de regressão · edge cases relacionados · o fix não quebra outra coisa |
+| **infra** | segurança (secrets, permissions, exposição) · plano de rollback · monitoramento e alertas · logging · scaling · documentação |
+| **skill** | edge cases (input vazio/inválido, arquivo ausente) · fail-open (nunca travar o sistema no erro) · rate limiting (não spammar) · integração com hooks/skills existentes · como testar manualmente · documentação inline |
+| **general** | escopo claro (dentro e fora) · dependências (o que precisa existir antes) · resultado verificável (como saber que funcionou) · reversibilidade (dá pra desfazer?) |
 
-**API:**
-- Endpoints completos (todos os verbos HTTP necessários)
-- Validação de input (tipos, limites, formatos)
-- Autenticação e autorização
-- Error handling (códigos HTTP, mensagens, edge cases)
-- Rate limiting e throttling
-- Paginação e filtros
-- Testes (unit, integration)
-- Documentação (OpenAPI/Swagger)
+### 4. Tese e pressure-test
 
-**Refactor:**
-- Preservação de comportamento (zero mudança funcional)
-- Cobertura de testes (antes e depois)
-- Performance (não degradar)
-- Backward compatibility
-- Migration path (se breaking change)
-- Dead code removal
+*(As dimensões dizem COMO fazer bem. Este passo pergunta se a abordagem está CERTA — sem ele o HYD vira checklist bonito em cima de premissa errada.)*
 
-**Bugfix:**
-- Reprodução do bug (steps to reproduce claros)
-- Root cause analysis (não só o sintoma)
-- Fix mínimo e focado
-- Teste de regressão
-- Edge cases relacionados
-- Verificação de que o fix não quebra outra coisa
+**4a. Declare a tese** em uma frase: qual abordagem você vai seguir, e por quê essa e não outra.
 
-**Infra:**
-- Segurança (secrets, permissions, exposure)
-- Rollback plan
-- Monitoramento e alertas
-- Logging
-- Scaling considerations
-- Documentação
+**4b. Pontue a tese** nos critérios abaixo. Cada um recebe `strong | adequate | weak | unknown` **e uma linha de justificativa concreta** — sem justificativa, a nota não vale.
 
-**Skill/Hook/Command:**
-- Edge cases (input vazio, input inválido, arquivos ausentes)
-- Fail-open (nunca travar o sistema em caso de erro)
-- Rate limiting (não spammar o usuário)
-- Integração com hooks/skills existentes
-- Como testar manualmente
-- Comentários e documentação inline
+| Critério | Pergunta |
+|---|---|
+| Entendimento do estado atual | Eu li o código/arquivo/sistema que vou mexer, ou estou inferindo? |
+| Clareza do resultado | Sei descrever o comportamento observável que prova que funcionou? |
+| Blast radius | Sei o que quebra se isto der errado, e quem depende disso? |
+| Reversibilidade | Dá pra desfazer? Em quantos passos? |
+| Evidência da abordagem | O que sustenta que ESTA é a abordagem certa — precedente, teste, doc, ou só intuição? |
+| Custo de estar errado | Se a tese furar, perco minutos, horas, ou confiança? |
 
-**General:**
-- Escopo claro (o que está dentro e fora?)
-- Dependências (o que precisa existir antes?)
-- Resultado verificável (como saber que funcionou?)
-- Reversibilidade (dá pra desfazer se der errado?)
+**4c. Regra dura de evidência** — se QUALQUER critério ficou `weak` ou `unknown`, **é proibido seguir direto pro plano**. A saída obrigatória vira *"preciso verificar X antes"*, com a verificação nomeada. Verificar é quase sempre mais barato que refazer. Só depois de subir a nota o item destrava.
 
-### 4. Monte o reframe e o checklist
+**4d. Nomeie 1 falsificador**: "o que eu veria acontecer se esta abordagem estivesse errada?" Se não existe observação capaz de refutar a tese, ela não é tese — é torcida.
 
-Apresente o resultado neste formato exato:
+**4e. Separe o que você sabe** em três baldes, explicitamente rotulados:
+- **Fato verificado** — eu li / rodei / testei nesta sessão
+- **Inferência** — deduzi de algo que verifiquei
+- **Hipótese** — acho, mas não checei
+
+Qualquer coisa no balde *hipótese* que sustente a tese é candidata automática à verificação do 4c.
+
+### 5. Monte o reframe
+
+Apresente neste formato exato:
 
 ---
 
 ## HYD Reframe: [Descrição da Tarefa]
 
-**Tipo**: [ui|api|refactor|bugfix|infra|skill|general]
+**Tipo**: [ui|api|refactor|bugfix|infra|skill|general] · **Complexidade**: [trivial|médio|complexo]
+
+### Tese
+[uma frase: a abordagem, e por que essa]
+
+### Pressure-test
+
+| Critério | Nota | Justificativa |
+|---|---|---|
+| Entendimento do estado atual | strong/adequate/weak/unknown | ... |
+| Clareza do resultado | ... | ... |
+| Blast radius | ... | ... |
+| Reversibilidade | ... | ... |
+| Evidência da abordagem | ... | ... |
+| Custo de estar errado | ... | ... |
+
+**Falsificador**: [o que eu veria se a tese estivesse errada]
+
+**Baldes**: Fato verificado — [...] · Inferência — [...] · Hipótese — [...]
+
+**Veredito**: `seguir` | `verificar antes` — [se "verificar antes": o que verificar, e como]
 
 ### Dimensões de Qualidade
 
 Como eu faria [tarefa resumida] garantindo:
 
-- [ ] [Dimensão 1 — específica para esta tarefa, não genérica]
-- [ ] [Dimensão 2 — específica para esta tarefa]
-- [ ] [Dimensão 3 — específica para esta tarefa]
-(continuar para todas as dimensões relevantes)
+- [ ] [Dimensão 1 — específica desta tarefa, não genérica]
+- [ ] [Dimensão 2 — específica desta tarefa]
+(continuar para todas as relevantes)
 
 ### Próximo Passo
-Usar estas dimensões como base para o brainstorming e planejamento.
-Cada item acima deve aparecer como checkbox verificável no plano final.
+[Se veredito = `verificar antes`: a verificação nomeada. Se `seguir`: usar as dimensões como base do plano.]
 
 ---
 
-### 5. Regras de ouro
+### 6. Regras de ouro
 
 - Cada checkbox deve ser **verificável objetivamente** (sim/não, não "verificar se está ok")
-- Dimensões devem ser **contextualizadas** para a tarefa — não copie a lista genérica, adapte
-- Se uma dimensão claramente não se aplica, **não a inclua**
-- O output é um **insumo para o plano**, não o plano em si
-- Todo o output em **português do Brasil**
+- Dimensões **contextualizadas** — não copie a tabela, adapte
+- Dimensão que claramente não se aplica: **não inclua**
+- O output é **insumo para o plano**, não o plano
+- Nota `weak`/`unknown` sem verificação nomeada é violação do passo 4c
+- Todo output em **português do Brasil**
 
-### 6. Marcar execução do /hyd
+### 7. Marcar execução do /hyd
 
 Após apresentar o reframe, crie o marker de evidência desta sessão rodando via Bash:
 
