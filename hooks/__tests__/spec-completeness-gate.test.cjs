@@ -135,3 +135,170 @@ test('7. malformed state JSON → fail-open with stderr warning', () => {
   assert.equal(r.status, 0, 'should fail-open');
   assert.match(r.stderr, /WARN/);
 });
+
+// ─────────────────────────────────────────────────────────────────────────
+// v3 Fase 1: AC-line extraction reconciliation + EARS grammar lint.
+//
+// TDD discipline: this block was committed RED (extraction still anchored
+// on the old bare `/^AC-(\d+):/` regex; no EARS lint exists yet) per
+// Article II HARD enforcement.
+//
+// Bug being fixed: the old regex never matched the official template's
+// `- **AC-NN:** ...` bullet form, nor the v3 Fase 1 `### AC-NN: ...`
+// heading form — so "AC without test blocks commit" (Article I) found
+// zero ACs against every spec written from the template. Dead enforcement
+// that never complained because it never found anything to complain about.
+// ─────────────────────────────────────────────────────────────────────────
+
+function writeSpecFile(name, content) {
+  const p = path.join(os.tmpdir(), `spec-scg-${name}-${SESSION}.md`);
+  fs.writeFileSync(p, content);
+  return p;
+}
+
+const OLD_CREATED = '**Created:** 2026-05-02';       // predates v3 Fase 1 EARS requirement
+const BOUNDARY_CREATED = '**Created:** 2026-08-15';  // cutoff itself — must be validated, not grandfathered
+const NEW_CREATED = '**Created:** 2026-08-20';        // clearly post-cutoff
+
+// ── Parsing reconciliation: all 3 line forms must be recognized ──────────
+
+test('8. AC in "### AC-01:" heading form is seen by the gate (uncovered → block)', () => {
+  cleanup();
+  const spec = writeSpecFile('heading', `${OLD_CREATED}\n\n### AC-01: WHEN x, the system does y\n`);
+  // Use a tasksPath that exists but covers nothing, so the "AC found" claim is
+  // unambiguous (exit 2 from real uncovered-AC detection, not a tasksPath-missing warn+exit0).
+  const tasks = writeSpecFile('heading-tasks', '- nothing here\n');
+  writeState(spec, tasks);
+  const r = run('git commit -m "feat: x"');
+  cleanup();
+  assert.equal(r.status, 2, `Expected exit 2 (gate must see AC-01 as uncovered), got ${r.status}. stderr: ${r.stderr}`);
+  assert.match(r.stderr, /AC-01/, `Expected AC-01 mentioned, got: ${r.stderr}`);
+});
+
+test('9. AC in "- **AC-01:**" bullet-bold form still seen (no regression)', () => {
+  cleanup();
+  const spec = writeSpecFile('bullet', `${OLD_CREATED}\n\n- **AC-01:** Given x, when y, then z\n`);
+  const tasks = writeSpecFile('bullet-tasks', '- nothing here\n');
+  writeState(spec, tasks);
+  const r = run('git commit -m "feat: x"');
+  cleanup();
+  assert.equal(r.status, 2, `Expected exit 2, got ${r.status}. stderr: ${r.stderr}`);
+  assert.match(r.stderr, /AC-01/);
+});
+
+test('10. AC in bare "AC-01:" form still seen (no regression)', () => {
+  cleanup();
+  const spec = writeSpecFile('bare', `${OLD_CREATED}\n\nAC-01: forma nua\n`);
+  const tasks = writeSpecFile('bare-tasks', '- nothing here\n');
+  writeState(spec, tasks);
+  const r = run('git commit -m "feat: x"');
+  cleanup();
+  assert.equal(r.status, 2, `Expected exit 2, got ${r.status}. stderr: ${r.stderr}`);
+  assert.match(r.stderr, /AC-01/);
+});
+
+// ── EARS grammar: the 5 valid forms, one at a time ────────────────────────
+
+test('11. EARS Ubíqua form ("The {sistema} SHALL {resposta}") is valid', () => {
+  cleanup();
+  const spec = writeSpecFile('ears-ubiqua', `${NEW_CREATED}\n\n### AC-01: The system SHALL respond within 200ms\n`);
+  const tasks = writeSpecFile('ears-ubiqua-tasks', '- impl [SPEC:AC-01]\n');
+  writeState(spec, tasks);
+  const r = run('git commit -m "feat: x"');
+  cleanup();
+  assert.equal(r.status, 0, `Expected exit 0 (valid EARS), got ${r.status}. stderr: ${r.stderr}`);
+});
+
+test('12. EARS Estado form ("WHILE {estado}, the {sistema} SHALL {resposta}") is valid', () => {
+  cleanup();
+  const spec = writeSpecFile('ears-estado', `${NEW_CREATED}\n\n### AC-01: WHILE the sync is running, the system SHALL block new writes\n`);
+  const tasks = writeSpecFile('ears-estado-tasks', '- impl [SPEC:AC-01]\n');
+  writeState(spec, tasks);
+  const r = run('git commit -m "feat: x"');
+  cleanup();
+  assert.equal(r.status, 0, `Expected exit 0 (valid EARS), got ${r.status}. stderr: ${r.stderr}`);
+});
+
+test('13. EARS Evento form ("WHEN {gatilho}, the {sistema} SHALL {resposta}") is valid', () => {
+  cleanup();
+  const spec = writeSpecFile('ears-evento', `${NEW_CREATED}\n\n### AC-01: WHEN a request arrives, the system SHALL log it\n`);
+  const tasks = writeSpecFile('ears-evento-tasks', '- impl [SPEC:AC-01]\n');
+  writeState(spec, tasks);
+  const r = run('git commit -m "feat: x"');
+  cleanup();
+  assert.equal(r.status, 0, `Expected exit 0 (valid EARS), got ${r.status}. stderr: ${r.stderr}`);
+});
+
+test('14. EARS Indesejado form ("IF {condição}, THEN the {sistema} SHALL {resposta}") is valid', () => {
+  cleanup();
+  const spec = writeSpecFile('ears-indesejado', `${NEW_CREATED}\n\n### AC-01: IF the disk is full, THEN the system SHALL abort with an error\n`);
+  const tasks = writeSpecFile('ears-indesejado-tasks', '- impl [SPEC:AC-01]\n');
+  writeState(spec, tasks);
+  const r = run('git commit -m "feat: x"');
+  cleanup();
+  assert.equal(r.status, 0, `Expected exit 0 (valid EARS), got ${r.status}. stderr: ${r.stderr}`);
+});
+
+test('15. EARS Opcional form ("WHERE {contexto}, the {sistema} SHALL {resposta}") is valid', () => {
+  cleanup();
+  const spec = writeSpecFile('ears-opcional', `${NEW_CREATED}\n\n### AC-01: WHERE dark mode is enabled, the system SHALL use the dark palette\n`);
+  const tasks = writeSpecFile('ears-opcional-tasks', '- impl [SPEC:AC-01]\n');
+  writeState(spec, tasks);
+  const r = run('git commit -m "feat: x"');
+  cleanup();
+  assert.equal(r.status, 0, `Expected exit 0 (valid EARS), got ${r.status}. stderr: ${r.stderr}`);
+});
+
+// ── EARS grammar: violations ──────────────────────────────────────────────
+
+test('16. AC title outside the 5 EARS forms → block exit 2 citing the AC and the grammar', () => {
+  cleanup();
+  const spec = writeSpecFile('ears-invalid', `${NEW_CREATED}\n\n### AC-01: Given a user is logged in, when they click logout, then they are signed out\n`);
+  writeState(spec, null);
+  const r = run('git commit -m "feat: x"');
+  cleanup();
+  assert.equal(r.status, 2, `Expected exit 2, got ${r.status}. stderr: ${r.stderr}`);
+  assert.match(r.stderr, /AC-01/, 'stderr should cite the offending AC');
+  assert.match(r.stderr, /EARS/, 'stderr should reference the EARS grammar / valid forms');
+});
+
+test('17. WHEN-form AC missing SHALL → invalid (block exit 2)', () => {
+  cleanup();
+  const spec = writeSpecFile('ears-no-shall', `${NEW_CREATED}\n\n### AC-01: WHEN a request arrives, the system MUST respond\n`);
+  writeState(spec, null);
+  const r = run('git commit -m "feat: x"');
+  cleanup();
+  assert.equal(r.status, 2, `Expected exit 2 (SHALL missing), got ${r.status}. stderr: ${r.stderr}`);
+  assert.match(r.stderr, /AC-01/);
+});
+
+// ── Grandfathering via **Created:** ────────────────────────────────────────
+
+test('18. Old spec (Created 2026-05-02) with non-EARS AC → passes (grandfathered)', () => {
+  cleanup();
+  const spec = writeSpecFile('grandfathered-old', `${OLD_CREATED}\n\n### AC-01: Given x, when y, then z\n`);
+  const tasks = writeSpecFile('grandfathered-old-tasks', '- impl [SPEC:AC-01]\n');
+  writeState(spec, tasks);
+  const r = run('git commit -m "feat: x"');
+  cleanup();
+  assert.equal(r.status, 0, `Expected exit 0 (grandfathered), got ${r.status}. stderr: ${r.stderr}`);
+});
+
+test('19. Boundary spec (Created exactly 2026-08-15) with non-EARS AC → validated, blocks', () => {
+  cleanup();
+  const spec = writeSpecFile('grandfathered-boundary', `${BOUNDARY_CREATED}\n\n### AC-01: Given x, when y, then z\n`);
+  writeState(spec, null);
+  const r = run('git commit -m "feat: x"');
+  cleanup();
+  assert.equal(r.status, 2, `Expected exit 2 (2026-08-15 is validated, not grandfathered), got ${r.status}. stderr: ${r.stderr}`);
+});
+
+test('20. Spec with NO Created field + non-EARS AC → passes (treated as pre-existing)', () => {
+  cleanup();
+  const spec = writeSpecFile('no-created', `### AC-01: Given x, when y, then z\n`);
+  const tasks = writeSpecFile('no-created-tasks', '- impl [SPEC:AC-01]\n');
+  writeState(spec, tasks);
+  const r = run('git commit -m "feat: x"');
+  cleanup();
+  assert.equal(r.status, 0, `Expected exit 0 (no Created field → not blocked), got ${r.status}. stderr: ${r.stderr}`);
+});
