@@ -15,6 +15,27 @@ soma install . --tool=claude
 
 ## Passos
 
+### 0. Discover Before Specify (NEW 2026-05-02 per Constitution Article XII + Failure Mode #9)
+
+ANTES de Step 1, scan ARGUMENTS for trigger words: "extends X", "extend module Y", "Phase N+1", "Phase X of Y", "operationalize Z", "add to existing W", "enhance Y module|command|impl".
+
+Se trigger detectado → MANDATORY pre-discovery (não pular, não rationalize past):
+
+1. Identify target module/file path from ARGUMENTS context (e.g., "extends sync.cjs" → target = `~/.soma-v2/scripts/sync.cjs`)
+2. Read full source: use Read tool (limit ≤1000 lines) OR `cat <module-path>` via Bash
+3. If CLI command: run `<module> --help` if available
+4. List recent test files: `ls <module-dir>/__tests__/ -t | head -5`
+5. Output discovery summary com section header "Phase N Empirical State" contendo:
+   - Existing capabilities map (what already works)
+   - Existing bugs/gaps (empirical state)
+   - Recent changes (git log se applicable)
+6. **If discovery surfaces "feature already partial-implemented"** → STOP + report ao usuário com discovery summary structurado; usuário decide: (a) spec for delta only OR (b) re-confirm new spec scope OR (c) cancel
+7. ONLY THEN proceed to Step 1
+
+**Bypass mecanismo** (legitimate exception, e.g., greenfield feature misclassified as "extends"): create marker file `touch /tmp/soma-discover-bypass-{sessionId}` BEFORE invoking /specify. Bypass is logged em telemetry pra audit.
+
+**Why this exists**: Phase 5 SOMA spec 011 (2026-05-02) escrita sem ler `~/.soma-v2/scripts/sync.cjs` (Phase 4b shipped 2 dias antes). Resultado: 30% scope redundante + 7 bugs empíricos missed. Failure Mode #9 doc'd em `~/.claude/CLAUDE.md`. Constitution Article XII enforces.
+
 ### 1. Determine o project root
 
 Use o diretório de trabalho atual (`cwd`). Se houver um `.git` num diretório pai, use esse pai como root.

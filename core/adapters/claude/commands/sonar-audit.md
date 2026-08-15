@@ -21,6 +21,8 @@ Capture o timestamp atual: `TIMESTAMP=$(date +%Y%m%d-%H%M%S)`.
 
 Use a ferramenta **Agent** para disparar todos os 5 simultaneamente (um bloco de tool calls em paralelo). Cada agente é **read-only** — `subagent_type: "Explore"`. Nenhum pode usar Edit ou Write.
 
+**Model pinning obrigatório** (era Fable): cada Agent() DEVE incluir `model:` explícito conforme o título do agente — Architecture → `model: 'opus'`, Modules → `model: 'sonnet'`, Tests → `model: 'haiku'`, Config/Wiring → `model: 'haiku'`, Spec Adherence → `model: 'sonnet'`. **NUNCA omita `model:`** — omissão herda o modelo da main session (Fable, $10/$50 por MTok = 2× Opus), e são 5 agentes em paralelo.
+
 Passe para cada agente o contexto completo:
 - Conteúdo de `spec.md`
 - Conteúdo de `plan.md`
