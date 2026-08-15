@@ -22,12 +22,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `manifest.version`/`manifest.release` (`install.cjs` lê `package.json`; os `attrs.version` do `sync.cjs`
   são de doc-blocks ancorados, entidade distinta).
 
+### Added
+
+- **6 suítes de teste de hook entram no versionamento** (F0.10). `capture-defer-gate`,
+  `pre-commit-gate`, `spec-completeness-gate`, `spec-test-traceability`, `subagent-init` e
+  `thermal-guard` existiam apenas em `~/.claude/hooks/`, fora do git, e `npm test` não rodava nenhuma.
+  Trazidas para `hooks/__tests__/` e incluídas no script de test. **Baseline: 1059 → 1160 testes.**
+  Era pré-requisito duro do D26 — o Article II exige RED provado por git history, e não há histórico
+  de teste que não está no git.
+- **D26 — posse do checkbox** (`pre-commit-gate.cjs`, `depth-guard.cjs`). Itens sob o heading
+  `## Revisão do humano` (case-insensitive, tolerante a acento; variante `## human review` aceita)
+  não contam para o bloqueio de commit. Fecha a auto-aprovação estrutural: antes, o agente que fazia o
+  trabalho marcava o checkbox que liberava o próprio commit. TDD estrito — RED em `32e02cb` tocando só
+  o teste, GREEN em `6ea4783` tocando só os hooks. `/quality-check` ganhou regra proibindo marcar `[x]`
+  nessa seção.
+- **D27a — tese e pressure-test no `/hyd`**. O comando implementava só os passos 1-3 da doutrina HYD v2
+  e pulava os 4-7. Ganhou scorecard de 6 critérios × 4 níveis, regra dura de evidência
+  (`weak`/`unknown` proíbe seguir sem verificação nomeada), falsificador obrigatório, e separação
+  fato/inferência/hipótese. Saldo de linhas **negativo** (-10) via PODA das listas de dimensões.
+- **D23 (economia de orquestração) e D24 (refusal routing)** adotados como texto normativo em
+  `~/.claude/CLAUDE.md`, deliberadamente **não** como Articles — são regras de operação do
+  orquestrador, não invariantes do framework.
+
+### Fixed
+
+- **O repo distribuía um SOMA que violava a própria Constitution** (F0.6). `specify.md` do repo não
+  tinha a seção `### 0. Discover Before Specify` (Article XII / failure mode #9): todo install novo saía
+  sem ela. Descoberto por audit de divergência repo↔live, que revelou **fork bidirecional de propósito**
+  — o repo evoluiu o bootstrap `soma install` (usado por projetos instalados), o live evoluiu regras
+  comportamentais. Resolvido por merge: o repo passa a ser o superset canônico. `sonar-audit.md` também
+  recebeu o model-pinning da era Fable.
+- **O repo distribuía 3 hooks quebrados.** `session-init.cjs`, `subagent-init.cjs` e
+  `write-compact-marker.cjs` requerem `lib/ck-config-utils.cjs` e `lib/ck-paths.cjs`, que existiam
+  apenas no live. Copiados; as libs só dependem de builtins.
+- **Poluição de telemetria por teste** (F0.4). Os hooks escreviam em `~/.claude/logs/*.jsonl` mesmo sob
+  teste — 950 dos 953 eventos do `article-xi` eram fixtures, o que inutilizou a telemetria como sinal de
+  decisão para a ratificação do Article XI. Path de log agora sobrescrevível por env, produção
+  inalterada. Residual conhecido: `hooks-regression.test.cjs` re-executa os testes do live e ainda
+  polui — pré-existente, documentado.
+- **Exit code de hard-block normalizado** de 1 para 2 (padrão da família) em `capture-defer-gate.cjs` e
+  `insight-action-coupling.cjs`. Eram dois outliers, não um.
+- **Constitution 1.2.1** — colisão de rótulos ("Article XI/XII (cogitado)" para candidatos rejeitados,
+  colidindo com Articles reais) e linha de versão stale que fazia todo subagent confirmar `v1.0.0`.
+  Ver `core/docs/constitution-amendments/1.2.1-v3-fase0.md`.
+
 ### Notes
 
-- Fase 0 completa cobre F0.1–F0.9. Esta entrada é atualizada conforme cada task fecha.
+- **Article XI (Capture Imperative) permanece DRAFT.** A premissa do plano ("ratificação barata, o hook
+  já roda") foi refutada por evidência — ver amendment 1.2.1 §3. Decisão: consertar a telemetria,
+  coletar janela limpa, ratificar depois.
+- **`privacy-block.cjs` arquivado** em `~/.claude/hooks/_archive/`. O escape `APPROVED:` documentado não
+  funciona: o hook só emite exit 0/2 e nunca reescreve o tool input, então o prefixo chega literal e o
+  arquivo vira `No such file`. Nunca esteve registrado em `settings.json` — não é regressão.
+- **Regressão causada e revertida durante a própria fase**: o arquivamento dos adapters
+  `{aider,cursor,chatgpt-desktop}` em `~/.soma-v2/adapters/` quebrou 14 testes; eles são exigidos por
+  `CONTRACT-ADAPTER-SKELETON-01`, não eram resíduo. Restaurados. Lição registrada no plano: verificar o
+  que os *testes afirmam*, não só o que o *código de produção lê*, antes de arquivar qualquer artefato.
 - Terreno re-verificado em 2026-08-14 contra o ground-truth de 2026-07-06 (`09-plano` §C): intacto,
   com 3 divergências corrigidas no plano (36 hooks registrados em vez de 34; `handoff-forge.md`
-  inexistente; F0.8/F0.9 criadas).
+  inexistente; F0.8/F0.9 criadas — depois F0.10).
+- 5 falhas de teste pré-existentes seguem abertas (Bucket C do handoff soma-v2.1), fora do escopo da
+  Fase 0: `doctor drift`, `CC-07`, `phase4a-regression`, `AC-13 BLOCK_CONFLICT`, `SANDBOX_VIOLATION`.
 
 ## [2.1.2] - 2026-07-03
 
