@@ -46,13 +46,51 @@ function findPlanFile(planPath) {
   }
 }
 
+// D26: heading that marks a section owned by the human reviewer — items under
+// it don't count toward the commit gate (Article II self-approval fix).
+// Canonical: "Revisão do humano". Single accepted English variant: "Human
+// Review" — kept to exactly one, no large synonym list (YAGNI).
+const REVIEW_SECTION_HEADINGS = new Set(['revisao do humano', 'human review']);
+
+function stripDiacritics(s) {
+  return s.normalize('NFD').replace(/[̀-ͯ]/g, '');
+}
+
+function isReviewSectionHeading(headingText) {
+  const normalized = stripDiacritics(headingText).toLowerCase().trim().replace(/\s+/g, ' ');
+  return REVIEW_SECTION_HEADINGS.has(normalized);
+}
+
 function countUnchecked(content) {
   const lines = content.split('\n');
   const unchecked = [];
   let inCodeBlock = false;
+  let inReviewSection = false;
+  let reviewSectionLevel = null;
+
   for (const line of lines) {
     if (/^(\s*)```/.test(line)) { inCodeBlock = !inCodeBlock; continue; }
     if (inCodeBlock) continue;
+
+    // D26: track heading level to open/close the human-review section.
+    // A heading of equal-or-higher rank (same or fewer #'s) closes it;
+    // nested subheadings (more #'s) stay inside it.
+    const headingMatch = line.match(/^\s*(#{1,6})\s+(.+?)\s*$/);
+    if (headingMatch) {
+      const level = headingMatch[1].length;
+      if (inReviewSection && level <= reviewSectionLevel) {
+        inReviewSection = false;
+        reviewSectionLevel = null;
+      }
+      if (isReviewSectionHeading(headingMatch[2])) {
+        inReviewSection = true;
+        reviewSectionLevel = level;
+      }
+      continue;
+    }
+
+    if (inReviewSection) continue;
+
     const stripped = line.replace(/`[^`]*`/g, '');
     if (/- \[ \]/.test(stripped)) {
       unchecked.push(stripped.replace(/^.*- \[ \]\s*/, '').trim());
