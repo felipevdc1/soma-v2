@@ -46,6 +46,7 @@ const SUBCOMMANDS = [
   { name: 'manifest',  script: 'manifest.cjs',   desc: 'Manage manifest baseline + future verbs' },
   { name: 'module',    script: 'module.cjs',     desc: 'Manage SOMA modules (add, remove, deprecate)' },
   { name: 'audit',     script: 'audit.cjs',      desc: 'Run audit checks across SOMA contexts' },
+  { name: 'run',       script: 'run.cjs',        desc: 'Artifact-gated step reports, run-state, and dispatch provenance' },
 ];
 
 const VALID_NAMES = SUBCOMMANDS.map(s => s.name);
