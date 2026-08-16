@@ -46,6 +46,32 @@ Fluxo: cada step, ao concluir, chama `soma run report --step X --status pass|fai
 
 ---
 
+## Superfície de CLI do `soma run` (fixada em 2026-08-15)
+
+Esta seção existe porque o `quickstart.md` que eu mesmo escrevi ficou **inconsistente**: `report`, `state` e `resume` aparecem com `--run <runId>`, e `gate` aparece sem, nas 4 ocorrências. O executor da T-02 esbarrou nisso ao escrever o contract test, resolveu de forma defensável (gate resolve o run ativo via `.soma.lock`) e **sinalizou em vez de deixar a escolha enterrada no teste**. Fixado aqui para T-06 a T-11 implementarem contra a mesma forma.
+
+**Regra geral: `--run <runId>` é opcional em todos os verbos.** Quando omitido, o run ativo é resolvido pelo `.soma.lock` da raiz do projeto (mecanismo **pré-existente**, `soma-run.md` §0.3, campos `{sessionId, runId, startedAt}` — não é invenção desta fase). Sem `--run` e sem lock legível → erro nomeando as duas formas de resolver. Isso reconcilia os testes de T-02 e T-04 sem que nenhum precise ser reescrito.
+
+```
+soma run state  --init --run <runId>
+soma run report [--run <runId>] --step <STEP> --status pass|fail|blocked [--reason <texto>]
+soma run gate   [--run <runId>] --step <STEP>
+soma run gate   [--run <runId>] --validate <taskId> --validator <agentName>
+soma run resume --run <runId>
+soma run dispatch-record begin [--run <runId>] --task <taskId> [--attempt <n>] --prompt-file <path>
+soma run dispatch-record end   [--run <runId>] --task <taskId> [--attempt <n>] --output-file <path> --metadata-file <path>
+```
+
+Notas que valem para quem implementa:
+
+- **`resume` exige `--run` explícito.** É o único caso em que resolver pelo lock seria errado: retomar acontece de outra sessão, possivelmente com o lock apontando para outro run ou ausente. Pedir o `runId` é o que torna o AC-04 possível.
+- **`gate --validate`** é a superfície de CLI do invariante AC-06 e apenas embrulha `run/validator-invariant.cjs`, que exporta `checkValidatorAssignment({ metadataPath, proposedValidator }) -> { allowed, reason }`. A T-04 testou o módulo; o `quickstart.md` §5 exercita a CLI. As duas formas existem e a CLI não duplica lógica.
+- **`dispatch-record` tem duas fases** (`begin`/`end`) porque o artefato nasce em dois momentos: o prompt antes do dispatch, a saída depois. Detalhe completo em `contracts/emit-dispatch-record.md`.
+
+Toda mudança nesta superfície acontece **aqui primeiro**. Divergir no código e ajustar o documento depois é como as duas ambiguidades acima nasceram.
+
+---
+
 ## A restrição de design que veio da execução
 
 O hotfix pré-voo desta fase produziu, no round 1, código que **passava em 100% dos testes escritos para ele e ainda assim estava errado**: o fixture pré-existente foi realinhado para caber na regra nova, e com isso o teste parou de fazer a pergunta que fazia antes. O buraco só apareceu quando a regra foi exercitada contra o que o `/specify` realmente produz.
