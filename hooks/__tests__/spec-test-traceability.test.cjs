@@ -440,3 +440,137 @@ test('C2-10: CLI flag --check-red-phase enables check independent of env', () =>
     }
   }
 });
+
+// ─── T-15: ressuscitar o traceability (AC-09, AC-10) ───────────────────────
+//
+// Everything below spawns the CLI as a REAL child process (spawnSync), not
+// validate() as an imported function — proving the hook EXECUTES, not just
+// that it's configured/registered/importable. AC-09 is the positive case
+// (the check runs and emits the documented payload); AC-10 is the case
+// that matters more: the 3 ways the check can fail to run at all
+// (renomeado/ausente, interpretador errado, exit inesperado) must all
+// surface loudly (nonzero exit, no parseable "pass" payload) — never as a
+// silent pass. This is the same pathology named in spec.md's own Meta
+// Note: "enforcement não-exercitado apodrece em silêncio."
+//
+// No `||`, `?.`, or silent catch anywhere below when reading a child's
+// output — a crashed child must never read as a clean result.
+
+const HOOK_PATH = path.resolve(__dirname, '..', 'spec-test-traceability.cjs');
+
+function spawnHook(bin, args, opts = {}) {
+  return cp.spawnSync(bin, args, { encoding: 'utf8', timeout: 15_000, ...opts });
+}
+
+test('T-15 AC-09: CLI `validate` verb executes for real and emits the documented payload shape', () => {
+  const d = tmp();
+  const spec = write(path.join(d, 'spec.md'), '- **AC-01**: a\n- **AC-02**: b\n');
+  write(path.join(d, 'tests/a.test.ts'), '// @spec AC-01\n// @spec AC-02\n');
+
+  const r = spawnHook('node', [HOOK_PATH, 'validate', spec, path.join(d, 'tests')]);
+  assert.equal(r.error, undefined, `spawn itself failed: ${r.error}`);
+  assert.equal(r.status, 0, `expected exit 0 for a fully-covered fixture, got ${r.status}. stdout: ${r.stdout} stderr: ${r.stderr}`);
+
+  // Parse — a child that crashed or was misinterpreted would not produce
+  // valid JSON here, and this assertion (not a || fallback) is what catches that.
+  const payload = JSON.parse(r.stdout);
+  assert.equal(payload.coverage, 100);
+  assert.deepEqual(payload.uncovered_ac, []);
+  assert.deepEqual(payload.orphan_tests, []);
+  assert.ok('red_phase_evidence' in payload,
+    `red_phase_evidence must be present in the CLI payload without needing --check-red-phase. Got keys: ${Object.keys(payload)}`);
+  assert.equal(payload.pass, true);
+});
+
+test('T-15 AC-09: partial coverage → uncovered_ac carries the REAL uncovered AC id, not an empty placeholder', () => {
+  const d = tmp();
+  const spec = write(path.join(d, 'spec.md'), '- **AC-01**: a\n- **AC-02**: b\n- **AC-03**: c\n');
+  write(path.join(d, 'tests/a.test.ts'), '// @spec AC-01\n// @spec AC-02\n');
+
+  const r = spawnHook('node', [HOOK_PATH, 'validate', spec, path.join(d, 'tests')]);
+  assert.equal(r.error, undefined, `spawn itself failed: ${r.error}`);
+  assert.equal(r.status, 1, `expected exit 1 (uncovered AC), got ${r.status}. stdout: ${r.stdout} stderr: ${r.stderr}`);
+
+  const payload = JSON.parse(r.stdout);
+  assert.deepEqual(payload.uncovered_ac, ['AC-03']);
+  assert.equal(payload.coverage, 67); // Math.round(2/3 * 100)
+  assert.equal(payload.pass, false);
+});
+
+test('T-15: PreToolUse/Bash zero-argv entry is a true no-op — allows regardless of stdin content, never reads a payload', () => {
+  // Simulates how Claude Code actually invokes this hook once
+  // install/soma-hooks-map.json is synced: zero argv, an unrelated
+  // tool-call JSON on stdin (any bash command, not a traceability check).
+  const r = spawnHook('node', [HOOK_PATH], {
+    input: JSON.stringify({ tool_name: 'Bash', tool_input: { command: 'ls -la' } }),
+  });
+  assert.equal(r.error, undefined, `spawn itself failed: ${r.error}`);
+  assert.equal(r.status, 0, `zero-argv entry must always exit 0 (never block an unrelated bash command). stderr: ${r.stderr}`);
+  assert.equal(r.stdout, '', 'zero-argv entry must not print anything — it is a pure allow, not a validation run');
+});
+
+// ── AC-10: os 3 jeitos do check falhar em rodar — nenhum pode ler como pass ──
+
+test('T-15 AC-10 (hook renomeado/ausente): invocar um path inexistente falha alto, nunca como pass silencioso', () => {
+  const missingPath = path.join(path.dirname(HOOK_PATH), 'spec-test-traceability-RENAMED-DOES-NOT-EXIST.cjs');
+  assert.ok(!fs.existsSync(missingPath), 'precondition: this path must not exist — never touch the real hook file');
+
+  const r = spawnHook('node', [missingPath, 'validate', 'irrelevant.md']);
+  assert.equal(r.error, undefined, `spawn itself failed: ${r.error}`);
+  assert.notEqual(r.status, 0, `a missing hook must exit nonzero, not silently pass. stdout: ${r.stdout} stderr: ${r.stderr}`);
+  assert.match(r.stderr, /cannot find module/i,
+    `stderr must name the cause (missing module), not just fail silently. Got: "${r.stderr}"`);
+  // No valid JSON payload with a `pass` field could possibly be read from this —
+  // node never got far enough to run our code at all.
+  assert.equal(r.stdout, '');
+});
+
+test('T-15 AC-10 (interpretador errado): `bash` no lugar de `node` falha alto, nunca produz o payload JSON', () => {
+  const r = spawnHook('bash', [HOOK_PATH, 'validate', 'irrelevant.md']);
+  assert.equal(r.error, undefined, `spawn itself failed: ${r.error}`);
+  assert.notEqual(r.status, 0, `bash misinterpreting a Node script must exit nonzero. stdout: ${r.stdout} stderr: ${r.stderr}`);
+  // The defining property of "não pode ler como pass": nothing on stdout
+  // could be mistaken for the documented {coverage, orphan_tests, ...}
+  // payload — assert this explicitly instead of trusting the exit code alone.
+  let parsedSomethingWithPassField = false;
+  try {
+    const maybe = JSON.parse(r.stdout);
+    parsedSomethingWithPassField = typeof maybe === 'object' && maybe !== null && 'pass' in maybe;
+  } catch (_) {
+    // expected: stdout is not JSON at all when bash is misinterpreting the script
+  }
+  assert.equal(parsedSomethingWithPassField, false,
+    `stdout must never contain something parseable as a validation payload. Got stdout: "${r.stdout}"`);
+});
+
+test('T-15 AC-10 (exit inesperado): crash não tratado (EACCES ao varrer testsGlob) falha alto, nunca produz o payload JSON', () => {
+  const d = tmp();
+  const spec = write(path.join(d, 'spec.md'), '- **AC-01**: a\n');
+  const lockedTests = path.join(d, 'locked-tests');
+  fs.mkdirSync(lockedTests);
+  fs.chmodSync(lockedTests, 0o000); // deny read+execute even to the owner (verified empirically on this Mac)
+
+  try {
+    const r = spawnHook('node', [HOOK_PATH, 'validate', spec, lockedTests]);
+    assert.equal(r.error, undefined, `spawn itself failed: ${r.error}`);
+    assert.notEqual(r.status, 0, `an uncaught EACCES must exit nonzero, not read as pass. stdout: ${r.stdout} stderr: ${r.stderr}`);
+    // Measured: Node's default uncaught-exception exit code is 1 — the SAME
+    // code validate()'s own clean pass:false path uses. Exit code alone
+    // cannot distinguish "ran and failed" from "crashed before finishing",
+    // which is exactly why the stdout-content check below is the assertion
+    // that actually matters here, not the exit code.
+    let parsedSomethingWithPassField = false;
+    try {
+      const maybe = JSON.parse(r.stdout);
+      parsedSomethingWithPassField = typeof maybe === 'object' && maybe !== null && 'pass' in maybe;
+    } catch (_) {
+      // expected: an uncaught exception prints a stack trace to stderr, not JSON to stdout
+    }
+    assert.equal(parsedSomethingWithPassField, false,
+      `an unexpected crash must never produce something parseable as a validation payload. Got stdout: "${r.stdout}"`);
+    assert.match(r.stderr, /EACCES/,
+      `stderr should name the actual cause so a REJECT report can cite it. Got: "${r.stderr}"`);
+  } finally {
+    fs.chmodSync(lockedTests, 0o755); // restore before cleanup — a locked dir can otherwise survive rmSync
+  }
+});

@@ -364,23 +364,81 @@ function validate(specPath, testsGlob, tasksPath, opts = {}) {
 
 module.exports = { validate, validateRedPhase };
 
+/**
+ * Translates validate()'s internal (camelCase) result into the payload
+ * shape documented in spec.md AC-09 / tasks.md T-15 / quickstart.md §7 /
+ * soma-run.md STEP_5_VALIDATE: `coverage`, `orphan_tests`, `uncovered_ac`,
+ * `red_phase_evidence`. Renaming happens ONLY here, at the CLI output
+ * boundary — validate()'s own return shape (coveragePercent / orphanTests
+ * / uncoveredAC) is untouched, because 442 lines of existing tests in
+ * hooks/__tests__/spec-test-traceability.test.cjs call validate() directly
+ * and depend on that exact shape. `red_phase_evidence` is already
+ * snake_case internally, so it's copied over as-is when present (i.e.
+ * when checkRedPhase produced it).
+ */
+function toCliPayload(result) {
+  const payload = {
+    specPath: result.specPath,
+    totalAC: result.totalAC,
+    coverage: result.coveragePercent,
+    coveredAC: result.coveredAC,
+    uncovered_ac: result.uncoveredAC,
+    orphan_tests: result.orphanTests,
+    pass: result.pass,
+    failReasons: result.failReasons,
+    skippedRefs: result.skippedRefs,
+  };
+  if ('red_phase_evidence' in result) payload.red_phase_evidence = result.red_phase_evidence;
+  return payload;
+}
+
 if (require.main === module) {
+  // ── PreToolUse/Bash entry point — MUST stay the first branch, before any
+  // further require/fs/parse work runs. install/soma-hooks-map.json (T-15)
+  // registers this file under PreToolUse matcher "Bash", which means
+  // Claude Code invokes it — zero argv, a JSON tool-call payload on stdin —
+  // before EVERY bash command in EVERY session, not just SOMA runs. This
+  // is NOT a gate: it never blocks anything. The registration exists only
+  // as proof-of-wiring (quickstart.md's `grep -c "spec-test-traceability"
+  // install/soma-hooks-map.json` check, and plan.md's general hook-wiring
+  // pattern) — real AC-10 enforcement lives entirely in the exit code and
+  // payload of the explicit `validate` invocation below, which
+  // STEP_5_VALIDATE reads. Blocking here would swallow the very payload
+  // AC-09 requires the orchestrator to read. Since the outcome (always
+  // allow) never depends on whether this happens to be our own
+  // invocation, there's nothing worth a stdin read for — argv.length is
+  // the entire check, and it's the cheapest one available.
+  if (process.argv.length <= 2) {
+    process.exit(0);
+  }
+
   const args = process.argv.slice(2);
-  const checkRedPhaseFlag = args.includes('--check-red-phase');
-  const positional = args.filter(a => !a.startsWith('--'));
+  const verb = args[0];
+  if (verb !== 'validate') {
+    console.error('Usage: node spec-test-traceability.cjs validate <specPath> [testsGlob] [tasksPath] [--check-red-phase]');
+    process.exit(2);
+  }
+
+  // --check-red-phase is accepted (filtered out of positionals below) but
+  // redundant under this verb: the `validate` verb's own contract (AC-09)
+  // always includes red_phase_evidence in the payload — see the true
+  // default passed to validate() below. validate()'s OWN default (false)
+  // is untouched for direct callers.
+  const rest = args.slice(1);
+  const positional = rest.filter(a => !a.startsWith('--'));
   const [specArg, globArg, tasksArg] = positional;
 
   if (!specArg) {
-    console.error('Usage: node spec-test-traceability.cjs <specPath> [testsGlob] [tasksPath] [--check-red-phase]');
+    console.error('Usage: node spec-test-traceability.cjs validate <specPath> [testsGlob] [tasksPath] [--check-red-phase]');
     process.exit(2);
   }
   let result;
   try {
-    result = validate(specArg, globArg, tasksArg, { checkRedPhase: checkRedPhaseFlag });
+    result = validate(specArg, globArg, tasksArg, { checkRedPhase: true });
   } catch (err) {
     if (err.code === 'ENOSPEC') { console.error(err.message); process.exit(2); }
     throw err;
   }
-  console.log(JSON.stringify(result, null, 2));
+  console.log(JSON.stringify(toCliPayload(result), null, 2));
   process.exit(result.pass ? 0 : 1);
 }
