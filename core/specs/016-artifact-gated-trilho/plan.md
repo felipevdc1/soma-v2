@@ -21,7 +21,15 @@ Fluxo: cada step, ao concluir, chama `soma run report --step X --status pass|fai
 - Storage: **arquivos JSON** em `{projeto}/.soma/`, escrita atômica `write tmp → mv` (padrão que o `soma-run.md` §0.2 já especifica)
 - Test runner: `node --test`, via `npm test`
 
-**Rationale:** o repo tem **zero dependências** hoje (`dependencies: {}` e `devDependencies: {}` no `package.json`, verificado em 2026-08-15). Essa propriedade é um ativo real para um framework que se instala em projetos alheios — introduzir a primeira dependência para validar JSON seria pagar caro por pouco. O validador de schema é escrito à mão e é pequeno por construção, porque os schemas são fechados e conhecidos (ver `contracts/`).
+**Rationale:** o repo tem **zero dependências** hoje — o `package.json` **não possui as chaves `dependencies` nem `devDependencies`** (as 10 chaves presentes são `name`, `version`, `description`, `license`, `author`, `contributors`, `homepage`, `repository`, `engines`, `scripts`; verificado com `hasOwnProperty` em 2026-08-15). Essa propriedade é um ativo real para um framework que se instala em projetos alheios — introduzir a primeira dependência para validar JSON seria pagar caro por pouco. O validador de schema é escrito à mão e é pequeno por construção, porque os schemas são fechados e conhecidos (ver `contracts/`).
+
+<!-- Correção de 2026-08-15, levantada pelo executor da T-01: a redação anterior dizia
+     "`dependencies: {}` e `devDependencies: {}`", afirmando chaves vazias onde na verdade não há
+     chave alguma. O erro veio do MÉTODO de verificação, não do fato: eu havia medido com
+     `p.dependencies || {}`, e o fallback imprime `{}` tanto para vazio quanto para ausente.
+     A conclusão (zero dependências) estava certa; a evidência citada, não. Vale como lembrete de
+     que um fallback no comando de verificação fabrica o resultado que se espera ver. -->
+
 
 ---
 
