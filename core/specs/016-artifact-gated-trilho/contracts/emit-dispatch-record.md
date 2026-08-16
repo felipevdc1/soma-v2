@@ -73,6 +73,23 @@ Consequência de design: sem o run-dir, o invariante dependeria do orquestrador 
 
 Gravar o prompt antes tem propósito: se o agente morrer ou a sessão cair, o run-dir ainda mostra o que foi pedido.
 
+### Superfície de CLI (fixada em 2026-08-15)
+
+Duas fases, porque o artefato nasce em dois momentos — antes e depois do dispatch:
+
+```
+soma run dispatch-record begin --run <runId> --task <taskId> [--attempt <n>] --prompt-file <path>
+soma run dispatch-record end   --run <runId> --task <taskId> [--attempt <n>] --output-file <path> --metadata-file <path>
+```
+
+- `begin` grava `prompt.md`. `attempt` 1 vai direto em `{taskId}/`; `attempt >= 2` em `{taskId}/attempt-{n}/`
+- `end` valida o metadata, grava `output.md` + `metadata.json`, e é **tudo-ou-nada**: metadata inválido não deixa escrita parcial
+- Módulo do invariante: `run/validator-invariant.cjs` exporta `checkValidatorAssignment({ metadataPath, proposedValidator }) -> { allowed, reason }`
+
+**Procedência desta seção:** o contrato original não definia a superfície de CLI nem a assinatura do módulo. O executor da T-04 precisou de uma para escrever o contract test, propôs esta, e **sinalizou a decisão em vez de deixá-la implícita no código de teste**. Promovida a contrato aqui para que T-10 e T-11 implementem contra a mesma forma — se ficasse só no cabeçalho do arquivo de teste, cada task inventaria a sua e a divergência só apareceria na integração.
+
+Se T-10/T-11 tiverem motivo para divergir, a mudança é **aqui primeiro**, e os testes de T-04 ajustam flags/assinatura — nunca lógica.
+
 ---
 
 ## Consumers
