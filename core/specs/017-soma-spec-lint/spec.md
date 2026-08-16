@@ -114,6 +114,15 @@ Given o linter precisando de parsing de AC e de marker / When ele é implementad
 
 Given o `package.json` sem as chaves `dependencies` e `devDependencies` / When o linter roda / Then ele funciona e essas chaves continuam ausentes.
 
+
+### AC-15: WHEN um `tasks.md` marca paralelismo com `[P]` sem crase, the linter SHALL reconhecê-lo do mesmo modo que reconhece `` `[P]` `` com crase
+
+Given as specs 001-015, que escrevem `| T-02 | [P] ...` / When o lint roda / Then as tasks aparecem como `[P]` em `ctx.tasks` e o `parallel-collision` avalia os pares — hoje ele lê 204 ocorrências reais como zero e fica cego em 14 das 16 specs.
+
+### AC-16: IF uma entrada da coluna `files` não tem forma de path, THEN the linter SHALL ignorá-la em vez de tratá-la como arquivo
+
+Given entradas como `hooks/x.cjs + test`, `(test in y.cjs)` e `adapters/{cursor, aider, codex}` partido pelo split de vírgula / When o lint roda / Then nenhuma delas gera achado de colisão. Sem esta regra, o AC-15 troca cegueira por ruído — as duas mudanças são acopladas e não devem entrar separadas.
+
 ---
 
 ## Non-Functional Requirements
