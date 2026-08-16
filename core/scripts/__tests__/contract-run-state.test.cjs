@@ -320,7 +320,14 @@ test('T-03-04b: decisions[] is append-only — a pre-existing decision survives 
     fs.writeFileSync(runStateFile, JSON.stringify(seeded, null, 2));
 
     // A second write touching the same run must not wipe the seeded decision.
-    runRun(['state', '--init', '--run', runId], { cwd: dir });
+    const r = runRun(['state', '--init', '--run', runId], { cwd: dir });
+    assert.equal(
+      r.status, 0,
+      `"soma run state --init" on an existing run must succeed (append-only merge, not a fatal error). ` +
+        `Got exit ${r.status}. stdout: ${r.stdout} stderr: ${r.stderr}. Not implemented yet — this is the ` +
+        `expected RED for T-03 (without this check, the test would pass vacuously today because the ` +
+        `command fails and never touches the seeded file).`
+    );
 
     const after = JSON.parse(fs.readFileSync(runStateFile, 'utf8'));
     assert.ok(Array.isArray(after.decisions), 'state.decisions must be an array');
