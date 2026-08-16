@@ -264,4 +264,26 @@ async function main() {
   }
 }
 
-main();
+// Only run as a hook process when invoked directly (PreToolUse spawns this
+// file as `node spec-completeness-gate.cjs`). When `require()`d as a library
+// — e.g. by the spec-lint linter consuming these parsing primitives (Spec
+// 017 AC-13) — main() must NOT fire: it reads stdin and calls process.exit,
+// which would hijack the importing process.
+if (require.main === module) {
+  main();
+}
+
+module.exports = {
+  AC_LINE_RE,
+  parseAcEntries,
+  parseAcIds,
+  isEarsValid,
+  EARS_FORMS,
+  EARS_GATE_DATE,
+  extractCreatedDate,
+  isEarsGrandfathered,
+  parseCoveredAcs,
+  BARE_MARKER_TOKEN_RE,
+  stripNonCountableRegions,
+  countOpenClarificationMarkers,
+};
