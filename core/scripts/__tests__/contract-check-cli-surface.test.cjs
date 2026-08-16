@@ -34,10 +34,13 @@ const cliSurface = require('../lib/spec-lint/checks/cli-surface.cjs');
 
 const FIXTURES_DIR = path.join(__dirname, 'fixtures/spec-lint/cli-surface');
 
-function runCheck(fixtureName) {
+function loadFixture(fixtureName) {
   const specDir = path.join(FIXTURES_DIR, fixtureName);
-  const ctx = buildContext(specDir);
-  return cliSurface.run(ctx);
+  return buildContext(specDir);
+}
+
+function runCheck(fixtureName) {
+  return cliSurface.run(loadFixture(fixtureName));
 }
 
 // ── conhecido-RUIM (corpus items 1-4) — cada um mapeado 1:1 a um fixture ──
@@ -96,32 +99,106 @@ test('CONTRACT: [corpus 4] subverbo desconhecido produz achado nomeando subverbo
 
 // ── conhecido-BOM (corpus items 5-9) — cada um mapeado 1:1 a um fixture ──
 
+// Corpus 5-9 (conhecido-BOM) are hardened with a content precondition
+// before trusting "zero achados" — T-06 deliverable. `status==='ran'` +
+// `findings===[]` alone only proves the fence was found and the check ran;
+// it does NOT prove the fixture's quickstart.md actually contains the
+// invocation the test is named for — an EMPTY quickstart.md would satisfy
+// the same two assertions. Pattern copied from
+// contract-check-parallel.test.cjs, which asserts the parsed shape
+// (ctx.tasks fields) before asserting zero findings; here the analogous
+// "parsed shape" is the loaded artifact's `.lines` (context.cjs's own
+// {file, text, lines} transform of the raw file) — asserting the exact
+// line content pins the fixture to the scenario it claims to test.
+
 test('CONTRACT: [corpus 5] invocação exata da superfície não produz achado', () => {
-  const result = runCheck('05-exact-match');
+  const ctx = loadFixture('05-exact-match');
+  const quickstart = ctx.artifacts.find(a => a.file === 'quickstart.md');
+  assert.ok(quickstart, 'precondition: fixture must have a quickstart.md artifact');
+  assert.equal(
+    quickstart.lines[2],
+    'Rode `soma spec-lint core/specs/017-soma-spec-lint` para lintar a spec.',
+    'precondition: line 3 must carry the exact-match invocation this test is named for'
+  );
+  const result = cliSurface.run(ctx);
   assert.equal(result.status, 'ran');
   assert.deepEqual(result.findings, []);
 });
 
 test('CONTRACT: [corpus 6] flag opcional presente e ausente — ambas passam', () => {
-  const result = runCheck('06-optional-flag-both-present-absent');
+  const ctx = loadFixture('06-optional-flag-both-present-absent');
+  const quickstart = ctx.artifacts.find(a => a.file === 'quickstart.md');
+  assert.ok(quickstart, 'precondition: fixture must have a quickstart.md artifact');
+  assert.equal(
+    quickstart.lines[2],
+    'Rode `soma run gate --step build` para o caminho padrão.',
+    'precondition: line 3 must invoke without the optional --dry-run'
+  );
+  assert.equal(
+    quickstart.lines[4],
+    'Ou, em modo dry-run: `soma run gate --step build --dry-run`.',
+    'precondition: line 5 must invoke WITH the optional --dry-run present'
+  );
+  const result = cliSurface.run(ctx);
   assert.equal(result.status, 'ran');
   assert.deepEqual(result.findings, []);
 });
 
 test('CONTRACT: [corpus 7] segunda forma alternativa do mesmo verbo casa — sem achado', () => {
-  const result = runCheck('07-alternate-form-match-second');
+  const ctx = loadFixture('07-alternate-form-match-second');
+  const quickstart = ctx.artifacts.find(a => a.file === 'quickstart.md');
+  assert.ok(quickstart, 'precondition: fixture must have a quickstart.md artifact');
+  assert.equal(
+    quickstart.lines[2],
+    'Para retomar depois de uma falha: `soma run gate --resume`.',
+    'precondition: line 3 must invoke the SECOND declared form of "run gate" (--resume), not the first (--step)'
+  );
+  assert.ok(
+    !quickstart.text.includes('--step'),
+    'precondition: fixture must not ALSO contain a --step invocation — otherwise a check that silently ' +
+      'ignored form 2 entirely could still pass by matching form 1'
+  );
+  const result = cliSurface.run(ctx);
   assert.equal(result.status, 'ran');
   assert.deepEqual(result.findings, []);
 });
 
 test('CONTRACT: [corpus 8] menção em prosa ao nome do verbo não é invocação — zero achados', () => {
-  const result = runCheck('08-prose-mention-not-invocation');
+  const ctx = loadFixture('08-prose-mention-not-invocation');
+  const quickstart = ctx.artifacts.find(a => a.file === 'quickstart.md');
+  assert.ok(quickstart, 'precondition: fixture must have a quickstart.md artifact');
+  assert.equal(
+    quickstart.lines[2],
+    'O verbo `gate` decide a transição — não é chamado diretamente aqui.',
+    'precondition: line 3 must carry a bare-verb mention in backticks, with no binary preceding it'
+  );
+  assert.ok(
+    !quickstart.text.includes('soma'),
+    'precondition: fixture must not contain the binary "soma" anywhere — otherwise a check that swept ' +
+      'the whole line (not just the code span) could accidentally match on surrounding prose'
+  );
+  const result = cliSurface.run(ctx);
   assert.equal(result.status, 'ran');
   assert.deepEqual(result.findings, []);
 });
 
 test('CONTRACT: [corpus 9] plan.md sem a cerca soma-cli-surface -> status skipped com reason, zero achados mesmo com invocação divergente presente', () => {
-  const result = runCheck('09-no-fence-skipped');
+  const ctx = loadFixture('09-no-fence-skipped');
+  const plan = ctx.artifacts.find(a => a.file === 'plan.md');
+  const quickstart = ctx.artifacts.find(a => a.file === 'quickstart.md');
+  assert.ok(plan, 'precondition: fixture must have a plan.md artifact');
+  assert.ok(quickstart, 'precondition: fixture must have a quickstart.md artifact');
+  assert.ok(
+    !plan.text.includes('```soma-cli-surface'),
+    'precondition: plan.md must genuinely lack the soma-cli-surface fence'
+  );
+  assert.equal(
+    quickstart.lines[2],
+    'Rode `soma run mark-done --step X` para finalizar o passo.',
+    'precondition: quickstart.md must carry a REAL divergent invocation (unknown verb mark-done) — ' +
+      'otherwise "zero achados" would be trivially true, not evidence that the check was actually skipped'
+  );
+  const result = cliSurface.run(ctx);
   assert.equal(result.status, 'skipped');
   assert.equal(typeof result.reason, 'string');
   assert.ok(result.reason.length > 0, 'esperava reason não-vazio quando status é skipped');
