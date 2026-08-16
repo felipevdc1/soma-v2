@@ -36,7 +36,29 @@ Resolve o path da spec:
 test -f "$SPEC_PATH" || echo "ABORT: spec.md não encontrada em $SPEC_PATH"
 
 # Verificar ausência de markers em aberto
-grep -c "\[NEEDS CLARIFICATION" "$SPEC_PATH" 2>/dev/null && echo "ABORT: spec tem N marker(s) [NEEDS CLARIFICATION] em aberto. Resolva-os antes de prosseguir."
+# Contagem de markers de esclarecimento.
+#
+# NÃO use `grep -c "\[NEEDS CLARIFICATION"`. Ele conta três coisas que não são marker: guidance
+# dentro de comentário HTML, citação entre crases (a linha do Completeness Checklist é uma), e o
+# token nu usado como substantivo em prosa ("resolve the original [NEEDS CLARIFICATION] markers").
+# Medido em 2026-08-15: o grep ingênuo dava falso-positivo em 13 das 15 specs do repo e abortava
+# o /plan-sdd numa spec já aprovada no Gate 1.
+#
+# A AUTORIDADE desta regra é `hooks/spec-completeness-gate.cjs`. Se este snippet divergir dele,
+# o hook vence e este bloco está errado — conserte aqui, não lá.
+node -e '
+  const fs = require("fs");
+  const spec = fs.readFileSync(process.argv[1], "utf-8");
+  const stripped = spec
+    .replace(/<!--[\s\S]*?-->/g, "")   // guidance em comentário HTML
+    .replace(/`[^`\n]*`/g, "");        // citação entre crases
+  const n = (stripped.match(/\[NEEDS CLARIFICATION(?!\])/g) || []).length;  // token nu não conta
+  if (n > 0) {
+    console.log(`ABORT: spec tem ${n} marker(s) [NEEDS CLARIFICATION] em aberto. Resolva-os antes de prosseguir.`);
+    process.exit(1);
+  }
+  console.log("markers em aberto: 0");
+' "$SPEC_PATH"
 
 # Verificar constitution
 test -f "$HOME/.claude/constitution.md" || echo "ABORT: constitution.md não encontrada em ~/.claude/constitution.md"
