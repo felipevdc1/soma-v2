@@ -513,3 +513,136 @@ test('31. Marker with no punctuation at all ("[NEEDS CLARIFICATION pergunta]") �
   assert.equal(r.status, 2, `Expected exit 2 (unpunctuated marker must still count), got ${r.status}. stderr: ${r.stderr}`);
   assert.match(r.stderr, /SPEC INCOMPLETE: 1 marker open/);
 });
+
+// ─────────────────────────────────────────────────────────────────────────
+// Spec 017 AC-13: the gate's parsing primitives must be importable, so the
+// linter (T-03/T-04) consumes them instead of reimplementing them. Adding
+// `module.exports` must NOT change hook behavior when run as a process —
+// PreToolUse still fires main() directly. Covered here:
+//   - every primitive is exported and usable via require()
+//   - the hook, invoked as a subprocess (as PreToolUse does), still runs
+//     main() and blocks/allows exactly as before (regression, not just a
+//     "module.exports exists" smoke test)
+// ─────────────────────────────────────────────────────────────────────────
+
+const EXPECTED_EXPORTS = [
+  'AC_LINE_RE',
+  'parseAcEntries',
+  'parseAcIds',
+  'isEarsValid',
+  'EARS_FORMS',
+  'EARS_GATE_DATE',
+  'extractCreatedDate',
+  'isEarsGrandfathered',
+  'parseCoveredAcs',
+  'BARE_MARKER_TOKEN_RE',
+  'stripNonCountableRegions',
+  'countOpenClarificationMarkers',
+];
+
+// `require()`-ing the hook in-process is unsafe until it guards main() behind
+// `require.main === module`: today, requiring it runs main() immediately,
+// which blocks reading fd 0 (stdin) forever — an in-process `require()`
+// would hang this entire test file rather than fail cleanly. So these tests
+// exercise `require()` inside a bounded CHILD process (empty stdin + a hard
+// timeout via spawnSync's own `timeout` option) and report back via JSON on
+// stdout. A timeout is itself a legitimate RED failure (see test 32/33), and
+// once main() is properly guarded, the child returns instantly.
+function requireExportsInChildProcess(evalBody) {
+  const script = `
+    const gate = require(${JSON.stringify(HOOK)});
+    ${evalBody}
+  `;
+  return spawnSync(process.execPath, ['-e', script], {
+    input: '',
+    encoding: 'utf-8',
+    timeout: 5000,
+    killSignal: 'SIGKILL',
+  });
+}
+
+// No `|| fallback` on r.stdout / status here on purpose: a `|| '[]'` default
+// would mask a crashed or timed-out child (empty stdout) as "correctly
+// returned an empty result", turning a real failure into a false pass — the
+// exact anti-pattern this session already caught itself doing once. Asserting
+// status === 0 first, then parsing stdout with NO fallback, means a crash
+// throws loud (bad JSON / undefined) instead of silently reading as success.
+function assertChildSucceeded(r, context) {
+  assert.equal(
+    r.error, undefined,
+    `[${context}] require() of the hook timed out or spawn-failed — ` +
+    `main() is not guarded behind require.main === module. ` +
+    `error: ${r.error}, stdout: ${r.stdout}, stderr: ${r.stderr}`
+  );
+  assert.equal(
+    r.status, 0,
+    `[${context}] child process exited non-zero (crashed) instead of returning exports. ` +
+    `status: ${r.status}, stdout: ${JSON.stringify(r.stdout)}, stderr: ${r.stderr}`
+  );
+}
+
+test('32. AC-13: hook module exports all parsing primitives (none undefined)', () => {
+  const r = requireExportsInChildProcess(
+    `console.log(JSON.stringify(Object.keys(gate)));`
+  );
+  assertChildSucceeded(r, 'test 32');
+  const exportedKeys = JSON.parse(r.stdout);
+  for (const name of EXPECTED_EXPORTS) {
+    assert.ok(
+      exportedKeys.includes(name),
+      `Expected module.exports.${name} to be defined. Available exports: ${exportedKeys.join(', ') || '(none)'}`
+    );
+  }
+});
+
+test('33. AC-13: imported primitives are usable and match direct-invocation behavior', () => {
+  const r = requireExportsInChildProcess(`
+    const out = {
+      acIds: gate.parseAcIds('### AC-01: The system SHALL respond\\nAC-02: bare form\\n'),
+      earsValid: gate.isEarsValid('The system SHALL respond within 200ms'),
+      earsInvalid: gate.isEarsValid('Given x, when y, then z'),
+      markerReal: gate.countOpenClarificationMarkers('- [NEEDS CLARIFICATION: real question]\\n'),
+      markerQuoted: gate.countOpenClarificationMarkers('\`[NEEDS CLARIFICATION: quoted, not real]\`\\n'),
+      covered: [...gate.parseCoveredAcs('- impl [SPEC:AC-01]\\n')],
+    };
+    console.log(JSON.stringify(out));
+  `);
+  assertChildSucceeded(r, 'test 33');
+  const out = JSON.parse(r.stdout);
+  assert.deepEqual(out.acIds, ['AC-01', 'AC-02']);
+  assert.equal(out.earsValid, true);
+  assert.equal(out.earsInvalid, false);
+  assert.equal(out.markerReal, 1);
+  assert.equal(out.markerQuoted, 0);
+  assert.deepEqual(out.covered, ['AC-01']);
+});
+
+// ── Regression: importing the module must not change subprocess behavior ──
+
+test('34. AC-13 regression: hook run as subprocess still blocks on open marker', () => {
+  cleanup();
+  const spec = writeSpecFile('ac13-still-blocks', SPEC_WITH_MARKERS);
+  writeState(spec, null);
+  const r = run('git commit -m "feat: x"');
+  cleanup();
+  assert.equal(r.status, 2, `Expected exit 2 (hook must still block as before), got ${r.status}. stderr: ${r.stderr}`);
+  assert.match(r.stderr, /SPEC INCOMPLETE: 2 markers? open/);
+});
+
+test('35. AC-13 regression: hook run as subprocess still allows clean spec + full coverage', () => {
+  cleanup();
+  const spec = writeSpecFile('ac13-still-allows', CLEAN_SPEC);
+  const tasks = writeSpecFile('ac13-still-allows-tasks', TASKS_ALL_COVERED);
+  writeState(spec, tasks);
+  const r = run('git commit -m "feat: x"');
+  cleanup();
+  assert.equal(r.status, 0, `Expected exit 0 (hook must still allow as before), got ${r.status}. stderr: ${r.stderr}`);
+});
+
+test('36. AC-13 known-current-behavior: AC_LINE_RE still does NOT match lettered-suffix ACs (e.g. AC-03b) — not a regression to fix here', () => {
+  const r = requireExportsInChildProcess(`
+    console.log(JSON.stringify(gate.parseAcIds('### AC-03b: The system SHALL do something\\n')));
+  `);
+  assertChildSucceeded(r, 'test 36');
+  assert.deepEqual(JSON.parse(r.stdout), []);
+});
