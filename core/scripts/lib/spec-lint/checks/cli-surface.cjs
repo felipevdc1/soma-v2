@@ -20,9 +20,20 @@
  * No check reads the disk (plan.md §"Interface de check") — everything
  * comes from ctx.artifacts, already loaded by context.cjs.
  *
+ * T-11 narrows detection per contract §Detecção, fixed 2026-08-16 from a
+ * real measurement (running this check against the 017 spec itself
+ * produced 10 findings, all false-positive, all inline backtick prose):
+ *
+ *   D-017-01 — only a fenced block whose info-string is NOT `text` is
+ *   swept. Inline backtick spans are ALWAYS a mention, never an
+ *   invocation — the boundary is typographic, not semantic. A `text`
+ *   fence is data being *displayed*, same reasoning, just fenced.
+ *   D-017-02 — `--help` / `--version` immediately after the binary are
+ *   dispatcher universals, never "unknown verb".
+ *
  * @spec [SPEC:AC-05] [SPEC:AC-06] [SPEC:AC-07]
  * @contract CONTRACT-CHECK-CLI-SURFACE-01
- * @task T-06
+ * @task T-06 / T-11
  */
 
 // ── tokenizer — shared by declaration lines and invocation candidates ─────
@@ -169,45 +180,36 @@ function buildSurface(fenceContentLines) {
 
 // ── invocation candidate collector ─────────────────────────────────────────
 
-/** A `text` fence is data, not a command — never swept (contract
- *  §Detecção). The `soma-cli-surface` fence is the authority itself: if it
- *  were swept as invocations, every declaration line (full of `<..>`,
- *  `[..]`, `a|b|c` placeholders) would flag itself, which the "conhecido-
- *  bom" fixtures (5-9, all declaring the same fence) prove empirically —
- *  none of them would sit at zero achados otherwise. */
+/** D-017-01: a `text` fence is data, not a command — never swept. The
+ *  `soma-cli-surface` fence is the authority itself: if it were swept as
+ *  invocations, every declaration line (full of `<..>`, `[..]`, `a|b|c`
+ *  placeholders) would flag itself, which the "conhecido-bom" fixtures
+ *  (5-9, all declaring the same fence) prove empirically — none of them
+ *  would sit at zero achados otherwise. Every other fenced block —
+ *  including a bare ``` with no info-string — IS swept: it contains
+ *  something someone will run. */
 function isExecutableFence(info) {
   return info !== 'text' && info !== 'soma-cli-surface';
 }
 
 /** Returns [{ text, line }] — candidate strings that MIGHT be invocations
- *  (first token not yet checked against the binary). */
+ *  (first token not yet checked against the binary). D-017-01: inline
+ *  backtick spans are NEVER candidates, regardless of content — the
+ *  fenced/not-fenced boundary is the whole rule. A document that quotes
+ *  `soma run mark-done` in a sentence to describe a defect, or names a
+ *  bare verb like `gate` in prose, reads identically to this scanner:
+ *  neither is inside a swept fence. */
 function collectCandidateLines(artifactText) {
-  const lines = artifactText.split('\n');
   const fences = extractFences(artifactText);
-  const fencedLineSet = new Set();
   const candidates = [];
 
   for (const fence of fences) {
-    for (let k = 0; k < fence.contentLines.length; k++) {
-      fencedLineSet.add(fence.contentStartLine + k);
-    }
-    if (isExecutableFence(fence.info)) {
-      fence.contentLines.forEach((lineText, k) => {
-        const trimmed = lineText.trim();
-        if (trimmed) candidates.push({ text: trimmed, line: fence.contentStartLine + k });
-      });
-    }
+    if (!isExecutableFence(fence.info)) continue;
+    fence.contentLines.forEach((lineText, k) => {
+      const trimmed = lineText.trim();
+      if (trimmed) candidates.push({ text: trimmed, line: fence.contentStartLine + k });
+    });
   }
-
-  lines.forEach((lineText, idx) => {
-    const lineNumber = idx + 1;
-    if (fencedLineSet.has(lineNumber)) return; // fence content isn't inline markdown
-    const spanRe = /`([^`\n]+)`/g;
-    let m;
-    while ((m = spanRe.exec(lineText))) {
-      candidates.push({ text: m[1], line: lineNumber });
-    }
-  });
 
   return candidates;
 }
@@ -297,6 +299,11 @@ function matchForm(elements, verb, tokens) {
 function checkInvocation(surface, invocationText) {
   const tokens = tokenize(invocationText);
   const rest = tokens.slice(1);
+
+  // D-017-02: --help/--version right after the binary are dispatcher
+  // universals, not verbs — never "unknown verb", regardless of whether
+  // the declared surface happens to have a verb by that name.
+  if (rest[0] === '--help' || rest[0] === '--version') return [];
 
   const match = findVerbMatch(surface, rest);
   if (!match) {

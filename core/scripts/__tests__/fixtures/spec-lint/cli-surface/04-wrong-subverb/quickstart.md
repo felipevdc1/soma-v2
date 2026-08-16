@@ -1,3 +1,7 @@
 # Quickstart
 
-Rode `soma run dispatch-record start` para abrir o registro.
+Rode o comando abaixo para abrir o registro.
+
+```bash
+soma run dispatch-record start
+```

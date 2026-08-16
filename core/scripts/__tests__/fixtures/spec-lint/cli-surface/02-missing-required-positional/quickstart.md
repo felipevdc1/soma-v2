@@ -1,3 +1,7 @@
 # Quickstart
 
-Rode `soma spec-lint` sem argumento nenhum.
+Rode o comando abaixo sem argumento nenhum.
+
+```bash
+soma spec-lint
+```

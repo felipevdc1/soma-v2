@@ -1,3 +1,7 @@
 # Quickstart
 
-Rode `soma run mark-done --step X` para finalizar o passo.
+Rode o comando abaixo para finalizar o passo.
+
+```bash
+soma run mark-done --step X
+```

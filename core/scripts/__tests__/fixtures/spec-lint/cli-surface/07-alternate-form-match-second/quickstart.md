@@ -1,3 +1,7 @@
 # Quickstart
 
-Para retomar depois de uma falha: `soma run gate --resume`.
+Rode o comando abaixo para retomar depois de uma falha.
+
+```bash
+soma run gate --resume
+```
