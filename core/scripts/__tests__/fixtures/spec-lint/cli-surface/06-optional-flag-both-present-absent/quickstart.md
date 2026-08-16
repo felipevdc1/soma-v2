@@ -1,5 +1,13 @@
 # Quickstart
 
-Rode `soma run gate --step build` para o caminho padrão.
+Rode o comando abaixo para o caminho padrão.
 
-Ou, em modo dry-run: `soma run gate --step build --dry-run`.
+```bash
+soma run gate --step build
+```
+
+Ou, em modo dry-run:
+
+```bash
+soma run gate --step build --dry-run
+```

@@ -1,6 +1,6 @@
 'use strict';
 /**
- * contract-check-cli-surface.test.cjs — T-04
+ * contract-check-cli-surface.test.cjs — T-04 / hardened T-06 / narrowed T-11
  * Contract test for CONTRACT-CHECK-CLI-SURFACE-01.
  *
  * Exercises the `cli-surface` check module directly (`buildContext` +
@@ -11,18 +11,19 @@
  * case for the "duas flags erradas -> dois achados" line in the contract's
  * Detecção table, which is not one of the 9 numbered items.
  *
- * `lib/spec-lint/checks/cli-surface.cjs` is a T-02 STUB today — it always
- * returns `{ status: 'ran', findings: [] }` regardless of ctx. Every test
- * below that expects a non-empty `findings` array or a `skipped` status is
- * RED PLANNED (Article III): it fails now, on purpose, and closes when T-06
- * implements the real check. Tests that expect zero findings from a
- * genuinely clean invocation already pass against the stub — that's
- * coincidence of the stub's unconditional empty-findings return, not
- * evidence the check works.
+ * T-11 / D-017-01: every fixture's invocation (except 08, the deliberate
+ * prose-mention case) now lives inside a ```bash fence in quickstart.md,
+ * not an inline backtick span. Measured 2026-08-16: running this check
+ * against the 017 spec itself produced 10 findings, all false-positive,
+ * all from inline backtick prose (a table row, a heading, a sentence
+ * describing a test case). D-017-01 fixes that by never sweeping inline
+ * spans at all — so a fixture whose "bad" invocation stayed inline would
+ * silently stop firing, which is why fixtures 01-04 (and 10) were
+ * migrated to fenced blocks, not just left passing by omission.
  *
  * @spec [SPEC:AC-05] [SPEC:AC-06] [SPEC:AC-07] [SPEC:AC-10]
  * @contract CONTRACT-CHECK-CLI-SURFACE-01
- * @task T-04
+ * @task T-04 / T-06 / T-11
  */
 
 const { test } = require('node:test');
@@ -45,6 +46,11 @@ function runCheck(fixtureName) {
 
 // ── conhecido-RUIM (corpus items 1-4) — cada um mapeado 1:1 a um fixture ──
 
+// T-11 / D-017-01: the invocation now lives inside a ```bash fence, not an
+// inline backtick span (inline is never swept — see below). Each fixture's
+// quickstart.md is `# Quickstart` / blank / one prose line / blank /
+// ```bash / <invocation> / ``` — the invocation always lands on line 6.
+
 test('CONTRACT: [corpus 1] verbo desconhecido produz achado nomeando o verbo ofensor', () => {
   const result = runCheck('01-unknown-verb');
   assert.equal(result.status, 'ran');
@@ -52,7 +58,7 @@ test('CONTRACT: [corpus 1] verbo desconhecido produz achado nomeando o verbo ofe
   const [finding] = result.findings;
   assert.equal(finding.check, 'cli-surface');
   assert.equal(finding.file, 'quickstart.md');
-  assert.equal(finding.line, 3);
+  assert.equal(finding.line, 6);
   assert.match(finding.message, /mark-done/);
 });
 
@@ -63,7 +69,7 @@ test('CONTRACT: [corpus 2] argumento posicional obrigatório ausente produz acha
   const [finding] = result.findings;
   assert.equal(finding.check, 'cli-surface');
   assert.equal(finding.file, 'quickstart.md');
-  assert.equal(finding.line, 3);
+  assert.equal(finding.line, 6);
   // O contrato só tem template de mensagem explícito para "flag obrigatória
   // ausente" ('{verbo}' exige {--flag}, ausente aqui) — não há linha na
   // tabela dedicada a "positional obrigatório ausente". Assumindo que T-06
@@ -81,7 +87,7 @@ test('CONTRACT: [corpus 3] flag não declarada produz achado nomeando a flag', (
   const [finding] = result.findings;
   assert.equal(finding.check, 'cli-surface');
   assert.equal(finding.file, 'quickstart.md');
-  assert.equal(finding.line, 3);
+  assert.equal(finding.line, 6);
   assert.match(finding.message, /--format/);
 });
 
@@ -92,7 +98,7 @@ test('CONTRACT: [corpus 4] subverbo desconhecido produz achado nomeando subverbo
   const [finding] = result.findings;
   assert.equal(finding.check, 'cli-surface');
   assert.equal(finding.file, 'quickstart.md');
-  assert.equal(finding.line, 3);
+  assert.equal(finding.line, 6);
   assert.match(finding.message, /start/);
   assert.match(finding.message, /dispatch-record/);
 });
@@ -116,9 +122,9 @@ test('CONTRACT: [corpus 5] invocação exata da superfície não produz achado',
   const quickstart = ctx.artifacts.find(a => a.file === 'quickstart.md');
   assert.ok(quickstart, 'precondition: fixture must have a quickstart.md artifact');
   assert.equal(
-    quickstart.lines[2],
-    'Rode `soma spec-lint core/specs/017-soma-spec-lint` para lintar a spec.',
-    'precondition: line 3 must carry the exact-match invocation this test is named for'
+    quickstart.lines[5],
+    'soma spec-lint core/specs/017-soma-spec-lint',
+    'precondition: line 6 (inside the ```bash fence) must carry the exact-match invocation this test is named for'
   );
   const result = cliSurface.run(ctx);
   assert.equal(result.status, 'ran');
@@ -130,14 +136,14 @@ test('CONTRACT: [corpus 6] flag opcional presente e ausente — ambas passam', (
   const quickstart = ctx.artifacts.find(a => a.file === 'quickstart.md');
   assert.ok(quickstart, 'precondition: fixture must have a quickstart.md artifact');
   assert.equal(
-    quickstart.lines[2],
-    'Rode `soma run gate --step build` para o caminho padrão.',
-    'precondition: line 3 must invoke without the optional --dry-run'
+    quickstart.lines[5],
+    'soma run gate --step build',
+    'precondition: first ```bash fence must invoke without the optional --dry-run'
   );
   assert.equal(
-    quickstart.lines[4],
-    'Ou, em modo dry-run: `soma run gate --step build --dry-run`.',
-    'precondition: line 5 must invoke WITH the optional --dry-run present'
+    quickstart.lines[11],
+    'soma run gate --step build --dry-run',
+    'precondition: second ```bash fence must invoke WITH the optional --dry-run present'
   );
   const result = cliSurface.run(ctx);
   assert.equal(result.status, 'ran');
@@ -149,9 +155,10 @@ test('CONTRACT: [corpus 7] segunda forma alternativa do mesmo verbo casa — sem
   const quickstart = ctx.artifacts.find(a => a.file === 'quickstart.md');
   assert.ok(quickstart, 'precondition: fixture must have a quickstart.md artifact');
   assert.equal(
-    quickstart.lines[2],
-    'Para retomar depois de uma falha: `soma run gate --resume`.',
-    'precondition: line 3 must invoke the SECOND declared form of "run gate" (--resume), not the first (--step)'
+    quickstart.lines[5],
+    'soma run gate --resume',
+    'precondition: line 6 (inside the ```bash fence) must invoke the SECOND declared form of "run gate" ' +
+      '(--resume), not the first (--step)'
   );
   assert.ok(
     !quickstart.text.includes('--step'),
@@ -171,6 +178,16 @@ test('CONTRACT: [corpus 8] menção em prosa ao nome do verbo não é invocaçã
     quickstart.lines[2],
     'O verbo `gate` decide a transição — não é chamado diretamente aqui.',
     'precondition: line 3 must carry a bare-verb mention in backticks, with no binary preceding it'
+  );
+  // T-11 / D-017-01: inline backtick spans are NEVER swept, regardless of
+  // content — this fixture stays deliberately un-migrated (no ```bash
+  // fence) so it keeps demonstrating exactly that: the boundary is
+  // typographic (fenced vs not), not a judgment call about what the
+  // backtick span contains.
+  assert.ok(
+    !quickstart.text.includes('```'),
+    'precondition: fixture must have NO fenced block at all — this test proves inline mention is exempt ' +
+      'by location (D-017-01), not because a fence happens to be absent for some other reason'
   );
   assert.ok(
     !quickstart.text.includes('soma'),
@@ -193,10 +210,11 @@ test('CONTRACT: [corpus 9] plan.md sem a cerca soma-cli-surface -> status skippe
     'precondition: plan.md must genuinely lack the soma-cli-surface fence'
   );
   assert.equal(
-    quickstart.lines[2],
-    'Rode `soma run mark-done --step X` para finalizar o passo.',
-    'precondition: quickstart.md must carry a REAL divergent invocation (unknown verb mark-done) — ' +
-      'otherwise "zero achados" would be trivially true, not evidence that the check was actually skipped'
+    quickstart.lines[5],
+    'soma run mark-done --step X',
+    'precondition: quickstart.md must carry a REAL divergent invocation (unknown verb mark-done), inside ' +
+      'a ```bash fence so it would be seen if the check ran — otherwise "zero achados" would be trivially ' +
+      'true, not evidence that the check was actually skipped'
   );
   const result = cliSurface.run(ctx);
   assert.equal(result.status, 'skipped');
