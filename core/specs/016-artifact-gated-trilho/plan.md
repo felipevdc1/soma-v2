@@ -54,6 +54,7 @@ Esta seção existe porque o `quickstart.md` que eu mesmo escrevi ficou **incons
 
 ```
 soma run state  --init --run <runId>
+soma run state  [--run <runId>] --set <STATE>
 soma run report [--run <runId>] --step <STEP> --status pass|fail|blocked [--reason <texto>]
 soma run gate   [--run <runId>] --step <STEP>
 soma run gate   [--run <runId>] --validate <taskId> --validator <agentName>
@@ -64,6 +65,7 @@ soma run dispatch-record end   [--run <runId>] --task <taskId> [--attempt <n>] -
 
 Notas que valem para quem implementa:
 
+- **`state --set <STATE>`** acrescentado em 2026-08-15, terceira vez que o mesmo buraco aparece: **nenhum documento definia como um run chega a `DONE`**, e o AC-12 (retenção de 7 dias) é disparado justamente por isso. Foi descoberto tentando escrever o passo de validação manual do AC-12 no `quickstart.md` — o texto precisou de um verbo que não existia, e a primeira reação foi inventar um `--mark-done` no exemplo em vez de fechar a lacuna aqui. Isso é o defeito, não o conserto. `--set` é o mínimo que serve: a transição de estado já é a responsabilidade do verbo `state`.
 - **`resume` exige `--run` explícito.** É o único caso em que resolver pelo lock seria errado: retomar acontece de outra sessão, possivelmente com o lock apontando para outro run ou ausente. Pedir o `runId` é o que torna o AC-04 possível.
 - **`gate --validate`** é a superfície de CLI do invariante AC-06 e apenas embrulha `run/validator-invariant.cjs`, que exporta `checkValidatorAssignment({ metadataPath, proposedValidator }) -> { allowed, reason }`. A T-04 testou o módulo; o `quickstart.md` §5 exercita a CLI. As duas formas existem e a CLI não duplica lógica.
 - **`dispatch-record` tem duas fases** (`begin`/`end`) porque o artefato nasce em dois momentos: o prompt antes do dispatch, a saída depois. Detalhe completo em `contracts/emit-dispatch-record.md`.

@@ -108,11 +108,31 @@ soma run resume --run run-lab-001
 
 ---
 
-## 5. AC-05 / AC-06 / AC-12 — proveniência de dispatch
+## 5. AC-05 / AC-06 — proveniência de dispatch
+
+Primeiro **produza** o registro — as seções anteriores só exercitaram `state`, `report`, `gate` e `resume`, então não existe dispatch nenhum em disco ainda:
+
+```bash
+printf 'implemente X seguindo o contrato Y' > /tmp/lab-prompt.md
+soma run dispatch-record begin --run run-lab-001 --task T-03 --prompt-file /tmp/lab-prompt.md
+
+printf 'feito, 3 testes verdes' > /tmp/lab-output.md
+cat > /tmp/lab-meta.json <<'JSON'
+{ "schema": "soma-dispatch-record/v1", "run_id": "run-lab-001", "task_id": "T-03",
+  "attempt": 1, "model": "sonnet", "base_sha": "abc1234",
+  "started_at": "2026-08-16T00:00:00.000Z", "finished_at": "2026-08-16T00:05:00.000Z",
+  "ac_refs": ["AC-05"], "executor_agent": "soma-lab-T-03", "result": "done" }
+JSON
+soma run dispatch-record end --run run-lab-001 --task T-03 \
+  --output-file /tmp/lab-output.md --metadata-file /tmp/lab-meta.json
+```
+
+Agora inspecione:
 
 ```bash
 ls -R .soma/dispatches/run-lab-001/
 cat .soma/dispatches/run-lab-001/T-03/metadata.json
+diff <(cat .soma/dispatches/run-lab-001/T-03/prompt.md) /tmp/lab-prompt.md && echo "prompt byte-a-byte OK"
 ```
 
 **Observar:** três arquivos por task (`prompt.md`, `output.md`, `metadata.json`). O `prompt.md` é o prompt **exato** enviado, não um resumo. O `metadata.json` tem `model` preenchido — campo obrigatório, model pinning.
@@ -123,7 +143,30 @@ Invariante executor ≠ validador:
 soma run gate --validate T-03 --validator soma-lab-T-03 ; echo "exit=$?"
 ```
 
-**Observar:** recusa, porque `soma-lab-T-03` é o `executor_agent` registrado. Com um nome diferente, aceita. Se aceitar nos dois casos, o invariante não existe; se recusar nos dois, virou "recusa tudo" — os dois lados precisam ser observados.
+**Observar:** recusa, porque `soma-lab-T-03` é o `executor_agent` que você acabou de gravar no `metadata.json`. Agora o outro lado, que é obrigatório:
+
+```bash
+soma run gate --validate T-03 --validator soma-lab-T-99 ; echo "exit=$?"
+```
+
+**Observar:** aceita. Se aceitar nos dois casos, o invariante não existe; se recusar nos dois, virou "recusa tudo". **Os dois lados precisam ser observados** — um só não prova nada.
+
+---
+
+## 5b. AC-12 — retenção de 7 dias
+
+Não dá pra esperar 7 dias, então envelheça o artefato à mão:
+
+```bash
+# empurra o run-dir e o state para 8 dias atrás
+find .soma/dispatches/run-lab-001 .soma/run-state-run-lab-001.json -exec touch -t "$(date -v-8d +%Y%m%d%H%M)" {} \;
+soma run state --run run-lab-001 --set DONE
+ls .soma/dispatches/ ; echo "exit=$?"
+```
+
+**Observar:** o run-dir de `run-lab-001` foi varrido, e a mesma janela valeu para o state — uma regra só, não duas. Se os dispatches sobreviverem e o state não (ou vice-versa), a retenção está duplicada em vez de compartilhada, que é justamente o que o AC-12 proíbe.
+
+⚠️ `date -v-8d` é sintaxe **BSD/macOS**. Em Linux é `date -d '8 days ago' +%Y%m%d%H%M`.
 
 ---
 
@@ -141,13 +184,17 @@ git commit -m "teste do guard"
 Override:
 
 ```bash
-touch "$(node -p 'require("os").tmpdir()')/claude-framework-guard-bypass-${CLAUDE_SESSION_ID}.marker"
+SID="${CK_SESSION_ID:-$CLAUDE_SESSION_ID}"; [ -n "$SID" ] || { echo "ABORTE: nenhuma das duas env vars de sessão está setada"; }
+touch "$(node -p 'require("os").tmpdir()')/claude-framework-guard-bypass-${SID}.marker"
 git commit -m "teste do guard com override"
 ```
 
 **Observar:** passa, **e a stderr declara que um override foi aplicado**, listando os paths liberados. Override silencioso é falha, não sucesso.
 
-⚠️ Use `node -p 'require("os").tmpdir()'` de verdade — neste Mac o tmpdir **não é `/tmp`**, e usar `/tmp` faz o teste parecer que passou quando não testou nada.
+⚠️ **Duas armadilhas neste passo, as duas produzem falso-verde:**
+
+1. Use `node -p 'require("os").tmpdir()'` de verdade — neste Mac o tmpdir **não é `/tmp`**.
+2. O `sessionId` vem de `CK_SESSION_ID` **ou** `CLAUDE_SESSION_ID`, e **neste ambiente a segunda está vazia** (medido em 2026-08-15). Usar `${CLAUDE_SESSION_ID}` direto cria um marker com nome truncado, o guard não o encontra, e o passo "falha" por motivo errado — ou pior, você conclui que o override não funciona quando o problema é o nome do arquivo. Resolva as duas com fallback, como no bloco acima.
 
 Limpe depois:
 
