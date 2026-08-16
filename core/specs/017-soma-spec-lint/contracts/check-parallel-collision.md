@@ -48,13 +48,19 @@ Duas tasks `A` e `B` colidem quando **todas** as condições valem:
 
 A condição 3 é derivada do grafo, **não do cabeçalho da wave**. Cabeçalho é prosa, e prosa é exatamente o que este linter existe para parar de confiar.
 
+**Ponto cego aceito, medido em 2026-08-16:** se o `depends_on` tiver um ciclo mútuo (`A → B` e `B → A`), cada uma alcança a outra, a condição 3 reprova e o par **deixa de ser acusado** mesmo compartilhando arquivo. Verificado adversarialmente: não trava nem estoura a pilha, apenas silencia. Detectar ciclo em `depends_on` é outro defeito e outro check — este aqui não é responsável por isso, e o comportamento está registrado para não ser reportado como bug depois.
+
 ⚠️ **Armadilha registrada, com custo medido:** o validador ad hoc de 2026-08-15 errou **três versões seguidas** — lia o próprio `id` da task como se fosse dependência, o que fazia toda task "alcançar" a si mesma e derrubava a condição 3 para todo par. Reportou **"0 conflitos"** num `tasks.md` com 8 tasks `[P]` escrevendo no mesmo arquivo. A quarta versão acertou. **`0 conflitos` lê como sucesso** — é por isso que o fixture ruim é obrigatório.
 
 ---
 
 ## Achado
 
-Um achado por **par** colidente, por arquivo compartilhado:
+**Um achado por par colidente — não por arquivo.** Um par que compartilha três arquivos gera **um** achado, com os três listados na mensagem, porque o par é **uma** decisão de sequenciamento, não três. Três tasks `[P]` no mesmo arquivo, ao contrário, geram **três** achados: são três pares, logo três decisões.
+
+> Redação corrigida em 2026-08-16. A frase original — *"um achado por par colidente, por arquivo compartilhado"* — dava as duas leituras, e **nenhum dos 9 fixtures exercita um par com mais de um arquivo em comum**, então a divergência ficaria invisível. O executor da T-07 percebeu, escolheu a leitura coerente com o resto do contrato e **reportou em vez de deixar enterrado no código**. O fixture que falta está na T-08.
+
+Formato:
 
 ```
 parallel-collision: tasks.md:{linha da task posterior}: T-07 e T-09 são [P] no mesmo nível e escrevem em core/scripts/run/gate.cjs
