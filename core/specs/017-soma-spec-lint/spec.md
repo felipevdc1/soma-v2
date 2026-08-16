@@ -121,7 +121,9 @@ Given as specs 001-015, que escrevem `| T-02 | [P] ...` / When o lint roda / The
 
 ### AC-16: IF uma entrada da coluna `files` não tem forma de path, THEN the linter SHALL ignorá-la em vez de tratá-la como arquivo
 
-Given entradas como `hooks/x.cjs + test`, `(test in y.cjs)` e `adapters/{cursor, aider, codex}` partido pelo split de vírgula / When o lint roda / Then nenhuma delas gera achado de colisão. Sem esta regra, o AC-15 troca cegueira por ruído — as duas mudanças são acopladas e não devem entrar separadas.
+Given entradas como `hooks/x.cjs + test`, `(test in y.cjs)` e o fragmento `adapters/{cursor` / When o lint roda / Then nenhuma delas gera achado de colisão. Sem esta regra, o AC-15 troca cegueira por ruído — as duas mudanças são acopladas e não devem entrar separadas.
+
+> **Emendado em 2026-08-16.** A redação original listava "sem espaço, sem parêntese, sem `+`, com `/` ou extensão conhecida" — e essa lista **deixa passar** `adapters/{cursor`, que não tem nenhum dos três e **tem** `/`. O executor da T-13 descobriu rodando contra o dado real da spec 009 **antes** de escrever a fixture: `adapters/{cursor,aider,codex}/*.json` e `.../*.md` são arquivos **diferentes**, mas o split por vírgula colapsa os dois no mesmo fragmento e fabricaria uma colisão fantasma. A regra passa a rejeitar também `{` e `}`. Sétima lacuna de contrato desta spec, e a sétima achada por executor.
 
 ---
 
