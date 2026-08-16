@@ -47,6 +47,7 @@ const SUBCOMMANDS = [
   { name: 'module',    script: 'module.cjs',     desc: 'Manage SOMA modules (add, remove, deprecate)' },
   { name: 'audit',     script: 'audit.cjs',      desc: 'Run audit checks across SOMA contexts' },
   { name: 'run',       script: 'run.cjs',        desc: 'Artifact-gated step reports, run-state, and dispatch provenance' },
+  { name: 'spec-lint', script: 'spec-lint.cjs',  desc: 'Lint spec artifacts for CLI-surface drift and [P] file collisions' },
 ];
 
 const VALID_NAMES = SUBCOMMANDS.map(s => s.name);
