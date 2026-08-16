@@ -25,6 +25,15 @@ core/evidence/
 logs/
 evidence/
 
+# .soma/ — ignore SELETIVO (spec 016 AC-11). Nunca ".soma/" inteiro: isso
+# tiraria .soma/install-state.json do git, e o hydra depende dele rastreado
+# para o fluxo de install distribuído (spec.md AC-03/AC-11). Só os
+# artefatos de runtime de um `soma-run` são per-machine.
+.soma/reports/
+.soma/dispatches/
+.soma/run-state-*.json
+.soma.lock
+
 # Local environment
 .env
 .env.local
