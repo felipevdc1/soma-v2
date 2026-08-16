@@ -216,7 +216,7 @@ Poll: compare `fs.stat(specPath).mtime` com `state.lastTransitionAt`. Se mtime �
 
 Para **cada merge candidato** (cada worktree de agent DONE):
 
-1. **spec-test-traceability**: `bash ~/.claude/hooks/spec-test-traceability.cjs validate {specPath}`.
+1. **spec-test-traceability**: `node ~/.claude/hooks/spec-test-traceability.cjs validate {specPath}`.
    - exit 0 + JSON `{coverage: 100, orphan_tests: [], uncovered_ac: [], red_phase_evidence: true}` → pass.
    - exit != 0 ou campos falsos → REJECT.
 
