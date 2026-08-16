@@ -11,7 +11,7 @@
 
 O `soma-run` é um **comando em prosa executado por um LLM**, não um programa. Essa é a razão pela qual os defeitos que a Fase 2 vem curar existem: as postconditions dos 13 steps estão escritas em texto e quem julga se passaram é um agente lendo o texto. Reescrever a prosa com mais rigor não resolve — foi tentado e apodreceu em silêncio em cinco lugares diferentes, todos encontrados nesta mesma sessão por execução, nenhum por leitura.
 
-A abordagem, portanto, é **mover o julgamento de prosa para código**: um primitivo CLI novo, `soma run`, passa a ser o único lugar que emite report, persiste estado, decide se a transição é permitida e materializa a proveniência de dispatch. O `soma-run.md` deixa de *descrever como julgar* e passa a *invocar o juiz* — o que também é o que viabiliza a poda obrigatória de 487 → ≤300 linhas, porque a prosa que sai é exatamente a prosa que virou código.
+A abordagem, portanto, é **mover o julgamento de prosa para código**: um primitivo CLI novo, `soma run`, passa a ser o único lugar que emite report, persiste estado, decide se a transição é permitida e materializa a proveniência de dispatch. O `soma-run.md` deixa de *descrever como julgar* e passa a *invocar o juiz* — o que também é o que viabiliza a poda obrigatória de ≤300 linhas, porque a prosa que sai é exatamente a prosa que virou código.
 
 Fluxo: cada step, ao concluir, chama `soma run report --step X --status pass|fail|blocked` → o CLI valida contra `soma-step-report/v1`, grava em `.soma/reports/{runId}/` e atualiza `reports[]` no run-state. Antes de entrar em qualquer step, o `soma-run` chama `soma run gate --step X` → o CLI lê o report do step anterior e responde com exit code: `0` libera, `2` bloqueia. A fronteira de integração é o **sistema de arquivos** (`.soma/`), e os consumidores são o próprio `soma-run`, o `/dispatch` do pipeline e o humano auditando depois. O `framework-guard.cjs` é um hook independente em `PreToolUse(Bash)`, sem acoplamento ao CLI.
 
@@ -38,7 +38,7 @@ Fluxo: cada step, ao concluir, chama `soma run report --step X --status pass|fai
 | Decisão | Rationale | Alternativa rejeitada |
 |---|---|---|
 | **Enforcement em CLI, não em prosa** — novo `core/scripts/run.cjs` registrado em `SUBCOMMANDS` do `soma.cjs` | Prosa normativa não exercitada por teste apodrece em silêncio; medido 5× nesta sessão, incluindo enforcement do Article I morto desde sempre. Código com teste é a única forma de o gate falhar alto | Endurecer a redação das postconditions no `soma-run.md`. Rejeitado: é exatamente o que já existe e é o que falhou |
-| **Validador de schema à mão** | Preserva a propriedade zero-dep do repo. Os 3 schemas são fechados, com ~12 campos no maior deles | `ajv`. Rejeitado: primeira dependência do projeto, ~30 transitivas, para validar 3 objetos de forma conhecida |
+| **Validador de schema à mão** | Preserva a propriedade zero-dep do repo. Os 3 schemas são fechados, com 10 campos no maior deles | `ajv`. Rejeitado: primeira dependência do projeto, ~30 transitivas, para validar 3 objetos de forma conhecida |
 | **Gate como exit code, não como texto** — `soma run gate` responde `0`/`2` | Exit code é inambíguo e não depende de um agente interpretar prosa. É a mesma convenção dos 18 hooks do repo (2 = block) | Retornar JSON e deixar o orquestrador decidir. Rejeitado: reintroduz o julgamento fuzzy que a fase existe para eliminar |
 | **`.soma/` com ignore seletivo** (AC-11) | `install-state.json` é artefato de bootstrap versionado, do qual o fluxo de install distribuído depende (`hydra`) | Ignorar `.soma/` inteiro, como o §F escreveu. Rejeitado por decisão do Felipe no Gate 1 |
 | **Reaproveitar `soma-state/v1.0` como superset** (AC-03) | O v1.0 já tem 22 campos corretos (23 chaves com `$schema`) e escrita atômica especificada. `v2` acrescenta `decisions[]` e `reports[]` e muda o *local*, não a semântica | Schema novo do zero. Rejeitado: reimplementaria mecanismo existente — failure mode #9, que a discovery desta spec já pegou uma vez |
@@ -115,7 +115,7 @@ Nenhuma nova. A feature usa exclusivamente built-ins do Node 22:
 
 ## Anchors verificados (2026-08-15)
 
-Referentes a `core/adapters/claude/commands/soma-run.md` **no repo** (487 linhas — o lado canônico; o live tem 474 e está desatualizado):
+Referentes a `core/adapters/claude/commands/soma-run.md` **no repo** (492 linhas (em `2929f50`) — o lado canônico; o live tem 474 e está desatualizado):
 
 | Alvo | Linha | O que muda |
 |---|---|---|

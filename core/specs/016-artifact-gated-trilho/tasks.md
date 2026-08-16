@@ -74,7 +74,7 @@
 |---|---|---|---|---|---|
 | T-18 | `[WIRING]` Ligar o `soma-run.md` ao primitivo: cada bloco `## N. STEP_X` (linhas 96-314) ganha "check gate" na entrada e "emit report" na saída; §0.2 (37-57) aponta para o state v2 em `.soma/`; Gates 1 e 2 (160/336) **não mudam**; seção Gaps (471) perde os itens que a fase cura | [SPEC:AC-01] [SPEC:AC-02] [SPEC:AC-03] [SPEC:AC-04] | `core/adapters/claude/commands/soma-run.md` | T-06, T-07, T-08, T-09 | TODO |
 | T-19 | `[WIRING]` Smoke de ponta a ponta: run de laboratório que (a) tenta transicionar com prosa "done" e sem report → **bloqueia**; (b) é morto no meio e retomado por `--resume` de outra sessão → **continua do checkpoint**; (c) tenta commit em path protegido → **exit 2**; (d) tem run-dir diffável ao final. São os 4 critérios de "Fase 2 pronta" do §F | [SPEC:AC-02] [SPEC:AC-04] [SPEC:AC-05] [SPEC:AC-07] | `core/scripts/__tests__/trilho-e2e.test.cjs` | T-18, T-10, T-12 | TODO |
-| T-20 | `[WIRING]` **Poda obrigatória** (§B.10) — reescrever as instruções de transição do `soma-run.md` para "objetivo + invariantes", agora que report + state v2 carregam o determinismo. Meta: **487 → ≤300 linhas**. A de-prescription é só aqui e só nisso | [SPEC:AC-01] [SPEC:AC-02] | `core/adapters/claude/commands/soma-run.md` | T-18, T-19 | TODO |
+| T-20 | `[WIRING]` **Poda obrigatória** (§B.10) — reescrever as instruções de transição do `soma-run.md` para "objetivo + invariantes", agora que report + state v2 carregam o determinismo. Meta: **≤300 linhas**. A de-prescription é só aqui e só nisso | [SPEC:AC-01] [SPEC:AC-02] | `core/adapters/claude/commands/soma-run.md` | T-18, T-19 | TODO |
 
 ---
 

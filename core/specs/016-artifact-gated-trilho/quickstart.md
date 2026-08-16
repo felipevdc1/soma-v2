@@ -190,7 +190,7 @@ npm test 2>&1 | grep -E "^# (tests|pass|fail|skipped)"
 wc -l core/adapters/claude/commands/soma-run.md
 ```
 
-**Observar:** ainda **5 fails** e nenhum a mais — os mesmos 5 conhecidos. E o `soma-run.md` em **≤300 linhas** (era 487): é a poda obrigatória do §B.10, cobrada no Gate 2.
+**Observar:** ainda **5 fails** e nenhum a mais — os mesmos 5 conhecidos. E o `soma-run.md` em **≤300 linhas** (eram 492 em `2929f50`): é a poda obrigatória do §B.10, cobrada no Gate 2.
 
 ---
 

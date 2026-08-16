@@ -14,7 +14,7 @@
 | Wiring | entrada `PreToolUse` matcher `Bash` em `install/soma-hooks-map.json` (schema `soma-hooks-map/v1`) |
 | Distribuição | `hooks/` → `install.sh` (rsync) → `~/.claude/hooks/`; wiring via `install/merge-settings.cjs` |
 
-⚠️ **Hook sem entrada no `soma-hooks-map.json` é copiado e nunca dispara.** Foi assim que o `spec-test-traceability.cjs` (381 linhas + 442 de teste) ficou morto — presente no disco, ausente de `settings.json`, silenciosamente inerte. O arquivo sem o registro não conta como entregue.
+⚠️ **Hook sem entrada no `soma-hooks-map.json` é copiado e nunca dispara.** Foi assim que o `spec-test-traceability.cjs` (386 linhas + 442 de teste, medido em `2929f50`) ficou morto — presente no disco, ausente de `settings.json`, silenciosamente inerte. O arquivo sem o registro não conta como entregue.
 
 ---
 

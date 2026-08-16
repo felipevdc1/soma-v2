@@ -13,7 +13,7 @@
 
 ## Discovery — estado empírico antes de especificar
 
-<!-- Article XII / Failure Mode #9. Fonte lida integralmente: core/adapters/claude/commands/soma-run.md (487 linhas). -->
+<!-- Article XII / Failure Mode #9. Fonte lida integralmente: core/adapters/claude/commands/soma-run.md (492 linhas em `2929f50`). -->
 
 **Já existe e NÃO deve ser reimplementado:**
 
@@ -168,7 +168,7 @@ Given o hook de traceability removido ou desregistrado / When o `STEP_5_VALIDATE
 - Runs concorrentes multi-sessão no mesmo repo — gap conhecido de v1, segue mitigado por `.soma.lock`.
 - Adapters de execução de deploy — gap conhecido, o usuário segue confirmando por marker.
 - As 5 falhas de teste pré-existentes.
-- A poda do `soma-run.md` (487 → ≤300 linhas) é **obrigação da fase**, mas é trabalho de reescrita de prosa cobrado no Gate 2 — não é AC desta spec e não deve virar task de código.
+- A poda do `soma-run.md` (≤300 linhas) é **obrigação da fase**, mas é trabalho de reescrita de prosa cobrado no Gate 2 — não é AC desta spec e não deve virar task de código.
 
 ---
 
@@ -188,7 +188,7 @@ Nenhuma em aberto. As três ambiguidades levantadas na redação foram resolvida
 
 ## Pré-requisito de execução (fora desta spec)
 
-O `spec-completeness-gate` conta markers `[NEEDS CLARIFICATION` sobre o arquivo inteiro, incluindo comentários HTML e código inline. Como o template oficial carrega a string literal em 5 posições de guidance, **toda spec nasce com markers fantasma** — 13 das 15 specs já commitadas têm de 1 a 3. O `STEP_1A_SPECIFY` do `soma-run.md` usa a mesma contagem e ficaria em loop infinito em `AWAITING_HUMAN_CLARIFICATION`, e o `STEP_10_COMMIT` bloquearia o commit para sempre.
+O `spec-completeness-gate` conta markers `[NEEDS CLARIFICATION` sobre o arquivo inteiro, incluindo comentários HTML e código inline. Como o template oficial carrega a string literal em 5 posições de guidance, **toda spec nasce com markers fantasma** — 13 das 15 specs então existentes (a 016 é a 16ª) já commitadas têm de 1 a 3. O `STEP_1A_SPECIFY` do `soma-run.md` usa a mesma contagem e ficaria em loop infinito em `AWAITING_HUMAN_CLARIFICATION`, e o `STEP_10_COMMIT` bloquearia o commit para sempre.
 
 Isso **impede o `/soma-run` de executar esta spec**, então foi tratado como hotfix pré-voo (TDD, commit próprio em `main`), fora do escopo dos ACs acima. Não é dívida diferida: é pré-condição do veículo.
 
