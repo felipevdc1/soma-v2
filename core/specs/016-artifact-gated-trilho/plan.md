@@ -52,7 +52,7 @@ Esta seção existe porque o `quickstart.md` que eu mesmo escrevi ficou **incons
 
 **Regra geral: `--run <runId>` é opcional em todos os verbos.** Quando omitido, o run ativo é resolvido pelo `.soma.lock` da raiz do projeto (mecanismo **pré-existente**, `soma-run.md` §0.3, campos `{sessionId, runId, startedAt}` — não é invenção desta fase). Sem `--run` e sem lock legível → erro nomeando as duas formas de resolver. Isso reconcilia os testes de T-02 e T-04 sem que nenhum precise ser reescrito.
 
-```
+```soma-cli-surface
 soma run state  --init --run <runId>
 soma run state  [--run <runId>] --set <STATE>
 soma run report [--run <runId>] --step <STEP> --status pass|fail|blocked [--reason <texto>]
