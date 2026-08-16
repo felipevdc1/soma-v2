@@ -31,9 +31,19 @@
  *   D-017-02 — `--help` / `--version` immediately after the binary are
  *   dispatcher universals, never "unknown verb".
  *
+ * T-12 fixes a false-positive found by the T-09 acceptance run against the
+ * 016 quickstart.md: a single invocation continued across physical lines
+ * with a trailing `\` (the normal way a long command wraps in real docs)
+ * was treated as N independent candidates — the continuation line, having
+ * no `soma` prefix of its own, was silently dropped, and the first line
+ * alone looked like it was missing every flag that actually lived on the
+ * lines after it. Fenced content is now joined across `\`-continuations
+ * before tokenizing; the finding still reports the FIRST physical line,
+ * where a reader would actually look for the command.
+ *
  * @spec [SPEC:AC-05] [SPEC:AC-06] [SPEC:AC-07]
  * @contract CONTRACT-CHECK-CLI-SURFACE-01
- * @task T-06 / T-11
+ * @task T-06 / T-11 / T-12
  */
 
 // ── tokenizer — shared by declaration lines and invocation candidates ─────
@@ -192,6 +202,37 @@ function isExecutableFence(info) {
   return info !== 'text' && info !== 'soma-cli-surface';
 }
 
+/** T-12: joins `\`-continued physical lines into one logical candidate
+ *  before tokenizing — a long invocation wrapped across lines (the normal
+ *  way real quickstarts write one) is still ONE invocation, not one per
+ *  physical line. Returns [{ text, line }] where `line` is always the
+ *  FIRST physical line of the group — where a reader looks for the
+ *  command, and where a finding about it belongs.
+ *
+ *  Trailing whitespace after the `\` (before the line break) still counts
+ *  as continuation — `\s+$` is stripped before checking for the marker, so
+ *  `--foo \ ` (backslash then a stray space) joins exactly like `--foo \`.
+ *  A chain may run more than two lines; the `while` below doesn't cap it. */
+function joinContinuations(contentLines, contentStartLine) {
+  const merged = [];
+  let i = 0;
+  while (i < contentLines.length) {
+    const startLine = contentStartLine + i;
+    const parts = [];
+    for (;;) {
+      const raw = contentLines[i];
+      const rtrimmed = raw.replace(/\s+$/, '');
+      const continues = rtrimmed.endsWith('\\');
+      parts.push((continues ? rtrimmed.slice(0, -1) : raw).trim());
+      i++;
+      if (!continues || i >= contentLines.length) break;
+    }
+    const text = parts.filter(Boolean).join(' ').trim();
+    if (text) merged.push({ text, line: startLine });
+  }
+  return merged;
+}
+
 /** Returns [{ text, line }] — candidate strings that MIGHT be invocations
  *  (first token not yet checked against the binary). D-017-01: inline
  *  backtick spans are NEVER candidates, regardless of content — the
@@ -205,10 +246,7 @@ function collectCandidateLines(artifactText) {
 
   for (const fence of fences) {
     if (!isExecutableFence(fence.info)) continue;
-    fence.contentLines.forEach((lineText, k) => {
-      const trimmed = lineText.trim();
-      if (trimmed) candidates.push({ text: trimmed, line: fence.contentStartLine + k });
-    });
+    candidates.push(...joinContinuations(fence.contentLines, fence.contentStartLine));
   }
 
   return candidates;
