@@ -67,8 +67,46 @@ Consertar 1 sem tratar 2 **transforma cegueira em ruído**, que é a troca que e
 
 ---
 
+## Estado declarado (histórico — antes do fix)
+
+**O piso de ruído das specs 001-015 permanecia não medido de forma útil**, e a seção anterior deste documento dizia exatamente por quê. O número honesto não era "0 achados" — era **"o check não olhou"**.
+
+O `spec.md` estava correto ao não prometer silêncio nessas 15. A diferença é que a medição acima produziu o número que faltava, e ele apontou trabalho concreto em vez de uma lacuna vaga — que virou AC-15, AC-16 e a T-13.
+
+---
+
+## Medição pós-fix (T-13) — 2026-08-16
+
+`context.cjs` agora reconhece `[P]` **com ou sem** crase (AC-15), e a coluna `files` só conta uma entrada como arquivo se ela **tiver forma de path** — sem espaço, sem parêntese, sem `+`, sem chave `{`/`}` (guarda extra além da redação literal do AC-16, ver nota abaixo), e contendo `/` ou uma extensão de arquivo conhecida (AC-16).
+
+Comando: `soma spec-lint core/specs/{NNN}-*/` para cada uma das 15, medido diretamente (não simulado):
+
+```
+001   0    002   0    003  21    004   0    005   0
+006   0    007   1    008   0    009   0    010   0
+011   0    012   0    013   0*   014   0    015  36
+```
+
+`*` 013-cbm-deprecation não tem `tasks.md` — não é defeito, é spec sem fase de tasks (mesma nota da medição original).
+
+**Total: 58 achados em 3 specs (003, 007, 015).** Todos os 58 são classificáveis individualmente:
+
+| Spec | Achados | Arquivo(s) compartilhado(s) | Classificação | Motivo |
+|---|---|---|---|---|
+| 003 | 21 | `scripts/lib/module-inference.cjs`, `scripts/init.cjs` | **Real** | Paths genuínos, citados limpos (sem prosa colada) em 8 tasks `[P]` no mesmo nível (T-03/T-04/T-05/T-06/T-07/T-08/T-09/T-12/T-13) — a mesma leitura do módulo `module-inference.cjs` |
+| 007 | 1 | `~/.claude/hooks/lib/auto-load-modules.cjs` | **Real** | T-12 e T-13, ambas `[P]`, ambas dependem só de T-02, mesmo arquivo de implementação citado limpo |
+| 015 | 36 | `core/scripts/install.cjs`, `core/scripts/__tests__/install.test.js` | **Real** | 10 tasks `[P]` da Wave 2a/2b (T-07..T-16) compartilhando o orquestrador `install.cjs`; o grafo `depends_on` já exclui os pares conectados (ex.: T-08→T-10 não aparece) — os 36 restantes são pares genuinamente desconectados no mesmo nível |
+| 009 | 0 (era candidato a ruído) | `adapters/{cursor` (fragmento fantasma) | **Ruído eliminado** | T-04/T-05 citam `adapters/{cursor,aider,chatgpt-desktop}/...json\|.md` — o split de vírgula sem consciência de chaves produzia o fragmento `adapters/{cursor` idêntico nas duas, e esse fragmento passa despercebido pela redação literal do AC-16 (sem espaço/parêntese/+, mas CONTÉM `/`). Fixture 13 do corpus reproduz exatamente este caso |
+| 010 | 0 (era candidato a ruído) | `hooks/capture-defer-gate.cjs (+ anotação)` | **Ruído eliminado** | Toda entrada de `files` nessa spec tem `+ test`/`(NEW)` colado ao path — cai no filtro por espaço/parêntese/+ da própria redação do AC-16, sem precisar da guarda extra |
+
+Nenhum dos 58 achados restantes depende de artefato de parsing — são todos apontamentos de arquivo real citado sem prosa, compartilhado por duas ou mais tasks `[P]` no mesmo nível de `depends_on`. **Nenhuma classificação ficou pendente.**
+
+**Nota sobre a guarda extra (`{`/`}`)**: a redação literal do AC-16 — "sem espaço, sem parêntese, sem `+`, contendo `/` ou extensão conhecida" — não bastava para o caso real da 009: o fragmento `adapters/{cursor` sobrevive a essa regra (não tem espaço/parêntese/+, e tem `/`), e sem tratamento à parte T-04 e T-05 fabricariam uma colisão pelo fragmento fantasma. Rejeitar `{`/`}` foi acrescentado durante a implementação e é o que fecha esse caso — documentado em `context.cjs` e coberto pelo fixture 13. É a sétima lacuna de contrato desta spec, encontrada contra o corpus real (009) antes de virar bug em produção, não depois.
+
+**16 e 17 seguem em 0 achados** (`soma spec-lint core/specs/016-artifact-gated-trilho` e `core/specs/017-soma-spec-lint`), verificado após o fix — condição de aceitação da T-13.
+
 ## Estado declarado
 
-**O piso de ruído das specs 001-015 permanece não medido de forma útil**, e este documento diz exatamente por quê. O número honesto hoje não é "0 achados" — é **"o check não olhou"**.
+O piso de ruído das specs 001-015 **agora está medido de forma útil**: 58 achados, todos classificados individualmente como reais, em 3 specs. As outras 12 (mais a 013, sem `tasks.md`) seguem em zero — silêncio real, não silêncio de cegueira, porque a medição confirma que o check avaliou pares em todas (ex.: 003 e 015 tinham candidatos de sobra e os encontrou; 001/002/004-006/008/011/012/014 tinham candidatos e não colidiram; 009/010 tinham candidatos e o filtro de forma-de-path corretamente descartou os que eram prosa).
 
-O `spec.md` continua correto ao não prometer silêncio nessas 15. A diferença é que agora existe o número que faltava, e ele aponta trabalho concreto em vez de uma lacuna vaga.
+Isto **ainda não é uma promessa de correção do processo histórico dessas specs** — 003/007/015 já foram executadas e mergeadas; o linter não reabre trabalho passado. É a confirmação de que o número deixou de ser "o check não olhou" e passou a ser um veredito real sobre o texto como está escrito hoje.
