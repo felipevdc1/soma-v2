@@ -19,7 +19,7 @@
 
 | Mecanismo | Onde | Estado |
 |---|---|---|
-| Run-state com schema versionado | `soma-run.md` §0.2, linhas 47-67 | `soma-state/v1.0`, 20 campos, **escrita atômica já especificada** (`write tmp → mv`). Já tem `snapshots[]`, `activeDispatchIds[]`, `failureCountsByStep{}`, `lastSuccessfulState` |
+| Run-state com schema versionado | `soma-run.md` §0.2, linhas 47-67 | `soma-state/v1.0`, 22 campos (23 chaves com `$schema`), **escrita atômica já especificada** (`write tmp → mv`). Já tem `snapshots[]`, `activeDispatchIds[]`, `failureCountsByStep{}`, `lastSuccessfulState` |
 | Retomada de run | `soma-run.md` §0.1, linhas 40-43 | Detecta state ativo e pergunta "Resumir ou iniciar nova?". **Mas**: chaveado por `sessionId`, mora em `/tmp`, sem flag `--resume`, sem noção de "último step com prova" |
 | Arquivamento de state antigo | `soma-run.md` linha 43 | `/tmp/soma-state-{sessionId}-{runId}.archive.json` |
 | Postconditions por step | `soma-run.md`, todos os 13 blocos `## N. STEP_X` | Existem **em prosa**, avaliadas por leitura fuzzy do agente. O conteúdo semântico do report já está escrito — falta virar artefato |

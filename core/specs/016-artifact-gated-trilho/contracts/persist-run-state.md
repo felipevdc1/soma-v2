@@ -18,7 +18,7 @@
 
 ## Payload
 
-`soma-state/v2` é **superset estrito de `soma-state/v1.0`**: todos os 20 campos do v1.0 permanecem, com o mesmo nome e a mesma semântica. Acrescenta dois.
+`soma-state/v2` é **superset estrito de `soma-state/v1.0`**: todos os 22 campos do v1.0 permanecem, com o mesmo nome e a mesma semântica. Acrescenta dois.
 
 ```json
 {
@@ -134,7 +134,7 @@ Ignore **seletivo** no `.gitignore`, na seção "SOMA runtime artifacts" que já
 // @contract CONTRACT-RUN-STATE-02
 
 describe('CONTRACT-RUN-STATE-02', () => {
-  it('v2 é superset de v1.0: os 20 campos originais sobrevivem com mesma semântica', () => {
+  it('v2 é superset de v1.0: os 22 campos originais sobrevivem com mesma semântica', () => {
     // carregar um state v1.0 real → migrar → todo campo presente e igual
   });
 
