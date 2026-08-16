@@ -265,3 +265,87 @@ test('CONTRACT: uma invocação com duas flags erradas produz DOIS achados, não
   assert.match(messages, /--format/);
   assert.match(messages, /--check/);
 });
+
+// ── T-12: linha continuada por `\` (achado real da prova de aceitação da ──
+// ── 016 — ver quickstart.md:126-127 da 016) — os DOIS lados obrigatórios ──
+//
+// `collectCandidateLines()` tratava cada linha física dentro da cerca como
+// candidato independente: uma invocação legítima quebrada em `\` (a forma
+// NORMAL de escrever um comando longo) tinha sua linha de continuação
+// descartada (não começa com "soma") e a primeira linha sozinha parecia
+// estar faltando toda flag que só existia nas linhas seguintes. Os dois
+// fixtures abaixo usam a MESMA superfície (`run dispatch-record end` com 4
+// flags obrigatórias) — a real, não uma reduzida — para provar nos dois
+// sentidos, exatamente como o AC-10 exige em toda esta spec.
+
+test('CONTRACT: [T-12] invocação continuada por \\ em 3 linhas, completa depois de juntar — zero achados', () => {
+  const ctx = loadFixture('11-line-continuation-complete');
+  const quickstart = ctx.artifacts.find(a => a.file === 'quickstart.md');
+  assert.ok(quickstart, 'precondition: fixture must have a quickstart.md artifact');
+  assert.equal(
+    quickstart.lines[5],
+    'soma run dispatch-record end --run run-lab-001 \\ ',
+    'precondition: line 6 must end in "\\" followed by a stray trailing space before the newline — ' +
+      'the exact trap the contract calls out ("\\ seguido de espaço em branco antes da quebra")'
+  );
+  assert.equal(quickstart.lines[6], '  --task T-03 \\', 'precondition: line 7 is a SECOND continuation, not the last');
+  assert.equal(
+    quickstart.lines[7],
+    '  --output-file /tmp/lab-output.md --metadata-file /tmp/lab-meta.json',
+    'precondition: line 8 closes the chain and carries the last two required flags — a 3-line ' +
+      'continuation, proving the join is not hardcoded to exactly two lines'
+  );
+  const result = cliSurface.run(ctx);
+  assert.equal(result.status, 'ran');
+  assert.deepEqual(
+    result.findings,
+    [],
+    `all 4 required flags ARE present once the 3 physical lines are joined — any finding here means ` +
+      `the continuation join is broken. Got: ${JSON.stringify(result.findings)}`
+  );
+});
+
+test('CONTRACT: [T-12] invocação continuada por \\, ainda incompleta depois de juntar — acusa (só) a flag que falta de verdade', () => {
+  const ctx = loadFixture('12-line-continuation-incomplete');
+  const quickstart = ctx.artifacts.find(a => a.file === 'quickstart.md');
+  assert.ok(quickstart, 'precondition: fixture must have a quickstart.md artifact');
+  assert.equal(
+    quickstart.lines[5],
+    'soma run dispatch-record end --run run-lab-001 --task T-03 \\',
+    'precondition: line 6 carries --run and --task, then continues'
+  );
+  assert.equal(
+    quickstart.lines[6],
+    '  --output-file /tmp/lab-output.md',
+    'precondition: line 7 carries --output-file (present!) but --metadata-file never appears anywhere ' +
+      'in the fixture — the invocation is genuinely incomplete even after a correct join'
+  );
+  assert.ok(
+    !quickstart.text.includes('--metadata-file'),
+    'precondition: --metadata-file must be truly absent from the fixture, not just split across lines — ' +
+      'otherwise this is corpus 12 in name only'
+  );
+  const result = cliSurface.run(ctx);
+  assert.equal(result.status, 'ran');
+  // Exactly 1 finding, naming --metadata-file, at line 6 (the FIRST physical
+  // line of the invocation — contract: "a linha reportada... deve ser a da
+  // primeira linha física"). A buggy join (or no join at all) either misses
+  // this finding, reports it at the wrong line, or ALSO wrongly flags
+  // --output-file as missing (it isn't — it's just on line 7) — that
+  // 2-findings-instead-of-1 shape is exactly what the pre-fix code produced.
+  assert.equal(
+    result.findings.length,
+    1,
+    `esperava exatamente 1 achado (só --metadata-file falta de verdade), veio ${JSON.stringify(result.findings)}`
+  );
+  const [finding] = result.findings;
+  assert.equal(finding.check, 'cli-surface');
+  assert.equal(finding.file, 'quickstart.md');
+  assert.equal(finding.line, 6, 'finding must point at the FIRST physical line of the invocation');
+  assert.match(finding.message, /--metadata-file/);
+  assert.doesNotMatch(
+    finding.message,
+    /--output-file/,
+    '--output-file IS present (on line 7) — flagging it too would mean the join never happened'
+  );
+});
