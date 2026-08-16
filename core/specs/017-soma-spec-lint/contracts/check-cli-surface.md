@@ -83,6 +83,7 @@ Sem essas regras, um documento não consegue **falar sobre** invocação sem ser
 | Subverbo não declarado | `` subverbo desconhecido '{sub}' para '{verbo}' `` |
 | Flag obrigatória ausente | `` '{verbo}' exige {--flag}, ausente aqui `` |
 | **Argumento posicional obrigatório ausente** | `` '{verbo}' exige o posicional {<arg>}, ausente aqui `` |
+| **Subverbo obrigatório ausente** | `` '{verbo}' exige o posicional {<subverbo>}, ausente aqui `` — mesma forma do posicional, porque um subverbo **é** um posicional obrigatório com valores enumerados |
 | Flag não declarada | `` flag '{--flag}' não declarada para '{verbo}' `` |
 | Valor fora da enumeração | `` '{valor}' fora dos aceitos para {--flag}: {a\|b\|c} `` |
 
