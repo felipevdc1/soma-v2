@@ -94,9 +94,13 @@ Given tasks que compartilham arquivo mas rodam em sequência / When o lint roda 
 
 Given a suíte / When executada / Then cada check tem os dois fixtures e ambos passam — um check com só um dos lados falha a suíte.
 
-### AC-11: WHEN executado contra os artefatos da 016 no estado anterior aos commits de correção, the linter SHALL reportar os defeitos que aqueles commits corrigiram
+### AC-11: WHEN executado contra os artefatos da 016 no estado anterior aos commits de correção, the linter SHALL reportar a colisão de escrita paralela que sobreviveu àqueles commits e à auditoria manual
 
-Given o estado pré-`626936b` obtido por `git worktree` / When o lint roda / Then aparecem como achados os defeitos de invocação de CLI que `9ba54b2` corrigiu, entre eles a flag inventada que nunca existiu.
+Given o estado pré-`626936b` obtido por `git worktree`, com o info-string injetado na cerca / When o lint roda / Then o achado `T-12 e T-15 são [P] no mesmo nível e escrevem em install/soma-hooks-map.json` aparece, e o exit é 1.
+
+> **Redação corrigida em 2026-08-16, e a versão anterior estava falsificada.** Ela prometia que o linter reproduziria "os defeitos que aqueles commits corrigiram". Medido: **não reproduz, e não pode.** Os 8 defeitos da 016 eram 4 afirmações numéricas e 1 cobertura nominal — as duas classes que esta spec **declara** não mecanizáveis — mais 3 passos **ausentes** no `quickstart.md` (`dispatch-record`, `gate --validate`, `state --set DONE` foram *acrescentados* por `9ba54b2`, não corrigidos). Ausência de passo é o check de alcançabilidade, que está no Out of Scope. O `cli-surface` detecta **divergência**, não **ausência**, e rodado contra o estado histórico devolve zero.
+>
+> O que o linter **de fato** achou ali é mais forte do que o que a redação antiga pedia: uma colisão de escrita paralela que **sobreviveu aos três commits de correção e à auditoria manual de 2026-08-15**, e que só foi vista quando a ferramenta existiu. Reproduzir defeito que humano já achou prova pouco; achar o que três rodadas de revisão humana deixaram passar prova o ponto da spec inteira.
 
 ### AC-12: WHEN executado contra a spec 016 no estado corrigido, the linter SHALL não reportar nenhum achado
 
