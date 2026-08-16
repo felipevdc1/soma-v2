@@ -63,11 +63,19 @@ Duas linhas com o mesmo verbo declaram **duas formas alternativas** do mesmo ver
 
 ## Detecção
 
-Varre `ctx.artifacts` procurando invocações do binário declarado no bloco (o primeiro token de cada linha da superfície, ex.: `soma`), em crases inline e em blocos cercados **executáveis**.
+Varre `ctx.artifacts` procurando invocações do binário declarado na cerca (o primeiro token de cada linha da superfície, ex.: `soma`).
 
-**Um bloco cercado com o info-string `text` não é varrido.** A distinção é entre comando e dado: uma cerca `bash` (ou sem info-string) contém coisa que alguém vai rodar e portanto é afirmação sobre a superfície; uma cerca `text` contém coisa que o documento está *exibindo*.
+**A fronteira entre "comando" e "texto sobre comando" é tipográfica, não semântica** — duas regras, e só elas:
 
-Esta regra não é conveniência — sem ela, um documento não consegue **falar sobre** invocações erradas sem que o linter as denuncie. A seção "Corpus de selftest" logo abaixo é o caso concreto: ela precisa exibir quatro invocações inválidas, e sem a regra o próprio contrato seria acusado por conter os exemplos que existem para testar o acusador. Foi medido em 2026-08-16: a primeira versão desta seção, escrita com crases inline, produziu exatamente esse achado.
+**D-017-01 — só cerca é varrida.** Um bloco cercado cujo info-string **não** seja `text` contém coisa que alguém vai rodar, e portanto é afirmação sobre a superfície. Tudo o mais — **crase inline incluída** — é menção, nunca invocação. Uma cerca `text` é dado que o documento está *exibindo*.
+
+**D-017-02 — `--help` e `--version` não são verbos.** Logo após o binário, são universais do dispatcher e nunca produzem achado de verbo desconhecido.
+
+Ambas foram fixadas em 2026-08-16 a partir de medição, não de intuição. O linter rodado contra a própria 017 devolveu **10 achados, todos falso-positivo, todos crase inline em prosa**: a linha de tabela `` | `soma <sub> <verbo>` | verbo declarado | `` virava "verbo desconhecido `<sub>`"; o título `` ## Superfície de CLI do `soma spec-lint` `` virava "posicional ausente"; a frase *"o corpus item 2 testa `soma spec-lint` sem o `<spec-dir>`"* — que **descreve** um caso de teste — virava achado. No outro sentido, o `quickstart.md` da 016, que é onde os defeitos reais moravam, escreve **todas** as invocações como linha nua dentro de cerca `bash`. A distinção separa exatamente os dois grupos.
+
+Sem essas regras, um documento não consegue **falar sobre** invocação sem ser denunciado por ela — que é a mesma patologia estrutural que tirou o `path-exists` desta spec. A diferença é que aqui ela tem cura, porque a classe de verdadeiro-positivo mora do outro lado da fronteira.
+
+⚠️ **Consequência para o corpus**: fixture de invocação inválida vai **dentro de cerca executável**. Escrita em crase inline, ela deixa de ser vista — e um fixture ruim que não dispara é um teste que mente.
 
 | Divergência | Mensagem |
 |---|---|
