@@ -74,8 +74,11 @@ Esta regra não é conveniência — sem ela, um documento não consegue **falar
 | Verbo não declarado na superfície | `` verbo desconhecido '{verbo}' — a superfície declara: {lista} `` |
 | Subverbo não declarado | `` subverbo desconhecido '{sub}' para '{verbo}' `` |
 | Flag obrigatória ausente | `` '{verbo}' exige {--flag}, ausente aqui `` |
+| **Argumento posicional obrigatório ausente** | `` '{verbo}' exige o posicional {<arg>}, ausente aqui `` |
 | Flag não declarada | `` flag '{--flag}' não declarada para '{verbo}' `` |
 | Valor fora da enumeração | `` '{valor}' fora dos aceitos para {--flag}: {a\|b\|c} `` |
+
+> A linha do **posicional** foi acrescentada em 2026-08-16, depois que o executor da T-04 esbarrou nela: o corpus item 2 testa `soma spec-lint` sem o `<spec-dir>`, que é posicional, e a tabela só tinha template para flag. Ele **sinalizou em vez de escolher em silêncio**, e essa é a razão de a linha existir — sem ela, cada implementador inventaria a sua mensagem. Mesmo defeito que apareceu duas vezes na spec 016.
 
 Uma invocação pode gerar **mais de um achado** (verbo certo, duas flags erradas → dois achados). Colapsar em um só esconderia trabalho.
 

@@ -57,8 +57,12 @@ A condição 3 é derivada do grafo, **não do cabeçalho da wave**. Cabeçalho 
 Um achado por **par** colidente, por arquivo compartilhado:
 
 ```
-parallel-collision: tasks.md:{linha da segunda task}: T-07 e T-09 são [P] no mesmo nível e escrevem em core/scripts/run/gate.cjs
+parallel-collision: tasks.md:{linha da task posterior}: T-07 e T-09 são [P] no mesmo nível e escrevem em core/scripts/run/gate.cjs
 ```
+
+**"Task posterior" é a que tem o maior número de linha no `tasks.md`** — ordem de aparição no arquivo, não ordem de ID nem ordem topológica. Definido em 2026-08-16, depois que o executor da T-05 apontou que o contrato dizia "segunda task" sem dizer segunda em qual ordem, e resolveu derivando do fixture em vez de chutar. Ancorar na linha posterior é o que faz o achado apontar para o lugar onde o leitor descobre o conflito ao ler de cima para baixo.
+
+O campo `message` do `Finding` carrega apenas `{idA} e {idB} são [P] no mesmo nível e escrevem em {arquivo}`. O prefixo `parallel-collision: tasks.md:{linha}: ` é composto por `lib/spec-lint/finding.cjs`, não por este check — a fronteira está em CONTRACT-LINT-OUTPUT-01.
 
 Três tasks `[P]` no mesmo arquivo produzem **três** achados (os três pares), não um. Cada par é uma decisão de sequenciamento distinta.
 
