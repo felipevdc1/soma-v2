@@ -29,9 +29,17 @@
  * findings are — a fixture that silently parsed wrong would otherwise let
  * a "0 findings" assertion pass for the wrong reason.
  *
- * @spec [SPEC:AC-08] [SPEC:AC-09]
+ * T-13 (AC-15/AC-16) extends this file with fixtures 11-14: `[P]` without
+ * the crase (specs 001-015's format) must be recognized AND evaluated, not
+ * just parsed — and a `files` cell entry that isn't shaped like a path
+ * (prose glued onto a real path, or a brace-expansion fragment split
+ * mid-token by the naive comma parser) must be dropped instead of treated
+ * as a phantom shared file. See `noise-floor.md` for the full measurement
+ * that motivated both.
+ *
+ * @spec [SPEC:AC-08] [SPEC:AC-09] [SPEC:AC-15] [SPEC:AC-16]
  * @contract CONTRACT-CHECK-PARALLEL-01
- * @task T-05
+ * @task T-05 / T-13
  */
 
 const { test } = require('node:test');
@@ -187,4 +195,69 @@ test('T-05 fixture 9: tabela de Foundation sem coluna depends_on → parseia sem
   assert.deepEqual(taskF3.files, ['core/shared.cjs']);
   assert.equal(result.status, 'ran');
   assert.equal(result.findings.length, 0, `expected zero, got: ${JSON.stringify(result.findings)}`);
+});
+
+// ── T-13 / AC-15 — `[P]` sem crase é reconhecida E avaliada ────────────────
+
+test('T-13 fixture 11 AC-15 SENSIBILIDADE: [P] sem crase (formato 001-015) → reconhecida E avaliada, 1 achado', () => {
+  const { ctx, result } = runCheck('11-bare-p-marker-recognized-and-evaluated');
+  assert.equal(ctx.tasks.length, 2, 'precondition: fixture must parse both tasks');
+  assert.ok(ctx.tasks.every((t) => t.parallel === true),
+    'precondition: bare `[P]` (no backticks) must still set parallel: true — this is the AC-15 recognition half');
+  assert.equal(result.status, 'ran');
+  // "0 achados" by cleanliness and "0 achados" by blindness look identical —
+  // the noise-floor measurement caught the bug by asking how many PAIRS the
+  // check evaluated (0 of 247 tasks), not by reading the finding count. This
+  // assertion is the evaluation half: recognizing the marker is not enough
+  // if the pair is never actually run through the collision rule.
+  assert.equal(result.findings.length, 1,
+    `expected exactly 1 finding (recognition alone is not proof — the pair must be EVALUATED), got ${result.findings.length}: ${JSON.stringify(result.findings)}`);
+  assert.match(result.findings[0].message, /T-A/);
+  assert.match(result.findings[0].message, /T-B/);
+  assert.match(result.findings[0].message, /core\/shared\.cjs/);
+});
+
+test('T-13 fixture 12 AC-15 ESPECIFICIDADE: [P] sem crase + dependência direta → zero achados (reconhecimento não atropela a condição 3)', () => {
+  const { ctx, result } = runCheck('12-bare-p-marker-with-direct-dependency');
+  assert.equal(ctx.tasks.length, 2);
+  assert.ok(ctx.tasks.every((t) => t.parallel === true), 'precondition: both still parse as [P] despite no backticks');
+  const taskB = ctx.tasks.find((t) => t.id === 'T-B');
+  assert.deepEqual(taskB.dependsOn, ['T-A'], 'precondition: B declares a direct dependency on A');
+  assert.equal(result.status, 'ran');
+  assert.equal(result.findings.length, 0, `expected zero, got: ${JSON.stringify(result.findings)}`);
+});
+
+// ── T-13 / AC-16 — coluna `files` só conta entrada com forma de path ──────
+
+test('T-13 fixture 13 AC-16: expansão de chaves partida pelo split de vírgula (reprodução real de 009) → zero achados', () => {
+  const { ctx, result } = runCheck('13-brace-expansion-split-ignored');
+  assert.equal(ctx.tasks.length, 2);
+  assert.ok(ctx.tasks.every((t) => t.parallel === true), 'precondition: both tasks are [P]');
+  // Precondition proves the trap is real: without the extra "{"/"}" guard
+  // (AC-16's literal wording only excludes space/paren/+), both tasks would
+  // still show the fragment "adapters/{cursor" as a "file" — it has no
+  // space, no paren, no +, and it DOES contain "/". The guard must reject
+  // it outright, leaving files empty, not merely deduplicated.
+  assert.ok(ctx.tasks.every((t) => t.files.length === 0),
+    `precondition: every entry in this fixture's files cell is prose/brace-artifact, none should survive the filter. Got: ${JSON.stringify(ctx.tasks.map((t) => t.files))}`);
+  assert.equal(result.status, 'ran');
+  assert.equal(result.findings.length, 0,
+    `the 2026-08-16 measurement found this exact shape produced a false collision in 009-adapter-skeletons T-04/T-05. Got: ${JSON.stringify(result.findings)}`);
+});
+
+test('T-13 fixture 14 AC-16: path real ao lado de prosa na mesma célula → 1 achado nomeando só o path real', () => {
+  const { ctx, result } = runCheck('14-real-path-alongside-prose-in-same-cell');
+  assert.equal(ctx.tasks.length, 2);
+  const taskA = ctx.tasks.find((t) => t.id === 'T-A');
+  const taskB = ctx.tasks.find((t) => t.id === 'T-B');
+  assert.deepEqual(taskA.files, ['core/real-shared.cjs'],
+    `precondition: the prose/brace junk in T-A's cell must not survive as a file. Got: ${JSON.stringify(taskA.files)}`);
+  assert.deepEqual(taskB.files, ['core/real-shared.cjs'],
+    `precondition: the prose/brace junk in T-B's cell must not survive as a file. Got: ${JSON.stringify(taskB.files)}`);
+  assert.equal(result.status, 'ran');
+  assert.equal(result.findings.length, 1,
+    `expected exactly 1 finding — the filter must not over-reject the real path sitting next to prose. Got: ${JSON.stringify(result.findings)}`);
+  assert.match(result.findings[0].message, /core\/real-shared\.cjs/, 'must name the real shared file');
+  assert.ok(!/hooks\/x\.cjs/.test(result.findings[0].message), 'must NOT name the prose fragment from T-A');
+  assert.ok(!/adapters/.test(result.findings[0].message), 'must NOT name the brace fragment from T-B');
 });
