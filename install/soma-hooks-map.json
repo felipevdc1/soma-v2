@@ -23,6 +23,10 @@
           {
             "type": "command",
             "command": "node \"${CLAUDE_HOME}/hooks/spec-completeness-gate.cjs\""
+          },
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_HOME}/hooks/spec-test-traceability.cjs\""
           }
         ]
       },
