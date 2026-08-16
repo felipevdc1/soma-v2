@@ -155,6 +155,19 @@ function runHooksViaBridge() {
   const wrapperPath = path.join(os.tmpdir(), `soma-p3-hooks-runner-${Date.now()}.cjs`);
   const outFile = path.join(os.tmpdir(), `soma-p3-hooks-out-${Date.now()}.txt`);
 
+  // Telemetry isolation: the hook test files under HOOKS_DIR exercise
+  // capture-defer-gate.cjs / insight-action-coupling.cjs, which append Article
+  // XI / insight-coupling telemetry. Without an override they write straight
+  // into ~/.claude/logs (production). Route them to a throwaway tmp dir here.
+  // NOTE (2026-08-16): this only closes the leak once ~/.claude/hooks/ itself
+  // is resynced — the copy deployed there today (2026-05-05, predates commit
+  // 1d467af which added the override) hardcodes the log path and does not
+  // read ARTICLE_XI_LOG_DIR / INSIGHT_COUPLING_LOG_DIR at all. Verified: even
+  // with the var set, the deployed hook still writes to the real log and
+  // nothing lands in the override dir. Setting it here is still correct —
+  // it's what makes isolation work the day the deployed copy catches up.
+  const telemetryLogDir = fs.mkdtempSync(path.join(os.tmpdir(), 'soma-p3-hooks-telemetry-'));
+
   const wrapperCode = `
 'use strict';
 const { spawnSync } = require('node:child_process');
@@ -165,6 +178,8 @@ const outFile = ${JSON.stringify(outFile)};
 const env = Object.assign({}, process.env);
 delete env.NODE_TEST_CONTEXT;
 env.FORCE_COLOR = '0';
+env.ARTICLE_XI_LOG_DIR = ${JSON.stringify(telemetryLogDir)};
+env.INSIGHT_COUPLING_LOG_DIR = ${JSON.stringify(telemetryLogDir)};
 const result = spawnSync(${JSON.stringify(NODE_BIN)}, ['--test', ...files], {
   encoding: 'utf8', timeout: 60000, env
 });
@@ -189,6 +204,7 @@ process.exit(result.status || 0);
   } finally {
     try { fs.unlinkSync(wrapperPath); } catch (e) { /* cleanup */ }
     try { fs.unlinkSync(outFile); } catch (e) { /* cleanup */ }
+    try { fs.rmSync(telemetryLogDir, { recursive: true, force: true }); } catch (e) { /* cleanup */ }
   }
 }
 

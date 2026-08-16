@@ -43,6 +43,21 @@ function runTestsBridge(files, label) {
   const wrapperPath = path.join(os.tmpdir(), `soma-p4a-runner-${Date.now()}.cjs`);
   const outFile = path.join(os.tmpdir(), `soma-p4a-out-${Date.now()}.txt`);
 
+  // Telemetry isolation: when `files` is the Hooks set (see the 'Hooks' call
+  // site below), it exercises capture-defer-gate.cjs / insight-action-coupling.cjs,
+  // which append Article XI / insight-coupling telemetry. Without an override
+  // they write straight into ~/.claude/logs (production). Set it unconditionally
+  // here — harmless no-op for the Phase 4a / Phase 2+3 file sets, which never
+  // read these vars.
+  // NOTE (2026-08-16): this only closes the leak once ~/.claude/hooks/ itself
+  // is resynced — the copy deployed there today (2026-05-05, predates commit
+  // 1d467af which added the override) hardcodes the log path and does not
+  // read ARTICLE_XI_LOG_DIR / INSIGHT_COUPLING_LOG_DIR at all. Verified: even
+  // with the var set, the deployed hook still writes to the real log and
+  // nothing lands in the override dir. Setting it here is still correct —
+  // it's what makes isolation work the day the deployed copy catches up.
+  const telemetryLogDir = fs.mkdtempSync(path.join(os.tmpdir(), 'soma-p4a-telemetry-'));
+
   const wrapperCode = `
 'use strict';
 const { spawnSync } = require('node:child_process');
@@ -52,6 +67,8 @@ const outFile = ${JSON.stringify(outFile)};
 const env = Object.assign({}, process.env);
 delete env.NODE_TEST_CONTEXT;
 env.FORCE_COLOR = '0';
+env.ARTICLE_XI_LOG_DIR = ${JSON.stringify(telemetryLogDir)};
+env.INSIGHT_COUPLING_LOG_DIR = ${JSON.stringify(telemetryLogDir)};
 const result = spawnSync(${JSON.stringify(NODE_BIN)}, ['--test', ...files], {
   encoding: 'utf8', timeout: 120000, env
 });
@@ -76,6 +93,7 @@ process.exit(result.status || 0);
   } finally {
     try { fs.unlinkSync(wrapperPath); } catch (e) { /* cleanup */ }
     try { fs.unlinkSync(outFile); } catch (e) { /* cleanup */ }
+    try { fs.rmSync(telemetryLogDir, { recursive: true, force: true }); } catch (e) { /* cleanup */ }
   }
 }
 
