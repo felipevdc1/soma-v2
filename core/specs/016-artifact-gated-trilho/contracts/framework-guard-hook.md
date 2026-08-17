@@ -29,9 +29,18 @@ Comando `Bash` cuja linha invoca `git commit`.
 ```
 hooks/**
 core/scripts/**
-constitution*
+**/constitution*
+**/constitution*/**
 install/**
 ```
+
+> **Correção de 2026-08-17 — `constitution*` cru não protegia a constituição.** O padrão original era `constitution*`, sozinho, entre três padrões que todos carregam prefixo de caminho. A executora da T-12 leu como glob de **um segmento** (`^constitution[^/]*$`), o que é a leitura correta do que estava escrito — e **sinalizou que era decisão dela, não verificação**, porque nenhum teste cobria um `constitution` aninhado.
+>
+> **A constituição real deste repo está em `core/docs/constitution.md`**, e os amendments em `core/docs/constitution-amendments/`. Nenhum dos quatro padrões originais cobria `core/docs/`. Verificado empiricamente com o hook rodando, régua validada nos dois sentidos antes do veredito: `docs/readme.md` → exit `0` (controle negativo, não é ruído), `hooks/x.cjs` → exit `2` (controle positivo, não é cego), `core/docs/constitution.md` → **exit `0`**.
+>
+> Ou seja: **o guard anunciava proteção que não entregava**, no artefato mais normativo do projeto — a mesma patologia de silêncio-que-lê-como-aprovação que esta fase inteira existe pra matar, e desta vez dentro do próprio mecanismo de proteção.
+>
+> São **dois** padrões porque um não basta: `**/constitution*` casa o arquivo em qualquer profundidade, mas **não** casa o conteúdo do diretório `constitution-amendments/` (o último segmento ali é o `.md` do amendment). `**/constitution*/**` fecha essa metade. Preferidos a `core/docs/constitution*` literal porque um guard que **para de proteger em silêncio quando alguém move o arquivo** é a mesma classe de defeito que estamos consertando aqui.
 
 Avaliados contra a saída de `git diff --cached --name-only` — **staged**, não working tree.
 
