@@ -16,10 +16,13 @@
  * case 5 below). The other AC-10 slice ("check externo não executa") is
  * T-15's (hooks/spec-test-traceability.cjs) and is not touched here.
  *
- * Also covers: routing to `--validate` when run/validator-invariant.cjs
- * (T-11, later wave) is absent — must fail legibly, never a
- * MODULE_NOT_FOUND stack trace — and run-resolution failure when neither
- * --run nor a readable .soma.lock is available.
+ * Also covers: routing through `--validate` — every failure path (missing
+ * metadata for the task, missing --validator flag) must satisfy the same
+ * invariant, never a raw MODULE_NOT_FOUND/Cannot find module stack trace,
+ * always exit 2 with the cause named (see plan.md §"Teste-de-irmão-ausente:
+ * a segunda metade do RED-by-design" for why this is asserted as an
+ * invariant rather than a specific message) — and run-resolution failure
+ * when neither --run nor a readable .soma.lock is available.
  *
  * Article III HARD: real fs / real child_process, zero mocks.
  * ⚠️ os.tmpdir() on this machine is NOT /tmp — never hardcode the literal
@@ -236,39 +239,67 @@ test('T-07: sem --run e sem .soma.lock legível → erro nomeando as duas formas
   }
 });
 
-// ── Rota --validate: roteamento e erro-de-ausência (o resto é T-11) ───────
+// ── Rota --validate: roteamento e invariante de robustez ──────────────────
+//
+// Todo caminho de FALHA de `--validate` tem que satisfazer o MESMO
+// invariante, qualquer que seja a causa específica: exit 2, stderr NUNCA
+// vaza um stack cru de MODULE_NOT_FOUND/Cannot find module, e a causa é
+// nomeada — nunca silêncio. plan.md §"Teste-de-irmão-ausente: a segunda
+// metade do RED-by-design" (2026-08-17) documenta por quê a versão anterior
+// deste teste morreu: ela asserted a MENSAGEM específica de "módulo
+// ausente" (run/validator-invariant.cjs não encontrado). No dia em que a
+// T-11 pousou esse módulo, o `gate.cjs` passou a carregá-lo com sucesso e a
+// falhar mais adiante — por metadata ausente. Exit code e comportamento
+// continuaram certos; só a asserção de string morreu, porque a pergunta
+// certa nunca foi "essa mensagem aparece", foi "o roteamento nunca vaza um
+// stack cru". Escrita como invariante, esta versão sobrevive à chegada de
+// qualquer módulo irmão futuro — regra geral que a mesma seção do plan.md
+// fixa: todo teste cuja asserção depende de um artefato NÃO existir tem
+// prazo de validade igual à wave que o cria.
 
-test('T-07 --validate: run/validator-invariant.cjs ausente (T-11, wave posterior) → erro legível, exit 2, NUNCA stack MODULE_NOT_FOUND', () => {
+/**
+ * @param {{status: number, stdout: string, stderr: string}} result
+ * @param {{context: string}} opts
+ * @returns {string} stdout+stderr combinado, para asserções adicionais do chamador
+ */
+function assertValidateFailureInvariant(result, { context }) {
+  assert.equal(result.status, 2, `${context}: esperava exit 2. stdout=${result.stdout} stderr=${result.stderr}`);
+  const out = result.stdout + result.stderr;
+  assert.ok(
+    !/MODULE_NOT_FOUND/.test(out) && !/Cannot find module/.test(out),
+    `${context}: NUNCA um stack cru de MODULE_NOT_FOUND/Cannot find module — tem que ser erro legível nomeando a causa. Output: ${out}`
+  );
+  assert.ok(out.trim().length > 0, `${context}: a causa tem que ser nomeada, nunca silêncio. Output vazio.`);
+  return out;
+}
+
+// Caminho REAL que acontece hoje: run/validator-invariant.cjs (T-11) existe
+// e é carregado com sucesso, mas a task nunca foi dispatched — nenhum
+// .soma/dispatches/{runId}/T-03/metadata.json foi fabricado. O invariante
+// executor≠validador falha FECHADO (AC-10's corollary, aplicado por T-11
+// também a este módulo) em vez de aprovar por não conseguir verificar.
+test('T-07 --validate: metadata ausente para a task (módulo presente) → exit 2, causa nomeada, invariante preservado', () => {
   const projectRoot = makeFixtureProject();
   try {
     const runId = 'run-t07-validate';
     writeLock(projectRoot, runId);
 
     const result = runRun(['gate', '--validate', 'T-03', '--validator', 'soma-lab-T-99'], { cwd: projectRoot });
-    assert.equal(result.status, 2, `esperava exit 2. stdout=${result.stdout}`);
-    const out = result.stdout + result.stderr;
-    assert.ok(
-      !/MODULE_NOT_FOUND/.test(out),
-      `NUNCA um stack de MODULE_NOT_FOUND cru — tem que ser erro legível nomeando a causa. Output: ${out}`
-    );
-    assert.ok(
-      /validator-invariant/.test(out),
-      `deve nomear o módulo ausente (run/validator-invariant.cjs, T-11). Output: ${out}`
-    );
+    const out = assertValidateFailureInvariant(result, { context: 'metadata ausente' });
+    assert.ok(/metadata/i.test(out), `deve nomear "metadata" como a causa concreta hoje. Output: ${out}`);
   } finally {
     fs.rmSync(projectRoot, { recursive: true, force: true });
   }
 });
 
-test('T-07 --validate: exige --validator junto de --validate → exit 2 sem tentar carregar o módulo', () => {
+test('T-07 --validate: exige --validator junto de --validate → exit 2 sem tentar carregar o módulo, invariante preservado', () => {
   const projectRoot = makeFixtureProject();
   try {
     const runId = 'run-t07-validate-missing-flag';
     writeLock(projectRoot, runId);
 
     const result = runRun(['gate', '--validate', 'T-03'], { cwd: projectRoot });
-    assert.equal(result.status, 2, `esperava exit 2. stdout=${result.stdout}`);
-    const out = result.stdout + result.stderr;
+    const out = assertValidateFailureInvariant(result, { context: '--validator ausente' });
     assert.ok(/--validator/.test(out), `deve nomear a flag ausente --validator. Output: ${out}`);
   } finally {
     fs.rmSync(projectRoot, { recursive: true, force: true });
