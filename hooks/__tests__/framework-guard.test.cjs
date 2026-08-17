@@ -256,6 +256,62 @@ test('CONTRACT: fora de repo git -> exit 0 com warning, não bloqueia', async ()
   }
 });
 
+// ── regression (2026-08-17): constitution* cru não protegia a constituição
+// real deste repo. `core/docs/constitution.md` e `core/docs/constitution-
+// amendments/*.md` são o artefato mais normativo do projeto; o guard tinha
+// que bloquear staged nesses paths e não bloqueava (silêncio-que-lê-como-
+// aprovação, ver contract's nota de 2026-08-17). Par positivo/negativo,
+// não só o positivo — um teste sem controle negativo não prova que a régua
+// ficou mais permissiva do que devia (foi assim que o probe manual que
+// achou o bug quase deu falso-negativo: sem stdin, o hook sai 0 pra
+// qualquer coisa, então o primeiro controle "positivo" também dava 0). ───
+
+test('CONTRACT: regressão — core/docs/constitution.md staged -> bloqueia', async () => {
+  const repo = initTmpRepo();
+  const sessionId = `fw-const1-${process.pid}-${Date.now()}`;
+  try {
+    stageFile(repo, 'core/docs/constitution.md');
+    const { code, stderr } = await runHook({ cwd: repo, sessionId });
+    assert.equal(code, 2, `esperava exit 2, veio ${code}. stderr: ${stderr}`);
+    assert.ok(stderr.includes('core/docs/constitution.md'), `esperava o path ofensor na stderr, veio: ${stderr}`);
+  } finally {
+    cleanup(repo);
+  }
+});
+
+test('CONTRACT: regressão — core/docs/constitution-amendments/*.md staged -> bloqueia', async () => {
+  const repo = initTmpRepo();
+  const sessionId = `fw-const2-${process.pid}-${Date.now()}`;
+  try {
+    stageFile(repo, 'core/docs/constitution-amendments/1.1.0-qualquer.md');
+    const { code, stderr } = await runHook({ cwd: repo, sessionId });
+    assert.equal(code, 2, `esperava exit 2, veio ${code}. stderr: ${stderr}`);
+    assert.ok(
+      stderr.includes('core/docs/constitution-amendments/1.1.0-qualquer.md'),
+      `esperava o path ofensor na stderr, veio: ${stderr}`
+    );
+  } finally {
+    cleanup(repo);
+  }
+});
+
+// Controle negativo — mesmo diretório (core/docs/), mas nome que genuinamente
+// não deve casar nenhum dos dois padrões de constituição (não começa com
+// "constitution" em segmento algum do path). Sem este par, o teste acima só
+// prova que a régua bloqueia — não prova que ela parou no lugar certo.
+test('CONTRACT: controle negativo — core/docs/README.md staged (mesmo dir, não é constituição) -> exit 0 e silêncio', async () => {
+  const repo = initTmpRepo();
+  const sessionId = `fw-const3-${process.pid}-${Date.now()}`;
+  try {
+    stageFile(repo, 'core/docs/README.md');
+    const { code, stderr } = await runHook({ cwd: repo, sessionId });
+    assert.equal(code, 0, `esperava exit 0, veio ${code}. stderr: ${stderr}`);
+    assert.equal(stderr.trim(), '', `esperava stderr vazio (silêncio), veio: ${stderr}`);
+  } finally {
+    cleanup(repo);
+  }
+});
+
 // ── wiring: sem entrada no soma-hooks-map.json, o hook nunca dispara ───
 
 test('CONTRACT: está registrado em install/soma-hooks-map.json com PreToolUse/Bash', () => {

@@ -5,8 +5,10 @@
  *
  * Fires: Before every Bash tool call
  * Purpose: Block `git commit` when staged changes touch protected framework
- *          paths (hooks/**, core/scripts/**, constitution*, install/**),
- *          unless a one-time bypass marker is present for this session.
+ *          paths (hooks, core/scripts, constitution files/amendments at any
+ *          depth, install — see PROTECTED_PATTERNS below for the exact
+ *          globs), unless a one-time bypass marker is present for this
+ *          session.
  *
  * Contract: core/specs/016-artifact-gated-trilho/contracts/framework-guard-hook.md
  * (CONTRACT-FRAMEWORK-GUARD-04)
@@ -37,26 +39,62 @@ function getSessionId() {
   return process.env.CK_SESSION_ID || process.env.CLAUDE_SESSION_ID || `pid-${process.ppid}`;
 }
 
-// Protected paths — contract's default list. `hooks/**`, `core/scripts/**`,
-// and `install/**` are directory prefixes; `constitution*` is a root-level
-// glob (no `**`), so it matches `constitution.md` but NOT a nested
-// `docs/constitution.md` — a bare `*` only spans one path segment.
-const PROTECTED_PATTERNS = ['hooks/**', 'core/scripts/**', 'constitution*', 'install/**'];
+// Protected paths — contract's default list (fixed 2026-08-17: `constitution*`
+// alone was a root-level-only glob, so it never matched the constitution's
+// REAL location, `core/docs/constitution.md` — the guard advertised
+// protection it didn't deliver, on the most normative artifact in the repo.
+// Two patterns now cover it, because one doesn't: `**/constitution*` matches
+// the file at any depth, but NOT the contents of `constitution-amendments/`
+// (that directory's last path segment is the amendment's own `.md` name, not
+// something starting with "constitution"); `**/constitution*/**` closes that
+// half. `hooks/**`, `core/scripts/**`, and `install/**` are directory
+// prefixes, unaffected by the fix).
+const PROTECTED_PATTERNS = [
+  'hooks/**',
+  'core/scripts/**',
+  '**/constitution*',
+  '**/constitution*/**',
+  'install/**',
+];
+
+// General double-star-aware glob -> RegExp. Handles `**` as a whole path
+// segment (matching zero or more full segments) in ANY position — leading
+// (`**/x`), trailing (`x/**`), or middle (`**/x/**`) — and `*` within a
+// segment as a single-segment wildcard (never crosses a `/`). This single
+// function replaces what used to be two separate cases (a `dir/**` prefix
+// check and a slash-free root-glob check) because `**/constitution*/**`
+// needs BOTH a leading and a trailing `**` in the same pattern — a "handles
+// `**` only at one end" matcher can't express it.
+function patternToRegex(pattern) {
+  const segments = pattern.split('/');
+  let re = '^';
+  for (let i = 0; i < segments.length; i++) {
+    const seg = segments[i];
+    if (seg === '**') {
+      const hasBefore = i > 0;
+      const hasAfter = i < segments.length - 1;
+      if (hasAfter) {
+        re += '(?:.*/)?'; // leading or middle **: zero or more segments, then '/'
+      } else if (hasBefore) {
+        re += '(?:/.*)?'; // trailing **: '/' then zero or more segments
+      } else {
+        re += '.*'; // pattern is just '**' alone — not used today, kept sound
+      }
+    } else {
+      const escaped = seg.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '[^/]*');
+      // Only add a literal '/' separator when the previous segment wasn't a
+      // '**' — that case already folded its own separator into the group above.
+      if (i > 0 && segments[i - 1] !== '**') re += '/';
+      re += escaped;
+    }
+  }
+  re += '$';
+  return new RegExp(re);
+}
 
 function patternToMatcher(pattern) {
-  if (pattern.endsWith('/**')) {
-    const prefix = pattern.slice(0, -3);
-    return (relPath) => relPath === prefix || relPath.startsWith(prefix + '/');
-  }
-  if (!pattern.includes('/')) {
-    const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '[^/]*');
-    const re = new RegExp(`^${escaped}$`);
-    return (relPath) => re.test(relPath);
-  }
-  // Not exercised by the current pattern list (every entry above is either
-  // a `dir/**` prefix or a slash-free root glob) — exact match as a safe
-  // fallback if PROTECTED_PATTERNS ever grows a literal path.
-  return (relPath) => relPath === pattern;
+  const re = patternToRegex(pattern);
+  return (relPath) => re.test(relPath);
 }
 
 const MATCHERS = PROTECTED_PATTERNS.map(patternToMatcher);
