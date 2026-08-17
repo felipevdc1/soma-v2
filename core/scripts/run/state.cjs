@@ -44,7 +44,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { validate } = require('./schema.cjs');
-const { resolveSomaPaths, isLegacyProject } = require('./paths.cjs');
+const { resolveSomaPaths, isLegacyProject, resolveRunIdFromLock } = require('./paths.cjs');
 
 // ── soma-state/v2 schema (owned by T-08, per run/schema.cjs's docstring) ──
 // Only the fields whose type is unambiguous (never legitimately null) are
@@ -139,17 +139,16 @@ function freshState(runId) {
 /**
  * Resolve `runId` from `--run`, falling back to `.soma.lock` when omitted
  * (plan.md:53 — "regra geral"). Returns null when neither resolves.
+ *
+ * The shape check this used to do inline (`typeof === 'string' && length >
+ * 0`) is now shared via run/paths.cjs's resolveRunIdFromLock() (Spec 016 K3
+ * fixup) — this file's own rule was the strictest of the three duplicates
+ * that existed, and is the one the shared function adopted.
  */
 function resolveRunId(explicitRunId, projectRoot) {
   if (explicitRunId) return explicitRunId;
-  const lockPath = path.join(projectRoot, '.soma.lock');
-  try {
-    const lock = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
-    if (lock && typeof lock.runId === 'string' && lock.runId.length > 0) return lock.runId;
-  } catch (_err) {
-    // unreadable/absent/corrupt lock → falls through to null, caller reports both paths
-  }
-  return null;
+  const result = resolveRunIdFromLock(projectRoot);
+  return result.status === 'ok' ? result.runId : null;
 }
 
 /** mkdir .soma/ + warn, so a legacy project (AC-08) never hard-fails `state --init`. */
