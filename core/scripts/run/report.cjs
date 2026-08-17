@@ -19,13 +19,14 @@
  *
  * Side effect (K1 fixup, 2026-08-16): after the report artifact is written
  * atomically, this module appends the corresponding entry to state.reports[]
- * via run/state.cjs's `appendReportEntry()` — contracts/emit-step-
- * report.md's "Side Effects" (b), owned by the `report` verb per plan.md:16
- * ("grava em .soma/reports/{runId}/ e atualiza reports[] no run-state").
- * `run/state.cjs` owns the run-state file format; this file only calls its
- * library API, never touches the JSON directly. The JSONL run-log append
- * (side effect (c)) remains undecided — no contract, no schema — and is
- * still NOT implemented here.
+ * via run/state.cjs's `appendReport()` — CONTRACT-STEP-REPORT-01's "Side
+ * Effects" (b), owned by the `report` verb per plan.md:16 ("grava em
+ * .soma/reports/{runId}/ e atualiza reports[] no run-state"). `appendReport`
+ * is T-08's module API (state.cjs owns the run-state file format and the
+ * entry's `path` computation; this file only calls it, never touches the
+ * JSON directly, and never recomputes the entry path itself). The JSONL
+ * run-log append (side effect (c)) remains undecided — no contract, no
+ * schema — and is still NOT implemented here.
  *
  * Exit codes:
  *   0 — report written AND reports[] append succeeded
@@ -43,7 +44,7 @@ const path = require('node:path');
 
 const { validate } = require('./schema.cjs');
 const { resolveSomaPaths, resolveRunIdFromLock } = require('./paths.cjs');
-const { appendReportEntry } = require('./state.cjs');
+const { appendReport } = require('./state.cjs');
 
 // ── soma-step-report/v1 (owned here, per schema.cjs's module doc: the 3
 //    concrete schemas belong to the tasks that emit them, not to T-01) ────
@@ -214,23 +215,25 @@ writeAtomic(filePath, JSON.stringify(payload, null, 2) + '\n');
 // docstring's "Side effect" note. Never a silent 0 on failure: the report
 // artifact is already on disk at this point, so a broken link to the
 // run-state has to say so loudly, naming both the artifact path and the
-// append failure's cause.
-const appendResult = appendReportEntry({
+// append failure's cause. `finishedAt` is passed as the exact value just
+// written into the report artifact (payload.finished_at) — appendReport()
+// requires it verbatim, on purpose, so the ledger entry can never diverge
+// from the artifact it describes. `path` is NOT passed: appendReport()
+// computes it itself from {projectRoot, runId, step}, the same
+// resolveSomaPaths + `${step}-report.json` convention this file uses for
+// `filePath` above — one source of truth, so the two can't drift.
+const appendResult = appendReport({
   projectRoot,
   runId,
-  entry: {
-    step: args.step,
-    status: args.status,
-    path: path.relative(projectRoot, filePath),
-    finished_at: payload.finished_at,
-  },
+  step: args.step,
+  status: args.status,
+  finishedAt: payload.finished_at,
 });
 
 if (!appendResult.ok) {
   fail(
     'REPORT_STATE_APPEND_FAILED',
-    `report gravado em ${filePath}, mas falha ao atualizar reports[] no run-state: ` +
-      `[${appendResult.code}] ${appendResult.message}`
+    `report gravado em ${filePath}, mas falha ao atualizar reports[] no run-state: ${appendResult.reason}`
   );
 }
 

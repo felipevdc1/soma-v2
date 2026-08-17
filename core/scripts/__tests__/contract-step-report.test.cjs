@@ -29,7 +29,17 @@
  * ALREADY EXISTS today (`soma-run.md` §0.3, `{sessionId, runId, startedAt}`),
  * independent of this spec's Wave 2 verbs. This test fabricates `.soma.lock`
  * directly via fs so it never depends on `soma run state` (T-08, a
- * different task, also unimplemented).
+ * different task, also unimplemented at T-02 time).
+ *
+ * Fixture update (2026-08-16, Wave 2 K1 fixup, Felipe's call): once T-08
+ * landed and `report` started appending to state.reports[] via
+ * `appendReport()` (which requires an initialized run — no lazy bootstrap,
+ * on purpose), cases 1 and 2 below needed `soma run state --init` added to
+ * their arrange. `emit-step-report.md` is the contract for emitting the
+ * *artifact*; whether the run exists is `persist-run-state`'s domain — the
+ * original omission was an isolation choice made before T-08 existed, not
+ * a load-bearing part of what this contract asserts. Every assertion below
+ * is untouched, byte-for-byte, from before this fixup.
  *
  * Article III HARD: real fs / real child_process, zero mocks.
  *
@@ -90,6 +100,16 @@ function reportPathFor(projectRoot, runId, step) {
   return path.join(p.runReportsDir, `${step}-report.json`);
 }
 
+// Arrange-only helper (K1 fixup): `report` now requires an initialized run
+// (appendReport() has no lazy bootstrap). Cases 1/2 call this before
+// calling `report` — cases 3-6 don't call `report` at all (case 3 tests
+// absence; 4-6 fabricate raw report files via writeRawReport), so they're
+// unaffected and untouched.
+function initRun(projectRoot, runId) {
+  const r = runRun(['state', '--init', '--run', runId], { cwd: projectRoot });
+  assert.equal(r.status, 0, `fixture setup: "soma run state --init" failed: ${r.stderr}`);
+}
+
 function writeRawReport(projectRoot, runId, step, content) {
   const filePath = reportPathFor(projectRoot, runId, step);
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -128,6 +148,7 @@ test('CONTRACT-STEP-REPORT-01 case 1: emite report válido e só então permite 
   try {
     const runId = 'run-t02-case1';
     writeLock(projectRoot, runId);
+    initRun(projectRoot, runId);
 
     const reportResult = runRun(
       ['report', '--run', runId, '--step', 'STEP_1A_SPECIFY', '--status', 'pass'],
@@ -171,6 +192,7 @@ test('CONTRACT-STEP-REPORT-01 case 2: CONTEÚDO — step falho produz status fai
   try {
     const runId = 'run-t02-case2';
     writeLock(projectRoot, runId);
+    initRun(projectRoot, runId);
     const reason = 'T-05 timed out esperando resposta do agente';
 
     const reportResult = runRun(
