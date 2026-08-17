@@ -45,6 +45,17 @@ function writeFixtureFile(projectRoot, name, content) {
   return p;
 }
 
+// .soma.lock is a pre-existing mechanism (soma-run.md §0.3), not invented
+// here — mirrors the fixture helper T-02's contract test already uses for
+// report/gate.
+function writeLock(projectRoot, runId) {
+  fs.writeFileSync(
+    path.join(projectRoot, '.soma.lock'),
+    JSON.stringify({ sessionId: 'test-session-t10', runId, startedAt: new Date().toISOString() }),
+    'utf8'
+  );
+}
+
 function recordDir(projectRoot, runId, taskId, attempt) {
   const base = path.join(projectRoot, '.soma', 'dispatches', runId, taskId);
   return attempt && attempt > 1 ? path.join(base, `attempt-${attempt}`) : base;
@@ -67,25 +78,20 @@ function validMetadata(overrides = {}) {
   };
 }
 
-function begin(projectRoot, { taskId, attempt, promptFile }) {
-  const args = ['dispatch-record', 'begin', '--run', RUN_ID, '--task', taskId, '--prompt-file', promptFile];
+// run: pass explicitly to override the default RUN_ID, or `null` to omit
+// --run entirely (exercising .soma.lock resolution / the unresolved path).
+function begin(projectRoot, { run = RUN_ID, taskId, attempt, promptFile }) {
+  const args = ['dispatch-record', 'begin'];
+  if (run !== null) args.push('--run', run);
+  args.push('--task', taskId, '--prompt-file', promptFile);
   if (attempt) args.push('--attempt', String(attempt));
   return runRun(args, { cwd: projectRoot });
 }
 
-function end(projectRoot, { taskId, attempt, outputFile, metadataFile }) {
-  const args = [
-    'dispatch-record',
-    'end',
-    '--run',
-    RUN_ID,
-    '--task',
-    taskId,
-    '--output-file',
-    outputFile,
-    '--metadata-file',
-    metadataFile,
-  ];
+function end(projectRoot, { run = RUN_ID, taskId, attempt, outputFile, metadataFile }) {
+  const args = ['dispatch-record', 'end'];
+  if (run !== null) args.push('--run', run);
+  args.push('--task', taskId, '--output-file', outputFile, '--metadata-file', metadataFile);
   if (attempt) args.push('--attempt', String(attempt));
   return runRun(args, { cwd: projectRoot });
 }
@@ -300,6 +306,147 @@ test('escrita atômica: nenhum arquivo .tmp residual após begin+end', () => {
     const dir = recordDir(projectRoot, RUN_ID, taskId);
     const stray = fs.readdirSync(dir).filter((f) => f.endsWith('.tmp'));
     assert.deepEqual(stray, []);
+  } finally {
+    fs.rmSync(projectRoot, { recursive: true, force: true });
+  }
+});
+
+// ── --run agora opcional (correção 2026-08-17, ver contrato "Superfície de
+//    CLI"): resolve via .soma.lock quando omitido, igual report/state/gate.
+
+// @spec AC-05
+test('begin --run omitido, com .soma.lock legível → resolve runId do lock', () => {
+  const projectRoot = makeFixtureProject();
+  try {
+    const runId = 'run-t10-from-lock';
+    writeLock(projectRoot, runId);
+    const taskId = 'T-30';
+    const promptFile = writeFixtureFile(projectRoot, 'prompt.md', 'Execute T-30.\n');
+    const result = begin(projectRoot, { run: null, taskId, promptFile });
+    assert.equal(result.status, 0, `stderr=${result.stderr}`);
+
+    const dir = recordDir(projectRoot, runId, taskId);
+    assert.ok(fs.existsSync(path.join(dir, 'prompt.md')));
+  } finally {
+    fs.rmSync(projectRoot, { recursive: true, force: true });
+  }
+});
+
+// @spec AC-05
+test('begin --run omitido e sem .soma.lock → exit != 0, cita --run e .soma.lock', () => {
+  const projectRoot = makeFixtureProject();
+  try {
+    const promptFile = writeFixtureFile(projectRoot, 'prompt.md', 'x\n');
+    const result = begin(projectRoot, { run: null, taskId: 'T-31', promptFile });
+    assert.notEqual(result.status, 0);
+    assert.ok(/--run/.test(result.stderr), result.stderr);
+    assert.ok(/\.soma\.lock/.test(result.stderr), result.stderr);
+  } finally {
+    fs.rmSync(projectRoot, { recursive: true, force: true });
+  }
+});
+
+// @spec AC-05
+test('begin+end --run omitido nos dois: fluxo completo resolve o mesmo runId do lock nas duas chamadas', () => {
+  const projectRoot = makeFixtureProject();
+  try {
+    const runId = 'run-t10-from-lock-e2e';
+    writeLock(projectRoot, runId);
+    const taskId = 'T-32';
+
+    const promptFile = writeFixtureFile(projectRoot, 'prompt.md', 'Execute T-32.\n');
+    assert.equal(begin(projectRoot, { run: null, taskId, promptFile }).status, 0);
+
+    const outputFile = writeFixtureFile(projectRoot, 'output.md', 'T-32 concluída.\n');
+    const metadataFile = writeFixtureFile(
+      projectRoot,
+      'metadata.json',
+      JSON.stringify(validMetadata({ run_id: runId, task_id: taskId }))
+    );
+    const result = end(projectRoot, { run: null, taskId, outputFile, metadataFile });
+    assert.equal(result.status, 0, `stderr=${result.stderr}`);
+
+    const dir = recordDir(projectRoot, runId, taskId);
+    for (const filename of ['prompt.md', 'output.md', 'metadata.json']) {
+      assert.ok(fs.existsSync(path.join(dir, filename)), `esperava ${filename} em ${dir}`);
+    }
+  } finally {
+    fs.rmSync(projectRoot, { recursive: true, force: true });
+  }
+});
+
+// ── Coerência local (contrato "O que end valida", fechado 2026-08-17): o
+//    metadata não pode mentir sobre a task/run/attempt a que pertence.
+
+// @spec AC-05
+test('end: metadata.task_id divergente do --task → REJECT, nada escrito (prova do buraco fechado)', () => {
+  const projectRoot = makeFixtureProject();
+  try {
+    const taskId = 'T-33';
+    const promptFile = writeFixtureFile(projectRoot, 'prompt.md', 'Execute T-33.\n');
+    assert.equal(begin(projectRoot, { taskId, promptFile }).status, 0);
+
+    const outputFile = writeFixtureFile(projectRoot, 'output.md', 'saida\n');
+    // metadata alega pertencer a T-09, mas a chamada é --task T-33: exatamente
+    // o buraco que o ajuste fecha — um registro de proveniência mentindo
+    // sobre a própria localização.
+    const mismatched = validMetadata({ task_id: 'T-09' });
+    const metadataFile = writeFixtureFile(projectRoot, 'metadata-mismatch.json', JSON.stringify(mismatched));
+
+    const result = end(projectRoot, { taskId, outputFile, metadataFile });
+    assert.notEqual(result.status, 0, `esperava REJECT. stdout=${result.stdout}`);
+    assert.ok(/task_id/i.test(result.stderr), result.stderr);
+    assert.ok(/T-09/.test(result.stderr) && /T-33/.test(result.stderr), result.stderr);
+
+    // Nada parcial: nem output.md nem metadata.json chegam a existir.
+    const dir = recordDir(projectRoot, RUN_ID, taskId);
+    assert.ok(!fs.existsSync(path.join(dir, 'output.md')), 'output.md não deve ser escrito em REJECT');
+    assert.ok(!fs.existsSync(path.join(dir, 'metadata.json')), 'metadata.json não deve ser escrito em REJECT');
+    // O diretório de T-09 (o valor mentiroso do metadata) também não deve
+    // ganhar nada — a escrita nunca chega a acontecer.
+    const wrongDir = recordDir(projectRoot, RUN_ID, 'T-09');
+    assert.ok(!fs.existsSync(wrongDir), 'diretório da task mentirosa não deve ser criado');
+  } finally {
+    fs.rmSync(projectRoot, { recursive: true, force: true });
+  }
+});
+
+// @spec AC-05
+test('end: metadata.run_id divergente do --run efetivo → REJECT, causa nomeada', () => {
+  const projectRoot = makeFixtureProject();
+  try {
+    const taskId = 'T-34';
+    const promptFile = writeFixtureFile(projectRoot, 'prompt.md', 'Execute T-34.\n');
+    assert.equal(begin(projectRoot, { taskId, promptFile }).status, 0);
+
+    const outputFile = writeFixtureFile(projectRoot, 'output.md', 'saida\n');
+    const mismatched = validMetadata({ task_id: taskId, run_id: 'run-outro-totalmente-diferente' });
+    const metadataFile = writeFixtureFile(projectRoot, 'metadata-mismatch-run.json', JSON.stringify(mismatched));
+
+    const result = end(projectRoot, { taskId, outputFile, metadataFile });
+    assert.notEqual(result.status, 0);
+    assert.ok(/run_id/i.test(result.stderr), result.stderr);
+  } finally {
+    fs.rmSync(projectRoot, { recursive: true, force: true });
+  }
+});
+
+// @spec AC-05
+test('end: metadata.attempt divergente do --attempt efetivo → REJECT, causa nomeada', () => {
+  const projectRoot = makeFixtureProject();
+  try {
+    const taskId = 'T-35';
+    const promptFile = writeFixtureFile(projectRoot, 'prompt.md', 'Execute T-35.\n');
+    assert.equal(begin(projectRoot, { taskId, promptFile }).status, 0);
+
+    const outputFile = writeFixtureFile(projectRoot, 'output.md', 'saida\n');
+    // --attempt omitido → efetivo é 1, mas o metadata alega attempt 2.
+    const mismatched = validMetadata({ task_id: taskId, attempt: 2 });
+    const metadataFile = writeFixtureFile(projectRoot, 'metadata-mismatch-attempt.json', JSON.stringify(mismatched));
+
+    const result = end(projectRoot, { taskId, outputFile, metadataFile });
+    assert.notEqual(result.status, 0);
+    assert.ok(/attempt/i.test(result.stderr), result.stderr);
   } finally {
     fs.rmSync(projectRoot, { recursive: true, force: true });
   }

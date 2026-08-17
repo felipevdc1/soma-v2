@@ -14,18 +14,19 @@
  * T-11's file — NOT touched here.
  *
  * CLI surface — authority is contracts/emit-dispatch-record.md's own
- * "Superfície de CLI (fixada em 2026-08-15)" section, promoted to contract
- * specifically so T-10/T-11 implement against the same form instead of each
- * inventing one. NOTE this diverges from plan.md's general
- * `soma-cli-surface` block, which brackets `--run` as optional for every
- * verb including dispatch-record ("regra geral"): the contract's own
- * section does NOT bracket `--run` here, and the contract test (T-04) never
- * omits it. Followed the contract's more specific, more recently-fixed
- * section — flagged as a surprise in the task report, not resolved
- * silently.
+ * "Superfície de CLI (fixada em 2026-08-15)" section. `--run` is OPTIONAL
+ * on both subcommands (2026-08-17 correction, decided by the team lead):
+ * the contract section originally required it while plan.md's general
+ * `soma-cli-surface` block bracketed it optional for every verb including
+ * dispatch-record. plan.md won — not by authority order, but by
+ * coherence: report/state/gate all resolve `runId` from `.soma.lock` when
+ * omitted, and plan.md's own note calls `resume` "the ONLY verb where
+ * resolving from the lock would be wrong" — "only" excludes
+ * dispatch-record. Resolution mirrors run/report.cjs exactly: explicit
+ * `--run` wins, otherwise `paths.cjs`'s `resolveRunIdFromLock()`.
  *
- *   soma run dispatch-record begin --run <runId> --task <taskId> [--attempt <n>] --prompt-file <path>
- *   soma run dispatch-record end   --run <runId> --task <taskId> [--attempt <n>] --output-file <path> --metadata-file <path>
+ *   soma run dispatch-record begin [--run <runId>] --task <taskId> [--attempt <n>] --prompt-file <path>
+ *   soma run dispatch-record end   [--run <runId>] --task <taskId> [--attempt <n>] --output-file <path> --metadata-file <path>
  *
  * - `begin` copies --prompt-file byte-for-byte into prompt.md, BEFORE the
  *   caller ever spawns the agent. `attempt` defaults to 1; attempt 1 lives
@@ -33,10 +34,18 @@
  *   under {taskId}/attempt-{n}/, leaving prior attempts untouched
  *   (Article VI, zero deletion).
  * - `end` validates --metadata-file against soma-dispatch-record/v1 (model
- *   pinning is mandatory — Amendment 1.1.0). REJECT writes nothing at all
- *   (all-or-nothing: validate fully BEFORE any write). On success, writes
- *   output.md (byte-for-byte copy of --output-file) + metadata.json (the
- *   validated payload, pretty-printed) into the same dir `begin` used.
+ *   pinning is mandatory — Amendment 1.1.0), AND checks LOCAL coherence:
+ *   metadata.run_id/task_id/attempt must match the effective --run/--task/
+ *   --attempt of the invocation (contract's "O que end valida" — a
+ *   provenance record that can lie about which task it belongs to is
+ *   useless for the auditing this contract exists for). Does NOT validate
+ *   that task_id exists in tasks.md (that's spec-lint's parsing to own) or
+ *   that a run-state already exists for run_id (dispatch-record can predate
+ *   state — the deliberate opposite of what report.cjs does). REJECT
+ *   writes nothing at all (all-or-nothing: validate fully BEFORE any
+ *   write). On success, writes output.md (byte-for-byte copy of
+ *   --output-file) + metadata.json (the validated payload, pretty-printed)
+ *   into the same dir `begin` used.
  *
  * Exit codes:
  *   0 — success
@@ -52,7 +61,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const { validate } = require('./schema.cjs');
-const { resolveSomaPaths } = require('./paths.cjs');
+const { resolveSomaPaths, resolveRunIdFromLock } = require('./paths.cjs');
 
 // ── soma-dispatch-record/v1 (owned here, per schema.cjs's docstring: the 3
 //    concrete schemas belong to the tasks that emit them — T-06/T-08/T-10) ─
@@ -109,6 +118,30 @@ function parseFlags(argv, knownFlags) {
   return args;
 }
 
+// ── .soma.lock resolution — pre-existing mechanism, not invented here.
+//    Mirrors run/report.cjs's resolveRunId() exactly (same messages, same
+//    shared paths.cjs helper) so the two verbs behave identically for a
+//    human typing the CLI by hand. ───────────────────────────────────────
+
+/**
+ * @param {string} projectRoot
+ * @param {string|undefined} explicitRun
+ * @returns {string} runId — never returns on failure, calls fail() and exits
+ */
+function resolveRunId(projectRoot, explicitRun) {
+  if (explicitRun) return explicitRun;
+
+  const result = resolveRunIdFromLock(projectRoot);
+  if (result.status === 'ok') return result.runId;
+
+  const messages = {
+    unreadable: `--run não foi informado e .soma.lock não está legível em ${result.lockPath}. Informe --run <runId> ou garanta um .soma.lock válido na raiz do projeto.`,
+    invalid_json: `--run não foi informado e .soma.lock em ${result.lockPath} não é JSON válido. Informe --run <runId> explicitamente.`,
+    invalid_run_id: `--run não foi informado e .soma.lock em ${result.lockPath} não contém um runId válido. Informe --run <runId> explicitamente.`,
+  };
+  fail('RUN_UNRESOLVED', messages[result.status]);
+}
+
 /**
  * @param {string|undefined} raw the raw --attempt value, or undefined
  * @returns {number} defaults to 1; never returns on invalid input (fail()
@@ -161,19 +194,19 @@ function readSourceBytes(flagName, filePath) {
 function cmdBegin(argv, projectRoot) {
   const args = parseFlags(argv, ['--run', '--task', '--attempt', '--prompt-file']);
 
-  if (!args.run) fail('MISSING_ARG', '--run é obrigatório');
   if (!args.task) fail('MISSING_ARG', '--task é obrigatório');
   if (!args.promptFile) fail('MISSING_ARG', '--prompt-file é obrigatório');
 
+  const runId = resolveRunId(projectRoot, args.run);
   const attempt = resolveAttempt(args.attempt);
   const promptBytes = readSourceBytes('--prompt-file', args.promptFile);
 
-  const dir = recordDir(projectRoot, args.run, args.task, attempt);
+  const dir = recordDir(projectRoot, runId, args.task, attempt);
   const promptPath = path.join(dir, 'prompt.md');
   writeAtomic(promptPath, promptBytes);
 
   process.stdout.write(
-    JSON.stringify({ ok: true, path: promptPath, run_id: args.run, task_id: args.task, attempt }) + '\n'
+    JSON.stringify({ ok: true, path: promptPath, run_id: runId, task_id: args.task, attempt }) + '\n'
   );
   process.exit(0);
 }
@@ -183,11 +216,11 @@ function cmdBegin(argv, projectRoot) {
 function cmdEnd(argv, projectRoot) {
   const args = parseFlags(argv, ['--run', '--task', '--attempt', '--output-file', '--metadata-file']);
 
-  if (!args.run) fail('MISSING_ARG', '--run é obrigatório');
   if (!args.task) fail('MISSING_ARG', '--task é obrigatório');
   if (!args.outputFile) fail('MISSING_ARG', '--output-file é obrigatório');
   if (!args.metadataFile) fail('MISSING_ARG', '--metadata-file é obrigatório');
 
+  const runId = resolveRunId(projectRoot, args.run);
   const attempt = resolveAttempt(args.attempt);
 
   // ── Validate FIRST, write NOTHING until validation passes — this is what
@@ -215,7 +248,33 @@ function cmdEnd(argv, projectRoot) {
       message: `field "attempt" must be an integer >= 1, got ${JSON.stringify(metadata.attempt)}`,
     });
   }
-  const allViolations = [...violations, ...extraViolations];
+
+  // ── Local coherence (contract's "O que end valida" — 2026-08-17): the
+  //    metadata payload must not be able to lie about which run/task/
+  //    attempt it belongs to — that's the whole point of an artifact
+  //    auditors trust. Checked regardless of the schema/attempt violations
+  //    above so a REJECT names every mismatch at once, not one at a time.
+  const coherenceViolations = [];
+  if (metadata.run_id !== runId) {
+    coherenceViolations.push({
+      field: 'run_id',
+      message: `metadata.run_id (${JSON.stringify(metadata.run_id)}) não casa com o --run efetivo (${JSON.stringify(runId)})`,
+    });
+  }
+  if (metadata.task_id !== args.task) {
+    coherenceViolations.push({
+      field: 'task_id',
+      message: `metadata.task_id (${JSON.stringify(metadata.task_id)}) não casa com o --task (${JSON.stringify(args.task)})`,
+    });
+  }
+  if (metadata.attempt !== attempt) {
+    coherenceViolations.push({
+      field: 'attempt',
+      message: `metadata.attempt (${JSON.stringify(metadata.attempt)}) não casa com o --attempt efetivo (${JSON.stringify(attempt)})`,
+    });
+  }
+
+  const allViolations = [...violations, ...extraViolations, ...coherenceViolations];
 
   if (allViolations.length > 0) {
     fail(
@@ -227,7 +286,7 @@ function cmdEnd(argv, projectRoot) {
   // ── Only now: read the output source bytes and write both artifacts.
   const outputBytes = readSourceBytes('--output-file', args.outputFile);
 
-  const dir = recordDir(projectRoot, args.run, args.task, attempt);
+  const dir = recordDir(projectRoot, runId, args.task, attempt);
   const outputPath = path.join(dir, 'output.md');
   const metadataPath = path.join(dir, 'metadata.json');
 
@@ -235,7 +294,7 @@ function cmdEnd(argv, projectRoot) {
   writeAtomic(metadataPath, JSON.stringify(metadata, null, 2) + '\n');
 
   process.stdout.write(
-    JSON.stringify({ ok: true, outputPath, metadataPath, run_id: args.run, task_id: args.task, attempt }) + '\n'
+    JSON.stringify({ ok: true, outputPath, metadataPath, run_id: runId, task_id: args.task, attempt }) + '\n'
   );
   process.exit(0);
 }
