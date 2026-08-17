@@ -86,6 +86,22 @@ Isso tem consequência direta para os ACs de report desta fase, e é normativo p
 
 O corolário está no AC-10 e vale para todo check desta fase: **impossibilidade de executar é REJECT, nunca pass.**
 
+### Teste-de-irmão-ausente: a segunda metade do RED-by-design (medido em 2026-08-17)
+
+O contract test nasce **vermelho** e fica verde quando a implementação chega. Existe o espelho disso, e ele não estava documentado: um teste que prova *"o módulo irmão ainda não existe, e a falha é legível"* nasce **verde** e fica **obsoleto** pelo mesmo evento.
+
+Aconteceu literalmente: a T-07 escreveu `run-gate.test.cjs` provando que o `require` preguiçoso de `validator-invariant.cjs` falhava com erro nomeado e nunca com stack de `MODULE_NOT_FOUND`. Quando a T-11 pousou o módulo, o `gate.cjs` passou a carregá-lo com sucesso e a falhar mais adiante — por metadata ausente. **Exit code continua `2`, comportamento continua certo, a asserção de string é que morreu.**
+
+**O conserto proibido é relaxar a asserção para aceitar as duas mensagens.** Isso é exatamente o defeito descrito no parágrafo de abertura desta seção: o teste pararia de fazer a pergunta que fazia. Um teste que aceita "módulo ausente" **ou** "metadata ausente" não prova nenhuma das duas.
+
+**O conserto certo preserva a pergunta**, e há duas formas legítimas:
+1. **Asserir o invariante em vez da mensagem** — em qualquer caminho de falha do `--validate`, a stderr **nunca** contém stack cru nem `MODULE_NOT_FOUND`/`Cannot find module`, o exit é `2`, e a causa é nomeada. Isso é o que o teste sempre quis dizer, escrito de um jeito que não apodrece quando o irmão pousa.
+2. **Fabricar a condição de ausência** num sandbox (cópia de `run/` sem o módulo), mantendo o teste original literal.
+
+A (1) é preferível: sobrevive à chegada de qualquer irmão futuro. A (2) é aceitável se alguém quiser a literalidade.
+
+**Regra geral que fica**: todo teste cuja asserção depende de um artefato **não existir** tem prazo de validade igual à wave que o cria. Quem escreve um assim deve, no mesmo commit, dizer qual task o invalida.
+
 ---
 
 ## Phase -1 Gates
