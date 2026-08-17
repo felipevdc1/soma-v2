@@ -44,7 +44,8 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { validate } = require('./schema.cjs');
-const { resolveSomaPaths, isLegacyProject, resolveRunIdFromLock } = require('./paths.cjs');
+const { resolveSomaPaths, resolveRunIdFromLock } = require('./paths.cjs');
+const { warnIfLegacy } = require('./legacy.cjs');
 
 // ── soma-state/v2 schema (owned by T-08, per run/schema.cjs's docstring) ──
 // Only the fields whose type is unambiguous (never legitimately null) are
@@ -149,16 +150,6 @@ function resolveRunId(explicitRunId, projectRoot) {
   if (explicitRunId) return explicitRunId;
   const result = resolveRunIdFromLock(projectRoot);
   return result.status === 'ok' ? result.runId : null;
-}
-
-/** mkdir .soma/ + warn, so a legacy project (AC-08) never hard-fails `state --init`. */
-function warnIfLegacy(projectRoot) {
-  if (!isLegacyProject(projectRoot)) return;
-  process.stderr.write(
-    'WARN: legacy project (no .soma/ directory found) — degraded mode, ' +
-      'bootstrapping .soma/ automatically. Run "soma install" to adopt the ' +
-      'full trilho. Ausência de .soma/ nunca é erro fatal (AC-08).\n'
-  );
 }
 
 // ── Verbs ───────────────────────────────────────────────────────────────

@@ -42,6 +42,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { validate } = require('./schema.cjs');
 const { resolveSomaPaths, resolveRunIdFromLock } = require('./paths.cjs');
+const { warnIfLegacy } = require('./legacy.cjs');
 
 // ── Step order ──────────────────────────────────────────────────────────────
 //
@@ -274,6 +275,15 @@ function runGateValidate(args, projectRoot) {
 const argv = process.argv.slice(2);
 const args = parseArgs(argv);
 const projectRoot = process.cwd();
+
+// AC-08 (T-14): warn when this project predates the trilho (no `.soma/`
+// yet) — was previously only checked by state.cjs, silently missing here.
+// gate.cjs never writes, so this call has no self-heal side effect at all;
+// downstream, a legacy project with nothing to gate on still hits the
+// pre-existing "report ausente" / VALIDATOR_INVARIANT_NOT_IMPLEMENTED
+// exits below, which are legible fail()s, not the crash-on-missing-
+// directory AC-08 exists to prevent.
+warnIfLegacy(projectRoot);
 
 if (args.validate) {
   runGateValidate(args, projectRoot);
