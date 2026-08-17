@@ -27,6 +27,52 @@ function readJsonSafe(filePath) {
   return JSON.parse(raw);
 }
 
+// Spec 016 K2: the run-state moved from `os.tmpdir()/soma-state-{sessionId}.json`
+// (soma-state/v1.0) to `{projectRoot}/.soma/run-state-{runId}.json`
+// (soma-state/v2, contracts/persist-run-state.md). This hook is a consumer
+// the contract explicitly calls out as "must not break" — so it looks in
+// BOTH places, new location first, and only falls back to the old /tmp path
+// when nothing is found at the new one. Legacy projects (no .soma/ at all)
+// keep working exactly as before via that fallback.
+//
+// There is no dependency on run/paths.cjs on purpose (Anti-Abstraction Gate,
+// plan.md §Dependencies — zero new coupling for a 3-line resolution).
+function findNewRunStatePath(projectRoot) {
+  const somaDir = path.join(projectRoot, '.soma');
+
+  // 1. .soma.lock, when present and readable, is authoritative (soma-run.md
+  // §0.3) — prefer the run it names, but only if that run's state file
+  // actually exists (a stale/pointing-nowhere lock must not hide a real one).
+  const lockPath = path.join(projectRoot, '.soma.lock');
+  try {
+    const lock = JSON.parse(fs.readFileSync(lockPath, 'utf-8'));
+    if (lock && typeof lock.runId === 'string' && lock.runId.length > 0) {
+      const candidate = path.join(somaDir, `run-state-${lock.runId}.json`);
+      if (fs.existsSync(candidate)) return candidate;
+    }
+  } catch (_err) {
+    // absent/unreadable/corrupt .soma.lock → fall through to directory scan
+  }
+
+  // 2. No lock, or the lock didn't resolve to an existing file: scan .soma/
+  // for run-state-*.json. A single match is the common case (one active run
+  // per checkout); with more than one, the most recently modified wins —
+  // best-effort, not a substitute for a working .soma.lock.
+  let entries;
+  try {
+    entries = fs.readdirSync(somaDir);
+  } catch (_err) {
+    return null; // no .soma/ directory at all → legacy project
+  }
+  const candidates = entries
+    .filter((name) => /^run-state-.+\.json$/.test(name))
+    .map((name) => path.join(somaDir, name));
+  if (candidates.length === 0) return null;
+  if (candidates.length === 1) return candidates[0];
+  candidates.sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs);
+  return candidates[0];
+}
+
 // v3 Fase 1: AC-line extraction — accepts the 3 line forms in use across
 // spec history:
 //   "### AC-01: ..."     (v3 Fase 1 heading form, EARS title)
@@ -165,7 +211,10 @@ async function main() {
 
     const sessionId = getSessionId();
     const tmpDir = os.tmpdir();
-    const statePath = path.join(tmpDir, `soma-state-${sessionId}.json`);
+    const oldStatePath = path.join(tmpDir, `soma-state-${sessionId}.json`);
+    const projectRoot = process.cwd();
+    const newStatePath = findNewRunStatePath(projectRoot);
+    const statePath = newStatePath || oldStatePath;
 
     // No SOMA session → pass silently
     if (!fs.existsSync(statePath)) process.exit(0);

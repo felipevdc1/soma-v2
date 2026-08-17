@@ -41,7 +41,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { validate } = require('./schema.cjs');
-const { resolveSomaPaths } = require('./paths.cjs');
+const { resolveSomaPaths, resolveRunIdFromLock } = require('./paths.cjs');
 
 // ── Step order ──────────────────────────────────────────────────────────────
 //
@@ -124,23 +124,17 @@ function parseArgs(argv) {
  * (soma-run.md §0.3, `{sessionId, runId, startedAt}`), not something this
  * task invents (plan.md §"Superfície de CLI do `soma run`").
  *
+ * The file-read/JSON-parse/shape check itself is shared via run/paths.cjs's
+ * resolveRunIdFromLock() (Spec 016 K3 fixup — was a second, looser copy of
+ * this same check, `lock.runId || null`, which let non-string/falsy-but-
+ * present runId values through un-typechecked; now uses the strict rule).
+ *
  * @returns {string|null} null when neither source resolves
  */
 function resolveRunId(cliRun, projectRoot) {
   if (cliRun) return cliRun;
-  const lockPath = path.join(projectRoot, '.soma.lock');
-  let raw;
-  try {
-    raw = fs.readFileSync(lockPath, 'utf8');
-  } catch (_err) {
-    return null;
-  }
-  try {
-    const lock = JSON.parse(raw);
-    return lock.runId || null;
-  } catch (_err) {
-    return null;
-  }
+  const result = resolveRunIdFromLock(projectRoot);
+  return result.status === 'ok' ? result.runId : null;
 }
 
 /**

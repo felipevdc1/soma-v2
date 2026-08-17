@@ -73,4 +73,62 @@ function resolveSomaPaths(projectRoot, runId) {
   return resolved;
 }
 
-module.exports = { isLegacyProject, resolveSomaPaths };
+// ── .soma.lock resolution (Spec 016 K3 fixup) ──────────────────────────────
+//
+// `report.cjs`, `gate.cjs`, and `state.cjs` each grew their own runId-from-
+// `.soma.lock` check in Wave 2, independently, with three different rules:
+//   - report.cjs: distinct error per failure mode (unreadable / bad JSON /
+//     invalid shape), citing soma-run.md §0.3 — the strictest ERROR
+//     REPORTING, but a plain `typeof lock.runId !== 'string'` shape check.
+//   - gate.cjs: `lock.runId || null` — the LOOSEST shape check (a falsy-
+//     but-present runId, or any non-string truthy value, slips through
+//     un-typechecked).
+//   - state.cjs: `typeof lock.runId === 'string' && lock.runId.length > 0`
+//     — the strictest SHAPE check of the three.
+//
+// This function is the single source of truth for the shape check —
+// state.cjs's rule, chosen because it is the only one of the three that
+// rejects every malformed runId value (non-string, empty string) rather
+// than silently accepting some of them. `.soma.lock` itself is a PRE-
+// EXISTING mechanism (soma-run.md §0.3, `{sessionId, runId, startedAt}`),
+// not invented here.
+//
+// It returns a discriminated result instead of exiting or returning a bare
+// null, so each of the three call sites can keep producing ITS OWN
+// CLI-facing message (report.cjs's three distinct reasons; gate.cjs's and
+// state.cjs's single generic "unresolved" message) without re-implementing
+// the file-read / JSON-parse / shape-check chain three times.
+/**
+ * @param {string} projectRoot
+ * @returns {
+ *   {status: 'ok', runId: string} |
+ *   {status: 'unreadable', lockPath: string} |
+ *   {status: 'invalid_json', lockPath: string} |
+ *   {status: 'invalid_run_id', lockPath: string}
+ * }
+ */
+function resolveRunIdFromLock(projectRoot) {
+  const lockPath = path.join(projectRoot, '.soma.lock');
+
+  let raw;
+  try {
+    raw = fs.readFileSync(lockPath, 'utf8');
+  } catch (_err) {
+    return { status: 'unreadable', lockPath };
+  }
+
+  let lock;
+  try {
+    lock = JSON.parse(raw);
+  } catch (_err) {
+    return { status: 'invalid_json', lockPath };
+  }
+
+  if (!lock || typeof lock.runId !== 'string' || lock.runId.length === 0) {
+    return { status: 'invalid_run_id', lockPath };
+  }
+
+  return { status: 'ok', runId: lock.runId };
+}
+
+module.exports = { isLegacyProject, resolveSomaPaths, resolveRunIdFromLock };

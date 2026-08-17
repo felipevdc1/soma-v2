@@ -17,23 +17,21 @@
  * `.soma.lock` at the project root (a PRE-EXISTING mechanism — soma-run.md
  * §0.3, fields {sessionId, runId, startedAt} — not invented here).
  *
- * Scope note (documented for the team lead, not left implicit): the
- * contract's "Side Effects" section also lists appending to `reports[]` in
- * the run-state (CONTRACT-RUN-STATE-02, owned by T-08) and a JSONL run-log
- * append. T-06's task line in tasks.md only says "emite ... validado ...
- * atomicamente, antes de qualquer transição" — it does not assign either of
- * those two side effects to this file, and `run/state.cjs` does not exist
- * yet in this worktree (T-08 is a sibling Wave 2 task, not a T-06
- * dependency). This module intentionally does NOT touch run-state or a
- * JSONL log. Wiring those is left to whichever task/step actually owns
- * them (T-08 and/or the T-18 WIRING pass) — reported as a surprise, not
- * silently done or silently skipped.
+ * Side effect (K1 fixup, 2026-08-16): after the report artifact is written
+ * atomically, this module appends the corresponding entry to state.reports[]
+ * via run/state.cjs's `appendReportEntry()` — contracts/emit-step-
+ * report.md's "Side Effects" (b), owned by the `report` verb per plan.md:16
+ * ("grava em .soma/reports/{runId}/ e atualiza reports[] no run-state").
+ * `run/state.cjs` owns the run-state file format; this file only calls its
+ * library API, never touches the JSON directly. The JSONL run-log append
+ * (side effect (c)) remains undecided — no contract, no schema — and is
+ * still NOT implemented here.
  *
  * Exit codes:
- *   0 — report written
+ *   0 — report written AND reports[] append succeeded
  *   2 — bad usage (missing/invalid flag, unresolved run, self-validation
- *       failure) — always with a legible reason on stderr, never a stack
- *       trace
+ *       failure), OR the reports[] append failed — always with a legible
+ *       reason on stderr, never a stack trace, never a silent 0
  *
  * @spec [SPEC:AC-01]
  * @task T-06
@@ -44,7 +42,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const { validate } = require('./schema.cjs');
-const { resolveSomaPaths } = require('./paths.cjs');
+const { resolveSomaPaths, resolveRunIdFromLock } = require('./paths.cjs');
+const { appendReportEntry } = require('./state.cjs');
 
 // ── soma-step-report/v1 (owned here, per schema.cjs's module doc: the 3
 //    concrete schemas belong to the tasks that emit them, not to T-01) ────
@@ -113,6 +112,11 @@ function parseArgs(argv) {
 }
 
 // ── .soma.lock resolution — pre-existing mechanism, not invented here ────
+//
+// Shape/read/parse checking itself lives in run/paths.cjs's
+// resolveRunIdFromLock() (Spec 016 K3 fixup — was triplicated across
+// report/gate/state, each with a different rule; this file's three-distinct-
+// reasons messaging is preserved here, on top of the shared strict check).
 
 /**
  * @param {string} projectRoot
@@ -122,36 +126,15 @@ function parseArgs(argv) {
 function resolveRunId(projectRoot, explicitRun) {
   if (explicitRun) return explicitRun;
 
-  const lockPath = path.join(projectRoot, '.soma.lock');
+  const result = resolveRunIdFromLock(projectRoot);
+  if (result.status === 'ok') return result.runId;
 
-  let raw;
-  try {
-    raw = fs.readFileSync(lockPath, 'utf8');
-  } catch (_err) {
-    fail(
-      'RUN_UNRESOLVED',
-      `--run não foi informado e .soma.lock não está legível em ${lockPath}. Informe --run <runId> ou garanta um .soma.lock válido na raiz do projeto.`
-    );
-  }
-
-  let lock;
-  try {
-    lock = JSON.parse(raw);
-  } catch (_err) {
-    fail(
-      'RUN_UNRESOLVED',
-      `--run não foi informado e .soma.lock em ${lockPath} não é JSON válido. Informe --run <runId> explicitamente.`
-    );
-  }
-
-  if (!lock || typeof lock.runId !== 'string' || lock.runId.length === 0) {
-    fail(
-      'RUN_UNRESOLVED',
-      `--run não foi informado e .soma.lock em ${lockPath} não contém um runId válido. Informe --run <runId> explicitamente.`
-    );
-  }
-
-  return lock.runId;
+  const messages = {
+    unreadable: `--run não foi informado e .soma.lock não está legível em ${result.lockPath}. Informe --run <runId> ou garanta um .soma.lock válido na raiz do projeto.`,
+    invalid_json: `--run não foi informado e .soma.lock em ${result.lockPath} não é JSON válido. Informe --run <runId> explicitamente.`,
+    invalid_run_id: `--run não foi informado e .soma.lock em ${result.lockPath} não contém um runId válido. Informe --run <runId> explicitamente.`,
+  };
+  fail('RUN_UNRESOLVED', messages[result.status]);
 }
 
 // ── Atomic write: write tmp → rename, per plan.md's storage convention ───
@@ -226,6 +209,30 @@ const { runReportsDir } = resolveSomaPaths(projectRoot, runId);
 const filePath = path.join(runReportsDir, `${args.step}-report.json`);
 
 writeAtomic(filePath, JSON.stringify(payload, null, 2) + '\n');
+
+// K1: append the corresponding entry to state.reports[] — see the module
+// docstring's "Side effect" note. Never a silent 0 on failure: the report
+// artifact is already on disk at this point, so a broken link to the
+// run-state has to say so loudly, naming both the artifact path and the
+// append failure's cause.
+const appendResult = appendReportEntry({
+  projectRoot,
+  runId,
+  entry: {
+    step: args.step,
+    status: args.status,
+    path: path.relative(projectRoot, filePath),
+    finished_at: payload.finished_at,
+  },
+});
+
+if (!appendResult.ok) {
+  fail(
+    'REPORT_STATE_APPEND_FAILED',
+    `report gravado em ${filePath}, mas falha ao atualizar reports[] no run-state: ` +
+      `[${appendResult.code}] ${appendResult.message}`
+  );
+}
 
 process.stdout.write(
   JSON.stringify({ ok: true, path: filePath, run_id: runId, step: args.step, status: args.status }) + '\n'

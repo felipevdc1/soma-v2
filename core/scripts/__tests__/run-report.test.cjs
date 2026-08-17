@@ -74,11 +74,22 @@ function reportPathFor(projectRoot, runId, step) {
   return path.join(p.runReportsDir, `${step}-report.json`);
 }
 
+// K1 fixup (2026-08-16): `report` now appends to state.reports[] as its own
+// side effect (contracts/emit-step-report.md §Side Effects (b)), so a
+// success-path report call needs an initialized run-state to append to —
+// same as the real soma-run flow, which always bootstraps state before any
+// step emits its report. Tests below that expect exit 0 call this first.
+function initRun(projectRoot, runId) {
+  const r = runRun(['state', '--init', '--run', runId], { cwd: projectRoot });
+  assert.equal(r.status, 0, `fixture setup: "soma run state --init" failed: ${r.stderr}`);
+}
+
 // @spec AC-01
 test('report --status pass: escreve report válido no path certo, exit 0', () => {
   const projectRoot = makeFixtureProject();
   try {
     const runId = 'run-t06-pass';
+    initRun(projectRoot, runId);
     const result = runRun(
       ['report', '--run', runId, '--step', 'STEP_3_FOUNDATION', '--status', 'pass'],
       { cwd: projectRoot }
@@ -107,6 +118,7 @@ test('report --status fail --reason: grava failure_reason, ainda exit 0 (quem bl
   const projectRoot = makeFixtureProject();
   try {
     const runId = 'run-t06-fail';
+    initRun(projectRoot, runId);
     const reason = 'agente reportou timeout no T-05';
     const result = runRun(
       ['report', '--run', runId, '--step', 'STEP_4_WAVES', '--status', 'fail', '--reason', reason],
@@ -127,6 +139,7 @@ test('report --status blocked --reason: aceito, mesmo tratamento de fail', () =>
   const projectRoot = makeFixtureProject();
   try {
     const runId = 'run-t06-blocked';
+    initRun(projectRoot, runId);
     const reason = 'aguardando gate humano';
     const result = runRun(
       ['report', '--run', runId, '--step', 'STEP_1B_PLAN', '--status', 'blocked', '--reason', reason],
@@ -201,6 +214,7 @@ test('report sem --run, com .soma.lock legível → resolve runId do lock', () =
   try {
     const runId = 'run-t06-from-lock';
     writeLock(projectRoot, runId);
+    initRun(projectRoot, runId);
     const result = runRun(['report', '--step', 'STEP_3_FOUNDATION', '--status', 'pass'], { cwd: projectRoot });
     assert.equal(result.status, 0, `stderr=${result.stderr}`);
 
@@ -231,6 +245,7 @@ test('reentrada no mesmo step sobrescreve o report anterior (um arquivo, não ve
   const projectRoot = makeFixtureProject();
   try {
     const runId = 'run-t06-reentry';
+    initRun(projectRoot, runId);
     const first = runRun(
       ['report', '--run', runId, '--step', 'STEP_3_FOUNDATION', '--status', 'fail', '--reason', 'primeira tentativa'],
       { cwd: projectRoot }
@@ -259,6 +274,7 @@ test('escrita atômica: nenhum arquivo .tmp residual após sucesso', () => {
   const projectRoot = makeFixtureProject();
   try {
     const runId = 'run-t06-atomic';
+    initRun(projectRoot, runId);
     const result = runRun(
       ['report', '--run', runId, '--step', 'STEP_3_FOUNDATION', '--status', 'pass'],
       { cwd: projectRoot }
