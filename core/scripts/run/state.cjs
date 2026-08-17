@@ -46,6 +46,7 @@ const path = require('node:path');
 const { validate } = require('./schema.cjs');
 const { resolveSomaPaths, resolveRunIdFromLock } = require('./paths.cjs');
 const { warnIfLegacy } = require('./legacy.cjs');
+const { sweepExpiredArtifacts } = require('./retention.cjs');
 
 // ── soma-state/v2 schema (owned by T-08, per run/schema.cjs's docstring) ──
 // Only the fields whose type is unambiguous (never legitimately null) are
@@ -221,6 +222,22 @@ function cmdSet(runId, newState, projectRoot) {
   process.stdout.write(
     `soma run state: run "${resolvedRunId}" transitioned ${state.previousState} -> ${state.currentState}\n`
   );
+
+  // AC-12 gatilho: o único lugar onde um run atinge DONE é aqui. A sweep
+  // é oportunista (varre TODOS os runs DONE do projeto, não só este) e
+  // nunca lança nem muda o exit code deste comando — sweepExpiredArtifacts()
+  // nunca throws (mesmo contrato de appendReport()). Ver run/retention.cjs.
+  if (state.currentState === 'DONE') {
+    const sweep = sweepExpiredArtifacts({ projectRoot });
+    if (sweep.swept.length > 0 || sweep.errors.length > 0) {
+      process.stderr.write(
+        `soma run state: retention sweep — swept ${sweep.swept.length}, errors ${sweep.errors.length}` +
+          (sweep.errors.length > 0 ? `: ${JSON.stringify(sweep.errors)}` : '') +
+          '\n'
+      );
+    }
+  }
+
   return state;
 }
 
