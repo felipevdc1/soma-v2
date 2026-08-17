@@ -54,6 +54,22 @@
 | `executor_agent` | string | sim | Nome do agente. **É a chave do invariante AC-06** |
 | `result` | string | sim | Um de `"done"`, `"failed"`, `"rejected"` |
 
+### O que `end` valida, e o que não valida (fechado em 2026-08-17)
+
+As restrições da tabela acima misturam duas naturezas, e a coluna não distingue — achado da executora da T-10, que implementou umas e não outras e **sinalizou em vez de deixar a diferença implícita no código**.
+
+**Validado — coerência local, custo zero:**
+- forma do payload: `schema` literal, tipos, `model` não-vazio, `attempt` inteiro ≥ 1, `result` no enum
+- **`run_id` e `task_id` do metadata casam com o `--run` e o `--task` da invocação**, e `attempt` casa com `--attempt`
+
+Esta última é a que fechava um buraco de integridade: sem ela era possível gravar `metadata.json` com `task_id: "T-05"` **dentro do diretório de `--task T-09"`**, e o artefato mentiria sobre a própria localização. Um registro de proveniência que pode mentir sobre a que task pertence não serve pra auditar nada — que é a única razão de este contrato existir.
+
+**NÃO validado, de propósito:**
+- *"`task_id` existe no `tasks.md` do run"* — exigiria parsear o `tasks.md`, e o `dispatch-record` passaria a depender do formato de um documento que ele não possui. O `spec-lint` já é o dono desse parsing.
+- *"`run_id` casa o run-state corrente"* no sentido de **existir** um run-state — o `dispatch-record` grava proveniência de dispatch, que pode acontecer antes do state existir. Casar com o flag da CLI, sim; exigir state inicializado, não. É a diferença que o verbo `report` resolveu no sentido oposto, e de propósito: lá o append **é** no state, aqui não.
+
+A tabela acima descreve o **formato pretendido**; esta seção descreve o que o código **impõe**. Onde as duas divergirem, esta seção é a que corresponde ao comportamento real.
+
 ---
 
 ## Invariante executor ≠ validador (AC-06)
@@ -78,9 +94,15 @@ Gravar o prompt antes tem propósito: se o agente morrer ou a sessão cair, o ru
 Duas fases, porque o artefato nasce em dois momentos — antes e depois do dispatch:
 
 ```
-soma run dispatch-record begin --run <runId> --task <taskId> [--attempt <n>] --prompt-file <path>
-soma run dispatch-record end   --run <runId> --task <taskId> [--attempt <n>] --output-file <path> --metadata-file <path>
+soma run dispatch-record begin [--run <runId>] --task <taskId> [--attempt <n>] --prompt-file <path>
+soma run dispatch-record end   [--run <runId>] --task <taskId> [--attempt <n>] --output-file <path> --metadata-file <path>
 ```
+
+> **Correção de 2026-08-17 — `--run` é opcional.** Esta seção escrevia `--run` **sem** colchetes enquanto o bloco ` ```soma-cli-surface ` do `plan.md` escrevia **com**. Duas autoridades discordando sobre a mesma flag, e nada detecta: o `spec-lint` checa deriva entre o `plan.md` e os exemplos, não contradição entre um contrato e o `plan.md`. A executora da T-10 seguiu esta seção (mais específica) e implementou obrigatório; o achado é dela.
+>
+> **O `plan.md` ganha, e não por hierarquia — por coerência.** `report`, `state` e `gate` resolvem o `runId` pelo `.soma.lock` quando omitido, e a nota do `plan.md` diz que o `resume` é *"o único caso em que resolver pelo lock seria errado"*. "Único" exclui o `dispatch-record`. Fazer dele o segundo verbo a exigir `--run` criaria uma inconsistência que ninguém decidiu e que só apareceria pra quem usa a CLI à mão.
+>
+> Os contract tests da T-04 **nunca omitem `--run`**, então a mudança é puramente aditiva — nenhum teste existente muda de resultado.
 
 - `begin` grava `prompt.md`. `attempt` 1 vai direto em `{taskId}/`; `attempt >= 2` em `{taskId}/attempt-{n}/`
 - `end` valida o metadata, grava `output.md` + `metadata.json`, e é **tudo-ou-nada**: metadata inválido não deixa escrita parcial
