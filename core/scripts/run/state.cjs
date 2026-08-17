@@ -27,6 +27,16 @@
  * project's `.soma.lock` when omitted (pre-existing mechanism,
  * soma-run.md §0.3 — not invented by this task).
  *
+ * Module API (in addition to the CLI): `appendReport()`, exported for
+ * `require('./state.cjs')` by whichever verb owns emitting the step report
+ * (today: run/report.cjs, T-06). See its docstring below for the exact
+ * signature — this is the append-side of CONTRACT-STEP-REPORT-01's Side
+ * Effects ("Faz append da entrada correspondente em reports[] do
+ * run-state"), a gap the contract itself does not assign a caller for.
+ * This file only EXPOSES the primitive; it does not call OUT to
+ * report.cjs or any other verb — wiring the two together is a separate
+ * task's job.
+ *
  * @spec [SPEC:AC-03] [SPEC:AC-04] [SPEC:AC-08]
  * @task T-08
  */
@@ -57,6 +67,17 @@ const STATE_SCHEMA_V2 = {
     humanGatesApproved: { type: 'object', required: true },
     decisions: { type: 'array', required: true },
     reports: { type: 'array', required: true },
+  },
+};
+
+// A `reports[]` entry (CONTRACT-RUN-STATE-02's Payload example), validated
+// on the way in so a malformed append can never reach durable state.
+const REPORT_ENTRY_SCHEMA = {
+  fields: {
+    step: { type: 'string', required: true, minLength: 1 },
+    status: { type: 'string', required: true, enum: ['pass', 'fail', 'blocked'] },
+    path: { type: 'string', required: true, minLength: 1 },
+    finished_at: { type: 'string', required: true, minLength: 1 },
   },
 };
 
@@ -213,6 +234,83 @@ function cmdSet(runId, newState, projectRoot) {
   return state;
 }
 
+// ── Module API ─────────────────────────────────────────────────────────
+//
+// appendReport({ projectRoot, runId, step, status, finishedAt }) -> { ok, reason?, state?, entry? }
+//
+// The append-side of CONTRACT-STEP-REPORT-01's Side Effects ("Faz append
+// da entrada correspondente em reports[] do run-state"). Callable via
+// `require('./state.cjs').appendReport(...)`.
+//
+// Design:
+//   - Computes `path` itself (relative to `projectRoot`, via
+//     `resolveSomaPaths` + the `${step}-report.json` naming convention) —
+//     single source of truth for where a step's report lives, so a caller
+//     only needs to know {runId, step}, never the artifact's path
+//     construction rule. `run/report.cjs` (T-06) derives the same absolute
+//     path from the same `resolveSomaPaths` call, so the two can never
+//     drift relative to each other.
+//   - `finishedAt` is REQUIRED, not defaulted — it must mirror the report
+//     artifact's own `finished_at` exactly (the ledger entry describes an
+//     artifact that already exists; minting a fresh timestamp here would
+//     silently diverge from it).
+//   - APPEND-ONLY: always pushes a new entry, never mutates or removes an
+//     existing one — including on re-entry into the same step (the
+//     contract: "o histórico de tentativas vive em reports[]").
+//   - NEVER throws and NEVER calls process.exit — this runs inside a
+//     caller's process. Every failure path returns
+//     `{ ok: false, reason: <legible string> }` so the caller can decide
+//     how loud to be; it must never fail silently (`0` violations read as
+//     success is exactly the failure mode this run-state persists to
+//     prevent).
+//
+// @spec [SPEC:AC-03]
+// @contract CONTRACT-STEP-REPORT-01 CONTRACT-RUN-STATE-02
+function appendReport({ projectRoot, runId, step, status, finishedAt }) {
+  if (!projectRoot || !runId) {
+    return { ok: false, reason: 'appendReport requires projectRoot and runId' };
+  }
+  if (!step || !status || !finishedAt) {
+    return { ok: false, reason: 'appendReport requires step, status, and finishedAt' };
+  }
+
+  const { runStateFile, runReportsDir } = resolveSomaPaths(projectRoot, runId);
+  if (!fs.existsSync(runStateFile)) {
+    return {
+      ok: false,
+      reason: `no state file at ${runStateFile} — run "soma run state --init --run ${runId}" first`,
+    };
+  }
+
+  let state;
+  try {
+    state = JSON.parse(fs.readFileSync(runStateFile, 'utf8'));
+  } catch (err) {
+    return { ok: false, reason: `${runStateFile} exists but is not valid JSON: ${err.message}` };
+  }
+  if (!Array.isArray(state.reports)) {
+    return {
+      ok: false,
+      reason: `${runStateFile}'s reports[] is not an array — refusing to append to corrupt state`,
+    };
+  }
+
+  const entry = {
+    step,
+    status,
+    path: path.relative(projectRoot, path.join(runReportsDir, `${step}-report.json`)),
+    finished_at: finishedAt,
+  };
+  const { valid, violations } = validate(REPORT_ENTRY_SCHEMA, entry);
+  if (!valid) {
+    return { ok: false, reason: `report entry failed validation: ${JSON.stringify(violations)}` };
+  }
+
+  state.reports = [...state.reports, entry]; // append-only — never overwrite an existing entry
+  writeStateAtomic(runStateFile, state);
+  return { ok: true, state, entry };
+}
+
 // ── CLI ─────────────────────────────────────────────────────────────────
 
 function parseArgs(argv) {
@@ -247,4 +345,12 @@ function main() {
   process.exit(0);
 }
 
-main();
+// Only auto-run the CLI when invoked directly (`node state.cjs ...` / via
+// run.cjs's spawnSync delegation). A plain `require('./state.cjs')` — e.g.
+// from run/report.cjs calling appendReport() — must NOT trigger argv
+// parsing or process.exit() inside the caller's own process.
+if (require.main === module) {
+  main();
+}
+
+module.exports = { appendReport };
