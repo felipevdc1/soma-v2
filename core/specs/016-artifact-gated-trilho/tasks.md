@@ -30,7 +30,7 @@
 
 | ID | Description | spec_ref | files | Status |
 |---|---|---|---|---|
-| T-01 | `[FOUNDATION]` Esqueleto do primitivo `soma run`: dispatcher fino `core/scripts/run.cjs` que roteia os 5 verbos para `core/scripts/run/{verbo}.cjs`, registro no array `SUBCOMMANDS` de `core/scripts/soma.cjs`, e os **dois módulos compartilhados**: `run/schema.cjs` (validador à mão, zero dep) e `run/paths.cjs` (resolução de projeto e de `.soma/`, incluindo detecção de projeto legado). RED: `soma run --help` lista os 5 verbos e verbo desconhecido sai com exit ≠ 0 | [SPEC:AC-01] [SPEC:AC-03] | `core/scripts/run.cjs`, `core/scripts/run/schema.cjs`, `core/scripts/run/paths.cjs`, `core/scripts/soma.cjs`, `core/scripts/__tests__/run.test.cjs` | TODO |
+| T-01 | `[FOUNDATION]` Esqueleto do primitivo `soma run`: dispatcher fino `core/scripts/run.cjs` que roteia os 5 verbos para `core/scripts/run/{verbo}.cjs`, registro no array `SUBCOMMANDS` de `core/scripts/soma.cjs`, e os **dois módulos compartilhados**: `run/schema.cjs` (validador à mão, zero dep) e `run/paths.cjs` (resolução de projeto e de `.soma/`, incluindo detecção de projeto legado). RED: `soma run --help` lista os 5 verbos e verbo desconhecido sai com exit ≠ 0 | [SPEC:AC-01] [SPEC:AC-03] | `core/scripts/run.cjs`, `core/scripts/run/schema.cjs`, `core/scripts/run/paths.cjs`, `core/scripts/soma.cjs`, `core/scripts/__tests__/run.test.cjs` | DONE |
 
 > **Por que o dispatcher é fino e os verbos são módulos separados:** as 8 tasks da Wave 2 são `[P]` e, num arquivo único, todas escreveriam em `core/scripts/run.cjs` — conflito de paralelismo que o STEP_1C rejeita. A decomposição é exigida pela estrutura de execução, não é abstração especulativa: cada task passa a ser dona de um arquivo. T-01 cria o dispatcher e os dois módulos compartilhados; **depois de T-01, ninguém mais edita `run.cjs`**.
 
@@ -42,10 +42,14 @@
 
 | ID | Description | spec_ref | files | depends_on | Status |
 |---|---|---|---|---|---|
-| T-02 | `[P]` Contract test de `contracts/emit-step-report.md` — os 6 casos do stub, incluindo os de **conteúdo** (status `fail` bloqueia pela razão certa; status fora do enum não vira pass; JSON corrompido é REJECT) | [CONTRACT:emit-step-report] | `core/scripts/__tests__/contract-step-report.test.cjs` | T-01 | TODO |
-| T-03 | `[P]` Contract test de `contracts/persist-run-state.md` — superset v1.0→v2, escrita atômica, append-only, e a **regressão do consumidor**: `spec-completeness-gate` continua achando `specPath` após a migração | [CONTRACT:persist-run-state] | `core/scripts/__tests__/contract-run-state.test.cjs` | T-01 | TODO |
-| T-04 | `[P]` Contract test de `contracts/emit-dispatch-record.md` — 3 arquivos materializados, `prompt.md` byte-a-byte, gravado antes do dispatch, `model` obrigatório, e os **dois lados** do invariante AC-06 (recusa quando igual, aceita quando diferente) | [CONTRACT:emit-dispatch-record] | `core/scripts/__tests__/contract-dispatch-record.test.cjs` | T-01 | TODO |
+| T-02 | `[P]` Contract test de `contracts/emit-step-report.md` — os 6 casos do stub, incluindo os de **conteúdo** (status `fail` bloqueia pela razão certa; status fora do enum não vira pass; JSON corrompido é REJECT) | [CONTRACT:emit-step-report] | `core/scripts/__tests__/contract-step-report.test.cjs` | T-01 | DONE |
+| T-03 | `[P]` Contract test de `contracts/persist-run-state.md` — superset v1.0→v2, escrita atômica, append-only, e a **regressão do consumidor**: `spec-completeness-gate` continua achando `specPath` após a migração | [CONTRACT:persist-run-state] | `core/scripts/__tests__/contract-run-state.test.cjs` | T-01 | DONE |
+| T-04 | `[P]` Contract test de `contracts/emit-dispatch-record.md` — 3 arquivos materializados, `prompt.md` byte-a-byte, gravado antes do dispatch, `model` obrigatório, e os **dois lados** do invariante AC-06 (recusa quando igual, aceita quando diferente) | [CONTRACT:emit-dispatch-record] | `core/scripts/__tests__/contract-dispatch-record.test.cjs` | T-01 | DONE |
 | T-05 | `[P]` Contract test de `contracts/framework-guard-hook.md` — repo git real, `sessionId` de env var, `TMPDIR` alterado, os **dois lados** (bloqueia protegido / libera não-protegido), e o teste de que o hook está registrado no `soma-hooks-map.json` | [CONTRACT:framework-guard-hook] | `hooks/__tests__/framework-guard.test.cjs` | T-01 | DONE |
+
+> **Âncoras de evidência da Foundation + Wave 1** (registradas em 2026-08-16 ao corrigir um drift: T-01..T-04 estavam marcadas `TODO` com o código já commitado, e um dispatch de Wave 2 lendo este arquivo como fonte de verdade poderia reconstruí-las do zero).
+> T-01 `a423908` · T-02 `5171623` · T-03 `310a95e` (+`0c165d0`, conserto do falso-verde T-03-04b) · T-04 `45a50ec` · T-05 `d69b6ae` · T-15 `ffcb4d7` · T-16 `67bf6fb`.
+> **RED planejado que estas tasks põem no ar, medido em `33efb0a`:** T-02 = 6 · T-03 = 8 · T-04 = 7 · T-05 = 9 → **30**, mais as 5 pré-existentes = **35 fails**, que é a suíte `1293/1255/35/3`. Wave 2 fecha os 30; as 5 continuam baseline.
 
 ---
 
