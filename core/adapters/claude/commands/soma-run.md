@@ -34,39 +34,21 @@ soma install . --tool=claude
 
 - `runId = run-{YYMMDD-HHmm-xxxxxx}` (suffix = 6 hex chars).
 - `sessionId = <Claude Code session id>`.
-- State file: `/tmp/soma-state-{sessionId}.json` (schema §3.1 do design).
-- Log file: `/tmp/soma-log-{runId}.jsonl` (schema §3.6).
+- State file: `{project-root}/.soma/run-state-{runId}.json` (schema `soma-state/v2` — superset estrito do v1.0 antigo, `$schema §3.1` do design; migrou de `/tmp` pra dentro do projeto e trocou a chave de `sessionId` pra `runId`, o que é o que torna `soma run resume` possível de uma sessão nova).
+- Log file: `/tmp/soma-log-{runId}.jsonl` (schema §3.6) — **inalterado por esta fase**; o schema/path do log JSONL segue sem contrato formal (ver spec 016).
 
 Se state file já existe e `currentState != DONE && currentState != FAILED_ROLLBACK`:
 - Pergunte ao usuário: **"Run `{runId}` ainda ativa em state `{currentState}`. Resumir ou iniciar nova?"**
 - Resumir → pule §0.2.
-- Nova → arquive state antigo em `/tmp/soma-state-{sessionId}-{runId}.archive.json` e siga.
+- Nova → `soma run state --init --run <novo-runId>` cria um state fresco à parte; o antigo não é apagado (retenção de 7 dias pós-`DONE`, AC-12).
 
 ### 0.2 Novo run — criar state inicial
 
-```json
-{
-  "$schema": "soma-state/v1.0",
-  "runId": "<novo>",
-  "sessionId": "<sid>",
-  "startedAt": "<ISO now>",
-  "currentState": "IDLE",
-  "previousState": null,
-  "lastTransitionAt": "<ISO now>",
-  "featureSlug": null,
-  "specPath": null, "planPath": null, "tasksPath": null, "contractsDir": null,
-  "teammateNamePrefix": null, "activeDispatchIds": [],
-  "failureCountsByStep": {}, "fixLoopIterations": 0,
-  "snapshots": [],
-  "humanGatesApproved": { "gate1_spec": {"approved": false}, "gate2_deploy": {"approved": false} },
-  "constitutionVersion": null, "constitutionSnapshotPath": null,
-  "lastSuccessfulState": null,
-  "baselineSha": "<git rev-parse origin/main>",
-  "pausedDiagnostic": null
-}
+```bash
+soma run state --init --run <runId>
 ```
 
-Escreva atomicamente (`write tmp → mv`). Log `START` event.
+`soma run state --init` cria `soma-state/v2` em `{project-root}/.soma/run-state-{runId}.json` — mesmos campos do v1.0 (`currentState: "IDLE"`, `humanGatesApproved`, `baselineSha`, etc.), mais `decisions[]` e `reports[]` (dois ledgers append-only que este primitivo passa a manter). É idempotente: reentrar num `runId` já inicializado é no-op (nunca reseta `decisions[]`/`reports[]`). Escrita atômica (`write tmp → rename`) já embutida no verbo — não escreva o JSON à mão. Log `START` event.
 
 ### 0.3 Multi-session lock (R3)
 
@@ -90,10 +72,15 @@ Senão, crie `.soma.lock` com `{sessionId, runId, startedAt}`.
    git status --short && git log --oneline -1
    # Hard stop se SHA não bate com {expected-sha} ou se working tree tem M/A/D tracked.
    ```
+7. **Gate e report do primitivo `soma run`**: cada um dos 12 blocos report-bearing `## N. STEP_X` abaixo (GATE 1/GATE 2 não contam — são markers humanos, não emitem report) chama `soma run gate --step STEP_X` na entrada e `soma run report --step STEP_X --status pass|fail|blocked [--reason "..."]` na saída, **antes** de aplicar a transição de estado descrita em "Transições". Nenhum bloco abaixo passa `--run` explicitamente — os dois verbos resolvem o run ativo via `.soma.lock` (criado em §0.3). Exit 0 do gate → prossiga; exit 2 → `PAUSED_DIAGNOSTIC`, a causa já vem nomeada no stderr do gate (CONTRACT-STEP-REPORT-01) — propague-a, não a reinterprete.
+8. **Mapeamento de `--status`**: `pass` quando as postconditions do step foram satisfeitas (inclusive quando o step não tinha nada a fazer — ex: sem tasks `[FOUNDATION]`/`[WIRING]` — e por isso segue direto); `blocked` quando o step não pode prosseguir sem decisão externa (a transição resultante é `AWAITING_*` ou `PAUSED_DIAGNOSTIC`); `fail` quando as próprias postconditions do step não foram atingidas e o Recovery Protocol reage automaticamente (retry/escalate, sem esperar humano). `--reason` é obrigatório sempre que `--status` não é `pass`.
+9. ⚠️ **`STEP_ORDER` não tem fonte única** — é uma lista fixa duplicada em `run/gate.cjs` e `run/resume.cjs` (ver `plan.md`). Renomear, reordenar ou fundir qualquer bloco `## N. STEP_X` abaixo quebra os dois arrays **em silêncio**, sem teste acusando. Quem mexer nos nomes/ordem dos 12 blocos atualiza as duas cópias no mesmo commit, ou promove a ordem a dado único primeiro.
 
 ---
 
 ## 1. STEP_1A_SPECIFY
+
+**Gate:** `soma run gate --step STEP_1A_SPECIFY`. É o primeiro step report-bearing da sequência — sem predecessor, o gate sempre libera (exit 0); a chamada existe por uniformidade com os outros 11 blocos.
 
 **Entrada:** `IDLE` (1ª entrada) ou retry loop da AWAITING_HUMAN_CLARIFICATION.
 
@@ -117,6 +104,8 @@ Senão, crie `.soma.lock` com `{sessionId, runId, startedAt}`.
 - ≥1 marker → `AWAITING_HUMAN_CLARIFICATION`. Emita: "Spec tem {N} `[NEEDS CLARIFICATION]` markers. Edite `{specPath}` e remova-os. Detecção automática via mtime do arquivo."
 - 0 ACs → REJECT (retry `/specify` com feedback de inadequação). Aplica Recovery counter.
 
+**Report:** `soma run report --step STEP_1A_SPECIFY --status pass` na 1ª; `--status blocked --reason "{N} markers [NEEDS CLARIFICATION] pendentes"` na 2ª; `--status fail --reason "spec sem AC numerado"` na 3ª.
+
 ### AWAITING_HUMAN_CLARIFICATION
 
 Poll: compare `fs.stat(specPath).mtime` com `state.lastTransitionAt`. Se mtime ≥ lastTransitionAt + 10s → the user editou, reentre STEP_1A (re-check markers). Intervalo de polling: 30s. Timeout: 24h (então PushNotification ou idle).
@@ -124,6 +113,8 @@ Poll: compare `fs.stat(specPath).mtime` com `state.lastTransitionAt`. Se mtime �
 ---
 
 ## 2. STEP_1B_PLAN
+
+**Gate:** `soma run gate --step STEP_1B_PLAN`.
 
 **Ação:**
 - Invoque `/plan-sdd` passando `specPath`.
@@ -139,9 +130,13 @@ Poll: compare `fs.stat(specPath).mtime` com `state.lastTransitionAt`. Se mtime �
 - Gates OK → `STEP_1C_TASKS`.
 - Gate violado **sem** rationale em `Complexity Tracking` → REJECT → `AWAITING_HUMAN_CLARIFICATION` com feedback estruturado (emita qual gate violou e o que falta).
 
+**Report:** `soma run report --step STEP_1B_PLAN --status pass` na 1ª; `--status blocked --reason "gate {nome} violado sem rationale em Complexity Tracking"` na 2ª.
+
 ---
 
 ## 3. STEP_1C_TASKS
+
+**Gate:** `soma run gate --step STEP_1C_TASKS`.
 
 **Ação:**
 - Leia `tasks.md` gerado pela `/plan-sdd`. Extraia `tasksPath`.
@@ -156,6 +151,8 @@ Poll: compare `fs.stat(specPath).mtime` com `state.lastTransitionAt`. Se mtime �
 **Transições:**
 - OK → `AWAITING_SPEC_APPROVAL`.
 - Violação (AC uncovered, orphan task, ciclo, [P] conflitante) → REJECT → retry `/plan-sdd` com feedback (Recovery counter no STEP_1C).
+
+**Report:** `soma run report --step STEP_1C_TASKS --status pass` na 1ª; `--status fail --reason "{AC descoberto sem task | task órfã | ciclo no DAG | [P] conflitante}"` na 2ª.
 
 ---
 
@@ -179,6 +176,8 @@ Poll: compare `fs.stat(specPath).mtime` com `state.lastTransitionAt`. Se mtime �
 
 ## 5. STEP_2_TASKS
 
+**Gate:** `soma run gate --step STEP_2_TASKS`. O predecessor report-bearing é `STEP_1C_TASKS` — o GATE 1 humano fica estruturalmente entre os dois blocos mas não emite report, então o `gate` o pula (ver Regra permanente 9).
+
 **Ação:**
 - **Time implícito** (Claude Code ≥2.1.x): não há setup de team. `TeamCreate` foi removido — teammates se criam direto via `Agent({ name: "soma-{featureSlug}-T-NN", ... })` nas waves (STEP_4). Persiste `teammateNamePrefix: "soma-{featureSlug}"` no state; os names dos dispatches vão em `activeDispatchIds`.
 - Para cada task em `tasks.md`, `TaskCreate({ subject, description, ... })` com metadata `{ taskLocalId: "T-NN", spec_refs, files, parallel: bool, foundation: bool, wiring: bool }`.
@@ -189,9 +188,13 @@ Poll: compare `fs.stat(specPath).mtime` com `state.lastTransitionAt`. Se mtime �
 - TaskCreate error → `PAUSED_DIAGNOSTIC` (snapshot com `failureReason: "task setup blocked"`).
 - Nota: teammates com prefixo `soma-` são isentos do agent-mode-gate (R6) — um run aprovado no bootstrap não trava nas waves por causa do budget do gate. O gate/thermal ainda pode pausar nos STEP_3/4/9 (onde `Agent` roda), não neste step.
 
+**Report:** `soma run report --step STEP_2_TASKS --status pass` na 1ª; `--status blocked --reason "TaskCreate error: {motivo}"` na 2ª (transição vira `PAUSED_DIAGNOSTIC`).
+
 ---
 
 ## 6. STEP_3_FOUNDATION
+
+**Gate:** `soma run gate --step STEP_3_FOUNDATION`.
 
 **Ação:**
 - Selecione tasks marcadas `[FOUNDATION]` em `tasks.md`.
@@ -208,9 +211,13 @@ Poll: compare `fs.stat(specPath).mtime` com `state.lastTransitionAt`. Se mtime �
 - Falha → Recovery Protocol (retry → escalate → `PAUSED_DIAGNOSTIC`).
 - Sem tasks [FOUNDATION] → pule direto para `STEP_4_WAVES` (log `FOUNDATION_SKIPPED`).
 
+**Report:** `soma run report --step STEP_3_FOUNDATION --status pass` quando a foundation conclui, ou quando não há tasks `[FOUNDATION]` (`FOUNDATION_SKIPPED` — ainda emita `pass`, mesmo padrão de STEP_7 quando não há `[WIRING]`); `--status blocked --reason "Recovery Protocol esgotado no STEP_3 — {motivo da última falha}"` se o Recovery Protocol chegar a `PAUSED_DIAGNOSTIC`.
+
 ---
 
 ## 7. STEP_4_WAVES
+
+**Gate:** `soma run gate --step STEP_4_WAVES`.
 
 **Ação iterativa por wave:**
 1. Selecione tasks disponíveis (sem `blockedBy` aberto, sem [FOUNDATION], sem [WIRING], com `status=pending`).
@@ -228,9 +235,13 @@ Poll: compare `fs.stat(specPath).mtime` com `state.lastTransitionAt`. Se mtime �
 - Todas tasks pending = 0 → `STEP_5_VALIDATE`.
 - Spawn error em qualquer dispatch → `PAUSED_DIAGNOSTIC` (R1).
 
+**Report:** `soma run report --step STEP_4_WAVES --status pass` só quando TODAS as waves concluírem — o self-loop entre waves (item 1 das Transições) não é uma transição de step, não emita report por wave individual; `--status blocked --reason "spawn error: {motivo}"` se um spawn falhar e a transição virar `PAUSED_DIAGNOSTIC`.
+
 ---
 
 ## 8. STEP_5_VALIDATE
+
+**Gate:** `soma run gate --step STEP_5_VALIDATE`.
 
 Para **cada merge candidato** (cada worktree de agent DONE):
 
@@ -250,9 +261,13 @@ Para **cada merge candidato** (cada worktree de agent DONE):
 - 1 REJECT (2ª vez mesma task) → ESCALATE Sonnet→Opus, re-dispatch. (Cap: Opus. NUNCA escale pra Fable automaticamente — human gate obrigatório.)
 - 2+ REJECTs na mesma wave **OU** 3ª falha na mesma task → `PAUSED_DIAGNOSTIC` (R5).
 
+**Report:** `soma run report --step STEP_5_VALIDATE --status pass` quando toda a wave aprova (0 REJECT); `--status fail --reason "REJECT: {check que falhou} na task {T-NN}"` quando volta a `STEP_4_WAVES` pra retry/escalate; `--status blocked --reason "2+ REJECTs na wave OU 3ª falha na mesma task"` se virar `PAUSED_DIAGNOSTIC`.
+
 ---
 
 ## 9. STEP_6_CONSOLIDATE
+
+**Gate:** `soma run gate --step STEP_6_CONSOLIDATE`.
 
 **Ação:**
 1. Para cada worktree aprovado, merge para branch de trabalho (`git merge --no-ff {worktree-branch}`).
@@ -268,9 +283,13 @@ Para **cada merge candidato** (cada worktree de agent DONE):
 - Merge conflict → volta a `STEP_1C_TASKS` (indica que [P] foi declarado errado; preserva diag).
 - Build/test fail pós-merge → Recovery counter no STEP_6.
 
+**Report:** `soma run report --step STEP_6_CONSOLIDATE --status pass` quando merge + build+test + FAMILY_DOC fecham limpos; `--status fail --reason "merge conflict — [P] declarado errado"` se voltar a `STEP_1C_TASKS`; `--status fail --reason "build/test falhou pós-merge"` durante o Recovery Protocol, ou `--status blocked --reason "Recovery Protocol esgotado no STEP_6"` se virar `PAUSED_DIAGNOSTIC`.
+
 ---
 
 ## 10. STEP_7_INTEGRATE
+
+**Gate:** `soma run gate --step STEP_7_INTEGRATE`.
 
 **Ação:**
 - Selecione tasks `[WIRING]` de `tasks.md` (não-[P], tocam múltiplos arquivos).
@@ -286,9 +305,13 @@ Para **cada merge candidato** (cada worktree de agent DONE):
 - Fail → Recovery (retry → escalate → `PAUSED_DIAGNOSTIC`).
 - Sem tasks [WIRING] → pule para `STEP_8_SONAR`.
 
+**Report:** `soma run report --step STEP_7_INTEGRATE --status pass` quando os testes de integração passam, ou quando não há tasks `[WIRING]`; `--status blocked --reason "Recovery Protocol esgotado no STEP_7"` se virar `PAUSED_DIAGNOSTIC`.
+
 ---
 
 ## 11. STEP_8_SONAR
+
+**Gate:** `soma run gate --step STEP_8_SONAR`.
 
 **Ação:**
 - Invoque `/sonar-audit {repo-path}` → despacha 5 agents read-only em paralelo (Architecture/Opus, Modules/Sonnet, Tests/Haiku, Config/Haiku, Spec-Adherence/Opus). Cada agent com `model:` pinado explicitamente — omissão herda o modelo da main session (Fable, 2× custo).
@@ -299,9 +322,13 @@ Para **cada merge candidato** (cada worktree de agent DONE):
 - `critical_count == 0 && spec_violations_count == 0` → `STEP_10_COMMIT`. Log `SONAR_CLEAN`.
 - ≥1 CRITICAL **ou** ≥1 spec_violation → `STEP_9_FIX_LOOP`.
 
+**Report:** `soma run report --step STEP_8_SONAR --status pass` nos dois ramos — o SONAR concluiu e produziu relatório nos dois casos; o que muda é se há findings a corrigir, não se o audit em si passou. ⚠️ **Quando o ramo é `SONAR_CLEAN`**, emita TAMBÉM `soma run report --step STEP_9_FIX_LOOP --status pass --reason "SONAR limpo — 0 iterações do fix loop"` antes de seguir pra `STEP_10_COMMIT`. `STEP_9_FIX_LOOP` é membro do `STEP_ORDER` fixo que `gate.cjs`/`resume.cjs` usam (predecessor de `STEP_10_COMMIT`), e o `gate` não sabe que este ramo pulou o bloco 12 inteiro — sem esse report, `soma run gate --step STEP_10_COMMIT` bloquearia por "report ausente" mesmo com o SONAR limpo. Mesmo padrão do report `pass` quando não há tasks `[FOUNDATION]`/`[WIRING]` (STEP_3/STEP_7).
+
 ---
 
 ## 12. STEP_9_FIX_LOOP
+
+**Gate:** `soma run gate --step STEP_9_FIX_LOOP`. Só é chamado quando este bloco é de fato entrado (ramo "≥1 CRITICAL" do STEP_8) — no ramo `SONAR_CLEAN`, o report deste step já foi emitido proativamente pelo STEP_8 (nota acima) e a transição vai direto pra STEP_10_COMMIT sem passar por aqui.
 
 **Ação:**
 1. Incremente `state.fixLoopIterations`.
@@ -314,9 +341,13 @@ Para **cada merge candidato** (cada worktree de agent DONE):
 - Re-audit clean → `STEP_10_COMMIT`.
 - `fixLoopIterations ≥ 5` sem convergir → `PAUSED_DIAGNOSTIC` (snapshot com hint: "5 iterações SONAR sem convergir, spec ou design provavelmente ambíguos").
 
+**Report:** `soma run report --step STEP_9_FIX_LOOP --status pass` quando o re-audit fecha limpo (state final antes de `STEP_10_COMMIT`); `--status blocked --reason "5 iterações SONAR sem convergir"` quando `fixLoopIterations >= 5`.
+
 ---
 
 ## 13. STEP_10_COMMIT
+
+**Gate:** `soma run gate --step STEP_10_COMMIT`.
 
 **Ação (pré-commit validations):**
 1. `spec-completeness-gate.cjs` (hook em PreToolUse Bash `git commit`) bloqueia se spec tem `[NEEDS CLARIFICATION]` ou AC sem teste → se bloquear, loop para STEP_9_FIX_LOOP.
@@ -332,6 +363,8 @@ Para **cada merge candidato** (cada worktree de agent DONE):
 - Commit + push OK → `AWAITING_DEPLOY_APPROVAL`.
 - Gate block → `STEP_9_FIX_LOOP`.
 - Push fail (conflito remoto) → preamble pós-merge + retry (1x) → Recovery counter.
+
+**Report:** `soma run report --step STEP_10_COMMIT --status pass` no commit+push OK; `--status fail --reason "{spec-completeness-gate|pre-commit-gate} bloqueou o commit"` se voltar a `STEP_9_FIX_LOOP`; `--status fail --reason "push falhou: conflito remoto"` durante o retry, ou `--status blocked --reason "Recovery Protocol esgotado no STEP_10"` se virar `PAUSED_DIAGNOSTIC`.
 
 ---
 
