@@ -45,6 +45,7 @@ const path = require('node:path');
 const { validate } = require('./schema.cjs');
 const { resolveSomaPaths, resolveRunIdFromLock } = require('./paths.cjs');
 const { appendReport } = require('./state.cjs');
+const { warnIfLegacy } = require('./legacy.cjs');
 
 // ── soma-step-report/v1 (owned here, per schema.cjs's module doc: the 3
 //    concrete schemas belong to the tasks that emit them, not to T-01) ────
@@ -176,6 +177,14 @@ if (args.status !== 'pass' && (!args.reason || args.reason.length === 0)) {
 }
 
 const projectRoot = process.cwd();
+
+// AC-08 (T-14): warn when this project predates the trilho (no `.soma/`
+// yet) — was previously only checked by state.cjs, silently missing here.
+// See run/legacy.cjs's docstring for why this doesn't also mkdir: the
+// atomic write below already creates `.soma/reports/{runId}/` regardless
+// of legacy status, so this call's only job is naming the degradation.
+warnIfLegacy(projectRoot);
+
 const runId = resolveRunId(projectRoot, args.run);
 
 const nowIso = new Date().toISOString();
