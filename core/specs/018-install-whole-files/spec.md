@@ -75,9 +75,13 @@ Given as 3 entries de bloco existentes do adapter `claude` mais entries de arqui
 
 Given um arquivo instalado e não editado desde a instalação / When a fonte no repo mudou e `soma install` roda / Then o destino é atualizado e a ação é reportada.
 
-### AC-04: IF um arquivo instalado divergiu do que o SOMA gravou por último, THEN the soma-install SHALL recusar a escrita daquele arquivo, nomeando o path e a causa
+### AC-04: IF qualquer arquivo declarado divergiu do que o SOMA gravou por último, THEN the soma-install SHALL abortar a instalação inteira antes de escrever qualquer arquivo, nomeando cada path divergido
 
-Given um arquivo instalado que o usuário editou à mão / When `soma install` roda / Then aquele arquivo **não** é sobrescrito, a saída nomeia o path e diz que divergiu, e o exit code sinaliza recusa — **nunca** sucesso silencioso.
+Given 19 arquivos declarados, dos quais 1 foi editado à mão / When `soma install` roda / Then **nenhum dos 19** é escrito, a saída nomeia o path divergido e a causa, e o exit code sinaliza abort — **nunca** sucesso silencioso e **nunca** aplicação parcial.
+
+**Precedente que fixa esta semântica** (decisão do usuário, 2026-08-17): é o que o `sync --apply` já faz para bloco — o teste `AC-13: sync --apply aborts with BLOCK_CONFLICT` mostra que conflito **aborta a aplicação inteira**, não aplica parcialmente. O estado final é sempre previsível: ou tudo mudou, ou nada mudou.
+
+> **Convenção de numeração desta spec:** todos os ACs são `AC-NN` sem sufixo de letra, de propósito. O `AC_LINE_RE` do gate casa `AC-\d+` e **silenciosamente não casa** sufixo — um `AC-04b` ficaria sem lint e sem cobertura, e ninguém perceberia. Aconteceu na spec 016.
 
 ### AC-05: WHERE existem arquivos em `~/.claude/hooks/` que nenhuma entry declara, the soma-install SHALL preservá-los intactos
 
@@ -134,10 +138,15 @@ Given o conjunto de entries de arquivo desta spec / When ele é inspecionado / T
 
 ---
 
-## Open Questions
+## Questões resolvidas
 
-- `[NEEDS CLARIFICATION: o conjunto de hooks a declarar são todos os 19 do repo, ou um subconjunto? Os 19 incluem hooks que talvez só façam sentido em CI ou em projeto, não na instalação de usuário.]`
-- `[NEEDS CLARIFICATION: quando o AC-04 recusa um arquivo e os outros N-1 são gravados com sucesso, o exit code é sucesso-parcial ou falha? O install.cjs já tem o status "partial-failed" em VALID_STATUSES — reusar ou tratar recusa como categoria própria?]`
+As duas questões que esta spec abriu foram fechadas em 2026-08-17, antes do `/plan-sdd`. Ficam registradas com o motivo para não serem re-decididas.
+
+**Q1 — o conjunto de hooks são todos os 19 do repo, ou um subconjunto?** → **Todos os 19.** Resolvida por **medição**, não por preferência: dos 19 hooks do repo, **16 já estão vivos em `~/.claude/hooks/` e byte-idênticos**, o que prova empiricamente que pertencem à instalação de usuário. Os 3 restantes são precisamente o que o instalador precisa entregar — `framework-guard.cjs` **não instalado** (é o da Fase 2), e `spec-completeness-gate.cjs` + `spec-test-traceability.cjs` **divergidos com o repo à frente** (o primeiro migrado pelo K2 da 016 para achar state em `.soma/`, o segundo consertado pela T-15).
+
+**Q2 — abort total ou aplicação parcial quando 1 de N divergiu?** → **Abort total**, ver AC-04. Segue o precedente do `sync --apply` com `BLOCK_CONFLICT`.
+
+**Consequência imediata e conhecida**: com o estado atual, o primeiro `soma install` **vai abortar** — porque `spec-completeness-gate.cjs` e `spec-test-traceability.cjs` estão divergidos. Isso é o AC-04 funcionando, não um bug. A reconciliação desses dois é ação manual do usuário, informada pelo abort. A alternativa — instalar parcialmente — esconderia o fato.
 
 ---
 
