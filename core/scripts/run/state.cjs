@@ -34,7 +34,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { validate } = require('./schema.cjs');
-const { resolveSomaPaths, isLegacyProject, resolveRunIdFromLock } = require('./paths.cjs');
+const { resolveSomaPaths, isLegacyProject } = require('./paths.cjs');
 
 // ── soma-state/v2 schema (owned by T-08, per run/schema.cjs's docstring) ──
 // Only the fields whose type is unambiguous (never legitimately null) are
@@ -118,16 +118,17 @@ function freshState(runId) {
 /**
  * Resolve `runId` from `--run`, falling back to `.soma.lock` when omitted
  * (plan.md:53 — "regra geral"). Returns null when neither resolves.
- *
- * The shape check this used to do inline (`typeof === 'string' && length >
- * 0`) is now shared via run/paths.cjs's resolveRunIdFromLock() (Spec 016 K3
- * fixup) — this file's own rule was the strictest of the three duplicates
- * that existed, and is the one the shared function adopted.
  */
 function resolveRunId(explicitRunId, projectRoot) {
   if (explicitRunId) return explicitRunId;
-  const result = resolveRunIdFromLock(projectRoot);
-  return result.status === 'ok' ? result.runId : null;
+  const lockPath = path.join(projectRoot, '.soma.lock');
+  try {
+    const lock = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+    if (lock && typeof lock.runId === 'string' && lock.runId.length > 0) return lock.runId;
+  } catch (_err) {
+    // unreadable/absent/corrupt lock → falls through to null, caller reports both paths
+  }
+  return null;
 }
 
 /** mkdir .soma/ + warn, so a legacy project (AC-08) never hard-fails `state --init`. */
@@ -246,115 +247,4 @@ function main() {
   process.exit(0);
 }
 
-// ── Library API (Spec 016 K1 fixup) ────────────────────────────────────────
-//
-// `soma run report` (run/report.cjs, T-06) is the verb responsible for
-// appending to state.reports[] — plan.md's `soma-cli-surface` block assigns
-// the write to `report`, not `state` — but the run-state file itself, its
-// atomic-write convention, and its schema are all owned here. This function
-// is the seam: report.cjs `require()`s it instead of duplicating any of
-// state.cjs's file-format knowledge.
-//
-// Contract: it must never throw. Every failure mode — run not initialized,
-// corrupt state file, malformed entry — comes back as
-// `{ ok: false, code, message }` so the caller (report.cjs) can name the
-// cause instead of the append failing silently (contracts/emit-step-
-// report.md's "Side Effects" note: "a falha da ligação nunca pode sair 0
-// silencioso").
-//
-// Append-only, same as T-03-04b already protects for decisions[]: this
-// only ever pushes; it never rewrites or drops an existing reports[] entry.
-//
-// Design call (not written down anywhere — see "Surprises" in the K1
-// report): `report` can legitimately run before anyone has called
-// `state --init` for the run. CONTRACT-STEP-REPORT-01 (T-02, contract-step-
-// report.test.cjs cases 1/2 — a file this fixup must not edit) fabricates
-// only `.soma.lock` and calls `report` directly, deliberately never calling
-// `state --init`, because at T-02 time `soma run state` (T-08) didn't exist
-// yet. Making the append REQUIRE a pre-existing state file would turn that
-// still-binding contract test red. So `appendReportEntry` ensures a state
-// file exists — bootstrapping a fresh one (same shape `cmdInit` produces)
-// when it's missing — rather than failing when the run was never
-// explicitly `--init`-ed. This mirrors `--init`'s own idempotency: calling
-// it explicitly later is still a safe no-op, per T-03-04b.
-/**
- * @param {string} projectRoot
- * @param {string} runId
- * @returns {{ok: true, state: object} | {ok: false, code: string, message: string}}
- */
-function ensureStateFile(projectRoot, runId) {
-  const { runStateFile } = resolveSomaPaths(projectRoot, runId);
-
-  if (fs.existsSync(runStateFile)) {
-    try {
-      return { ok: true, state: JSON.parse(fs.readFileSync(runStateFile, 'utf8')) };
-    } catch (err) {
-      return {
-        ok: false,
-        code: 'CORRUPT_STATE',
-        message: `${runStateFile} exists but is not valid JSON: ${err.message}`,
-      };
-    }
-  }
-
-  const state = freshState(runId);
-  const { valid, violations } = validate(STATE_SCHEMA_V2, state);
-  if (!valid) {
-    return {
-      ok: false,
-      code: 'INVALID_STATE',
-      message: `freshly-built state failed its own schema: ${JSON.stringify(violations)}`,
-    };
-  }
-  writeStateAtomic(runStateFile, state);
-  return { ok: true, state };
-}
-
-/**
- * @param {object} args
- * @param {string} args.projectRoot
- * @param {string} args.runId
- * @param {{step: string, status: string, path: string, finished_at: string}} args.entry
- * @returns {{ok: true, state: object} | {ok: false, code: string, message: string}}
- */
-function appendReportEntry({ projectRoot, runId, entry }) {
-  if (!runId) {
-    return { ok: false, code: 'MISSING_RUN_ID', message: 'appendReportEntry requires a runId' };
-  }
-  if (!entry || typeof entry.step !== 'string' || entry.step.length === 0) {
-    return {
-      ok: false,
-      code: 'INVALID_ENTRY',
-      message: 'appendReportEntry requires entry.step to be a non-empty string',
-    };
-  }
-
-  const ensured = ensureStateFile(projectRoot, runId);
-  if (!ensured.ok) return ensured;
-  const { state } = ensured;
-
-  if (!Array.isArray(state.reports)) {
-    return {
-      ok: false,
-      code: 'CORRUPT_STATE',
-      message: `run-state for "${runId}" has no reports[] array to append to (got: ${typeof state.reports})`,
-    };
-  }
-
-  const { runStateFile } = resolveSomaPaths(projectRoot, runId);
-
-  // Append-only: push, never replace/filter/rewrite an existing entry.
-  state.reports.push(entry);
-  writeStateAtomic(runStateFile, state);
-
-  return { ok: true, state };
-}
-
-// `require()`-ing this file (e.g. from run/report.cjs) must NOT run the CLI
-// as a side effect — only invoking it directly (`node run/state.cjs ...`,
-// which is how run.cjs's spawnSync delegates) fires main().
-if (require.main === module) {
-  main();
-}
-
-module.exports = { appendReportEntry };
+main();
