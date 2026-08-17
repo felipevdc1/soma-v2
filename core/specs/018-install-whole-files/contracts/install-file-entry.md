@@ -1,0 +1,76 @@
+# Contract: Artifact — Entry de arquivo no `install-targets`
+
+**Contract ID:** CONTRACT-FILE-ENTRY-01
+**Serve:** `[SPEC:AC-01]` `[SPEC:AC-02]` `[SPEC:AC-05]` `[SPEC:AC-12]`
+
+---
+
+## Artifact Path
+
+`core/adapters/{tool}/install-targets.json`, campo `entries[]`. O mesmo array que hoje carrega as 8 entries de bloco.
+
+---
+
+## Payload
+
+```json
+{
+  "kind": "file",
+  "source_path": "hooks/framework-guard.cjs",
+  "target_path": "~/.claude/hooks/framework-guard.cjs"
+}
+```
+
+**Field constraints:**
+
+| Campo | Tipo | Obrigatório | Restrições |
+|---|---|---|---|
+| `kind` | string | não | `"file"` ou `"block"`. **Ausente = `"block"`** — é o que preserva as 8 entries existentes intactas |
+| `source_path` | string | sim (se `kind: "file"`) | Relativo à raiz do repo SOMA. Não-vazio. Sem `..`. Tem que existir no repo |
+| `target_path` | string | sim | Absoluto ou iniciado por `~`. Sem `..`. Mesma convenção do `target_path` das entries de bloco |
+| `target_anchor_id` | — | **proibido** quando `kind: "file"` | Arquivo não tem âncora. Presença é erro de validação, não campo ignorado |
+| `source_doc` | — | **proibido** quando `kind: "file"` | É o campo equivalente do mundo de bloco. Usar `source_path` |
+| `block_id` | — | **proibido** quando `kind: "file"` | Deriva de âncora (`sync.cjs:666`), que não existe aqui |
+
+**Campos proibidos são erro, não ruído.** Uma entry de arquivo com `target_anchor_id` é quase certamente uma entry de bloco malformada, e tratá-la como arquivo sobrescreveria o alvo inteiro — o `CLAUDE.md` do usuário, no pior caso. É a razão do `kind` explícito (D-018-01).
+
+---
+
+## Coexistência com entries de bloco (AC-02)
+
+O mesmo `entries[]` carrega os dois tipos. Garantias:
+
+- As 8 entries existentes **não são editadas** por esta spec e continuam produzindo findings idênticos.
+- O gate de schema (`sync.cjs:1130`) continua exigindo `soma-install-targets/v1` — **a versão do schema não muda**, porque `kind` é aditivo e opcional.
+- Entries de arquivo aparecem no output com o **mesmo vocabulário de `action`** das de bloco. Um consumidor que só conta ações não precisa saber que arquivos existem.
+
+---
+
+## Invariante de propriedade (AC-05)
+
+**O instalador só toca o que uma entry declara.** Nunca varre diretório, nunca espelha, nunca remove.
+
+Medido em 2026-08-17: o repo tem 19 hooks e `~/.claude/hooks/` tem 36. Os 17 de diferença são hooks do usuário (`mempalace-wakeup`, `insight-action-coupling`, `vault-sync`, `reuse-gate`, `cognitive-gate`, entre outros). Qualquer implementação que derive o conjunto do **diretório** em vez das **entries** apaga os 17.
+
+---
+
+## Exclusão declarada (AC-12)
+
+`core/adapters/claude/commands/soma-run.md` **não tem entry** nesta spec, e a razão fica registrada junto ao conjunto: o usuário quer rodar um laboratório à mão com a versão de 296 linhas antes de ela substituir a de 474 que ele roda hoje — que tem **0** `Gate:`, **0** `Report:` e state ainda em `/tmp`.
+
+Ausência silenciosa seria indistinguível de esquecimento. A entry ausente é intencional e o teste do AC-12 prova a intenção.
+
+---
+
+## Contract Test Stub
+
+```javascript
+// CONTRACT-FILE-ENTRY-01
+// 1. entry sem `kind` é tratada como bloco — as 8 existentes não mudam de comportamento
+// 2. entry com kind:"file" e os 2 campos obrigatórios valida
+// 3. entry com kind:"file" + target_anchor_id é REJEITADA (não ignorada)
+// 4. entry com kind:"file" + source_path contendo ".." é REJEITADA antes de qualquer path ser construído
+// 5. entry com kind:"file" apontando source_path inexistente no repo é REJEITADA
+// 6. kind desconhecido (ex: "directory") é REJEITADO — não cai em default silencioso
+// 7. o conjunto declarado do adapter claude NÃO contém soma-run.md
+```
