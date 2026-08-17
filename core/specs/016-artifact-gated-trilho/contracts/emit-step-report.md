@@ -86,13 +86,13 @@
 
 - Grava o arquivo de report atomicamente (`write tmp → mv`) — **T-06, entregue em `b6d9d34`**
 - Faz append da entrada correspondente em `reports[]` do run-state (CONTRACT-RUN-STATE-02) — **PENDENTE, dono designado em 2026-08-16**
-- Faz append de evento no log JSONL do run — **PENDENTE E SEM CONTRATO, ver abaixo**
+- ~~Faz append de evento no log JSONL do run~~ — **OUT OF SCOPE desde 2026-08-17**, ver `spec.md` §Out of Scope
 
 > **Estado dos três side effects, fechado em 2026-08-16 durante a Wave 2.** A T-06 entregou o primeiro e **parou nos outros dois em vez de improvisar** — decisão certa, e foi ela que expôs o que segue.
 >
 > **(b) append em `reports[]`.** É responsabilidade do verbo `report`, não do `state`: o `plan.md:16` diz que o CLI "grava em `.soma/reports/{runId}/` **e atualiza `reports[]` no run-state**", e a linha 15 **deste** contrato depende disso — reentrada no mesmo step sobrescreve o arquivo, então sem o append o histórico de tentativas se perde **em silêncio**. O problema é que o `tasks.md` declara T-06 `depends_on: T-02`, não T-08, e as duas são `[P]` na mesma wave: o `report.cjs` precisa do `state.cjs` e nada no grafo diz isso. O `spec-lint` não pega — ele checa colisão de arquivo, não dependência semântica. **Resolução**: a T-08 expõe uma API de append chamável por `require`, respeitando o append-only e devolvendo resultado inspecionável em vez de lançar; uma task corretiva liga o `report.cjs` a ela **depois** que a T-08 mergear, mantendo `report.cjs` com um dono só. A falha da ligação **nunca** pode sair `0` silencioso.
 >
-> **(c) log JSONL do run.** Referenciado aqui e em `spec.md:158` ("toda transição bloqueada por AC-02 e todo REJECT por AC-10 são eventos append no log JSONL do run, com o motivo estruturado"), e **definido em lugar nenhum**: não há schema, não há caminho de arquivo, não há contrato. Nenhum AC exige o log — AC-02 e AC-10 são satisfeitos por exit code e conteúdo do report. Enquanto isto não for decidido, **é um side effect mandatado sem dono e sem forma**, que é a pior categoria: lê como requisito e não é executável. Não implementar por conta própria; fechar por decisão explícita (contrato próprio ou Out of Scope declarado).
+> **(c) log JSONL do run — RESOLVIDO em 2026-08-17: Out of Scope declarado.** Era referenciado aqui e em `spec.md` §Non-Functional/*Monitoring* e **definido em lugar nenhum** — sem schema, sem caminho, sem contrato. Nenhum dos 13 ACs o exige: AC-02 e AC-10 se satisfazem com exit code e conteúdo do report, que é onde o motivo estruturado já vive. **A evidência que fechou foi empírica**: o smoke da T-19 passou os 4 critérios do §F mais o caminho `SONAR_CLEAN` sem o log existir. A entrada completa, com o caminho de reversão, está em `spec.md` §Out of Scope. **A executora da T-06 acertou em parar nele** em vez de inventar um formato — se tivesse improvisado, teríamos hoje um log com schema inventado que alguém trataria como contrato.
 
 ---
 
