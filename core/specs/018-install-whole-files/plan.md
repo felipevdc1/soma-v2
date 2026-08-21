@@ -82,6 +82,51 @@ Alternativa rejeitada: comparar `mtime` ou tamanho. Rejeitada porque as duas dã
 
 ---
 
+**D-018-05 — o `manifest.cjs` é corrigido na fonte; `sync.cjs` NÃO duplica o carregamento.**
+*Decisão do Felipe em 2026-08-21, depois que a T-07 parou e reportou o bloqueio, e depois de eu reproduzir as quatro alegações dela.*
+
+**O que a Discovery original não viu**: o porteiro do `install-targets.json` não é nenhuma das três fontes que a spec analisou — é um **quarto** arquivo, `core/scripts/lib/manifest.cjs`. Isso torna falsa, como escrita, a frase do §Technical Approach *"nenhum dos três é reescrito"*: continua verdadeira para os três, e passa a ser insuficiente como descrição do escopo.
+
+**O defeito, medido e reproduzido**:
+- `validateInstallTargetsSchema` (`manifest.cjs:74`) exige `block_id`, `source_doc`, `target_path` e `target_anchor_id` de **toda** entry, sem consultar `kind` — precisamente os três campos que o `CONTRACT-FILE-ENTRY-01` declara **proibidos** numa entry `kind:"file"`.
+- `loadInstallTargets` (`manifest.cjs:~157`) aplica `expandHome()` no `target_path` de **todas** as entries, colidindo com a §"A chave do ledger é o `target_path` VERBATIM".
+- `sync.cjs:1171` engole o `INSTALL_TARGETS_INVALID` com um `continue` **pelado, sem log**: o efeito não é crash, é o adapter inteiro — blocos **e** arquivos — desaparecer do dry-run em silêncio. Zero findings onde o AC-02 exige findings idênticos.
+
+**A alternativa rejeitada** — `sync.cjs` ler e validar o JSON por conta própria — foi recusada por dois motivos: duplicaria validação que hoje só existe no `manifest.cjs`, que é a **doença das cópias divergentes** que a T-01 foi criada pra evitar (§"Por que um módulo e não lógica espalhada nos três consumidores"); e mudaria o caminho de carregamento do modo default para **todos** os adapters, arriscando regressão nas entries de bloco reais — exatamente o que o AC-02 proíbe.
+
+**A terceira alternativa** — estreitar o AC-02 tirando o `soma sync --dry-run` de escopo, já que o `soma install` não passa pelo caminho quebrado — foi considerada e rejeitada: faria o `sync` pular entries de arquivo **em silêncio**, que é a doença que esta spec inteira existe pra matar.
+
+### ⚠️ Exceção declarada ao "frozen libs invariant"
+
+Tocar `core/scripts/lib/` acende **2 testes**, medidos e nomeados:
+- `core/scripts/__tests__/frozen-libs-invariant-014.test.cjs:43`
+- `core/scripts/__tests__/manifest.test.cjs:345` (`AC-07 [T-02] frozen libs invariant`)
+
+Os dois rodam `git diff main -- core/scripts/lib/` e falham com diff não-vazio. **É tripwire, não proibição**: existe para que mudança em `lib/` seja visível e deliberada. Esta é deliberada e está escrita aqui.
+
+**Consequência na medição, e isto é normativo para toda task seguinte**: enquanto a branch `feature/018-install-whole-files` não for mergeada em `main`, o baseline de falhas é **7**, não 5 — as 5 pré-existentes **mais** esses 2, nominalmente identificáveis. Os 2 voltam ao verde no merge, sem ação. **Um executor que medir 7 e reportar "2 regressões" está lendo o tripwire como defeito.**
+
+**O que NÃO muda**: a versão do schema continua `soma-install-targets/v1`. O `kind` segue aditivo e opcional; o que estava errado era o validador, que nunca soube da existência de dois tipos de entry.
+
+---
+
+## Questão aberta, com dono — a raiz do `source_path` em tempo de execução
+
+Levantada em 2026-08-21 ao verificar o bloqueio da T-07. **Dono: T-08.** Não decidir aqui seria defer-and-forget; decidir aqui, sem o conjunto real na mão, seria decidir sem evidência.
+
+Os dois verbos leem o `install-targets.json` de **lugares diferentes**, e isso nunca foi dito:
+
+| Verbo | De onde lê as entries | Raiz implícita |
+|---|---|---|
+| `soma install --tool claude` | `SOURCE_CORE/adapters/<tool>/…` — o `core/` do **checkout em execução** (`install.cjs:519, 1009`), passado ao `sync` via `--targets-file` | a raiz do repo — **`hooks/` existe** |
+| `soma sync --tool claude` (default) | `loadInstallTargets(somaHome, …)` → `~/.soma-v2/adapters/<tool>/…` | `~/.soma-v2` — **`hooks/` NÃO existe** |
+
+Medido em 2026-08-21: `~/.soma-v2/` não tem diretório `hooks/`, e seu `manifest.json` cobre **15 arquivos**, todos sob `docs/` e `adapters/` — **zero** hooks. A cópia instalada do `install-targets.json` está, hoje, byte-idêntica à do repo.
+
+**Consequência que a T-08 tem de resolver**: entry de arquivo com `source_path: "hooks/…"` resolve no caminho do `install` e **não resolve** no caminho do `sync` default. A T-08 decide, com o conjunto real na mão, se a raiz é derivada da **localização do próprio arquivo de adapter** (robusto para os dois caminhos) ou se o `sync` default fica declaradamente fora para entries de arquivo — e, nesse caso, **falando alto**, nunca pulando em silêncio.
+
+---
+
 ## Phase -1 Gates
 
 - [x] **Simplicity Gate** — 1 módulo novo (`core/scripts/install/files.cjs`), 0 libs novas, 0 dependências. Abaixo do teto de 3.

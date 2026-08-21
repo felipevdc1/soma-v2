@@ -44,7 +44,8 @@ Article XII / Failure Mode #9. Tudo abaixo foi **rodado**, não estimado. Fonte 
 
 **NO-GOS** — o que esta feature explicitamente NÃO faz:
 
-- **Não reescreve `install.cjs`/`sync.cjs`/`doctor.cjs`.** Entries de bloco continuam funcionando byte a byte como hoje; as 8 existentes não mudam de comportamento.
+- **Não reescreve `install.cjs`/`sync.cjs`/`doctor.cjs`.** Entries de bloco continuam funcionando byte a byte como hoje; as entries existentes (3 no `claude`, 5 no `codex`) não mudam de comportamento.
+  ⚠️ **Emendado em 2026-08-21 (D-018-05)**: esta linha continua verdadeira para os três, mas era **insuficiente como descrição do escopo**. O porteiro do `install-targets.json` é um **quarto** arquivo que a Discovery não leu — `core/scripts/lib/manifest.cjs` — e ele valida entry de arquivo como se fosse bloco, derrubando o adapter inteiro em silêncio. Ele **é** corrigido por esta spec, na fonte, por decisão do Felipe. Ver `plan.md` §D-018-05.
 - **Não muda o modelo de bloco ancorado** nem o `BLOCK_CONFLICT`.
 - **Não instala o `soma-run.md`.** Decisão do usuário em 2026-08-17: ele quer rodar um laboratório à mão com a versão de 296 linhas antes de ela virar default. A que ele roda hoje tem 474 linhas, **0** `Gate:`, **0** `Report:` e state ainda em `/tmp` — trocar isso sem ele ver é mudança de fluxo de trabalho, não refresh de arquivo.
 - **Não espelha diretório e não apaga arquivo que o SOMA não declarou.** Os 17 hooks do usuário são intocáveis.
