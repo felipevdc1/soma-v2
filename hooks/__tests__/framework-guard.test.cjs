@@ -152,6 +152,40 @@ test('CONTRACT: staged só em paths não protegidos -> exit 0 e silêncio', asyn
   }
 });
 
+// ── T-08a / D-018-07: core/hooks/** protegido após o git mv — controle
+// nos DOIS sentidos, senão este teste passa igualmente bem com o guarda
+// cego (padrão do próprio CLAUDE.md: um verificador que só prova o lado
+// positivo não prova que a régua parou no lugar certo). Escrito ANTES do
+// `git mv hooks core/hooks` — precisa FALHAR agora (PROTECTED_PATTERNS
+// ainda é literal `hooks/**`, que não casa `core/hooks/**`) e passar
+// depois que PROTECTED_PATTERNS virar `core/hooks/**`.
+
+test("T-08a: staged em core/hooks/** -> BLOQUEADO (exit 2) apos o git mv", async () => {
+  const repo = initTmpRepo();
+  const sessionId = `fw-t08a-pos-${process.pid}-${Date.now()}`;
+  try {
+    stageFile(repo, "core/hooks/framework-guard.cjs");
+    const { code, stderr } = await runHook({ cwd: repo, sessionId });
+    assert.equal(code, 2, `esperava exit 2 (core/hooks/** protegido), veio ${code}. stderr: ${stderr}`);
+    assert.ok(stderr.includes("core/hooks/framework-guard.cjs"), `esperava o path ofensor na stderr, veio: ${stderr}`);
+  } finally {
+    cleanup(repo);
+  }
+});
+
+test("T-08a: staged em path nao-protegido -> LIBERADO (exit 0) — controle negativo do par acima", async () => {
+  const repo = initTmpRepo();
+  const sessionId = `fw-t08a-neg-${process.pid}-${Date.now()}`;
+  try {
+    stageFile(repo, "README.md");
+    const { code, stderr } = await runHook({ cwd: repo, sessionId });
+    assert.equal(code, 0, `esperava exit 0, veio ${code}. stderr: ${stderr}`);
+    assert.equal(stderr.trim(), "", `esperava stderr vazio (silencio), veio: ${stderr}`);
+  } finally {
+    cleanup(repo);
+  }
+});
+
 // ── AC-13: override por marker, nunca silencioso ───────────────────────
 
 test('CONTRACT: AC-13 — com marker -> exit 0 E stderr declara o override', async () => {
