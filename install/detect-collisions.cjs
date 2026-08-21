@@ -14,7 +14,11 @@
  *
  * CLI:
  *   node detect-collisions.cjs --target=DIR --soma-list=PATH (--soma-sums=PATH | --soma-dir=DIR)
- *   Prints collisions to stdout (one path per line), exits 0 on success.
+ *   Prints one colliding path per line to STDOUT; stdout is genuinely
+ *   EMPTY when there are none (the human-readable "No collisions
+ *   detected." message goes to stderr — T-08c pt.2 — precisely so a
+ *   caller capturing only stdout via `$(...)` sees an empty string on
+ *   the clean path, not a truthy one). Exits 0 on success.
  *   T-08c: --soma-sums and --soma-dir are NOT both optional — at least one
  *   sha reference is required, or the CLI exits 1 with a stderr message.
  *   Before this, an absent --soma-sums silently became {}, and every
@@ -170,7 +174,13 @@ if (require.main === module) {
     const collisions = detectCollisions(targetDir, basenames, shaSums);
 
     if (collisions.length === 0) {
-      console.log('No collisions detected.');
+      // T-08c pt.2: stderr, not stdout — stdout's contract is "one
+      // colliding path per line, empty when there are none." A caller
+      // (install.sh) that captures only stdout via $(...) must see a
+      // genuinely empty string on the clean path; printing this human
+      // message to stdout made that string non-empty, which install.sh's
+      // `[[ -n "${COLLISIONS}" ]]` read as "there IS a collision."
+      console.error('No collisions detected.');
     } else {
       for (const c of collisions) {
         console.log(c.path);

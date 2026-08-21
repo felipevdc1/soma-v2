@@ -112,6 +112,13 @@ fi
 
 # ── Phase 1.5: Hook collision detection ─────────────────────────────────────
 echo "[SOMA] Phase 1.5: Hook collision detection..."
+# T08C_COLLISION_DETECT_BEGIN — sentinel comments bracket this block so
+# core/scripts/__tests__/detect-collisions-fail-loud.test.cjs (T-08c pt.2)
+# can extract and execute these exact lines in an isolated sandbox,
+# proving the real behavior of this script without ever running the
+# whole install.sh or touching a real $HOME. Self-contained on purpose
+# (HOOKS_TARGET included) — no line outside these markers may be a
+# dependency of anything inside them.
 HOOKS_TARGET="${HOME}/.claude/hooks"
 if [[ -d "${HOOKS_TARGET}" ]]; then
   # --soma-dir gives detect-collisions.cjs a real sha reference (T-08c) —
@@ -119,13 +126,21 @@ if [[ -d "${HOOKS_TARGET}" ]]; then
   # ~/.claude/hooks/ was reported as a collision (measured: 18 false
   # positives vs 2 real ones), and FORCE_OVERWRITE=1 would rename 16
   # byte-identical files to .bak for nothing.
+  #
+  # No `2>/dev/null` and no `|| echo ""` here (T-08c pt.2) — those
+  # swallowed BOTH the detector's stderr and its exit code, so ANY
+  # detector failure (bad args, corrupt JSON, exception) silently became
+  # COLLISIONS="" and install.sh proceeded as if the hooks dir were
+  # clean. Under `set -euo pipefail` (top of this file), a real failure
+  # here now aborts install.sh, with the detector's own stderr visible.
   COLLISIONS=$(node "${REPO_ROOT}/install/detect-collisions.cjs" \
     --target="${HOOKS_TARGET}" \
     --soma-list="${REPO_ROOT}/install/soma-hooks-map.json" \
-    --soma-dir="${REPO_ROOT}/core/hooks" 2>/dev/null || echo "")
+    --soma-dir="${REPO_ROOT}/core/hooks")
 else
   COLLISIONS=""
 fi
+# T08C_COLLISION_DETECT_END
 
 if [[ -n "${COLLISIONS}" && "${FORCE_OVERWRITE}" != "1" && -t 0 ]]; then
   echo "[COLLISION] Custom-modified hooks found in ${HOOKS_TARGET}/:"
