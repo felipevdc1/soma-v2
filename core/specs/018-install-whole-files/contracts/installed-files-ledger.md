@@ -92,6 +92,27 @@ Portanto o stub #2 deste contrato — *"os dois lados da whitelist"* — é resp
 
 ---
 
+## 🔴 ONDE o ledger mora — resolvido em 2026-08-21, depois da T-07
+
+**Este é o mesmo defeito da chave verbatim, um nível acima: dois consumidores, duas réguas, e a falha aparece só no encontro.** A T-07 o nomeou antes de eu ver.
+
+Medido:
+
+| Quem escreve | Caminho que usa hoje | No caminho real do `soma install` isso é |
+|---|---|---|
+| `sync.cjs` (T-07) | `<somaHome>/.soma/install-state.json` | `<repo>/core/.soma/install-state.json` — porque `install.cjs:837` passa `--soma-home=${SOURCE_CORE}` |
+| `install.cjs` (T-05) | `<projectPathAbs>/.soma/install-state.json` | o diretório do projeto |
+
+**São dois arquivos diferentes.** Se ficar assim, o `install` grava num, o `sync` lê do outro, todo arquivo aparece como *"presente sem entrada no ledger"* → **divergido** → e a instalação aborta acusando arquivos perfeitos. Exit code de conflito, causa inexistente, e o usuário perseguindo um fantasma.
+
+**A regra, e ela é normativa para T-05 e T-09**: o ledger de arquivos vive em **`<projectPathAbs>/.soma/install-state.json`** — o mesmo arquivo, na mesma localização, que o `install.cjs` já usa para `blockIds` e os outros 7 campos de `ALLOWED_STATE_FIELDS`. Não existe segundo ledger.
+
+**Consequência para o `sync.cjs`**: ele não tem noção de "projeto" na CLI — só `--soma-home`. Portanto, quando o `sync` precisar do ledger, o `projectPathAbs` chega até ele por `process.cwd()`, que é o que o `install.cjs` já define ao invocá-lo (`runStep(..., { cwd: projectPathAbs })`, `install.cjs:841`). **T-05 e T-09 conferem essa igualdade explicitamente**: um teste que roda os dois verbos e prova que escreveram e leram **o mesmo arquivo**, não dois.
+
+⚠️ **Como este defeito falharia sem o teste**: silenciosamente e com sintoma trocado. Nenhum teste de unidade de qualquer um dos lados o pega — cada um está certo sozinho.
+
+---
+
 ## Abort total (AC-04)
 
 **Duas passadas, e a fronteira entre elas é o contrato.**
@@ -105,6 +126,16 @@ Portanto o stub #2 deste contrato — *"os dois lados da whitelist"* — é resp
 **Precedente que fixa esta semântica**: é o que o `sync --apply` já faz para bloco. O teste `AC-13: sync --apply aborts with BLOCK_CONFLICT` mostra que conflito aborta a aplicação inteira. Estado final sempre previsível: ou tudo mudou, ou nada.
 
 **Exit code sinaliza abort, nunca sucesso.** E abort **não é** o status `partial-failed` que já existe em `VALID_STATUSES` — nada foi aplicado parcialmente; a instalação recusou-se a começar.
+
+---
+
+## Vocabulário e código de erro — fixados em 2026-08-21, depois da T-07
+
+Inventados pela T-07 por analogia, porque nenhum documento os definia. Ficam aqui para que T-05, T-06 e T-09 usem os mesmos e não criem sinônimos.
+
+- **`action` de arquivo divergido é `'drift'`.** `insert` / `replace` / `skip` mapeiam 1:1 do mundo de bloco; `'diverged'` não é valor do vocabulário existente, e `'drift'` é o rótulo que bloco já usa para "edição manual detectada". O `CONTRACT-FILE-ENTRY-01` pede *"mesmo vocabulário de `action`"* — esta é a leitura que o cumpre sem inventar termo novo.
+- **`FILE_CONFLICT`**, paralelo ao `BLOCK_CONFLICT`, com **exit 2**. Shape: `{ code: 'FILE_CONFLICT', message, details: { diverged: [<target_path verbatim>] } }`. O `diverged` nomeia **todos**, nunca só o primeiro — §"Abort total" abaixo.
+- **`FILE_CONFLICT` não é `partial-failed`.** Nada foi aplicado parcialmente; a instalação recusou-se a começar. Mesma distinção que o §"Abort total" já faz.
 
 ---
 

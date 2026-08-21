@@ -152,7 +152,15 @@ Os dois verbos leem o `install-targets.json` de **lugares diferentes**, e isso n
 
 Medido em 2026-08-21: `~/.soma-v2/` não tem diretório `hooks/`, e seu `manifest.json` cobre **15 arquivos**, todos sob `docs/` e `adapters/` — **zero** hooks. A cópia instalada do `install-targets.json` está, hoje, byte-idêntica à do repo.
 
-**Consequência que a T-08 tem de resolver**: entry de arquivo com `source_path: "hooks/…"` resolve no caminho do `install` e **não resolve** no caminho do `sync` default. A T-08 decide, com o conjunto real na mão, se a raiz é derivada da **localização do próprio arquivo de adapter** (robusto para os dois caminhos) ou se o `sync` default fica declaradamente fora para entries de arquivo — e, nesse caso, **falando alto**, nunca pulando em silêncio.
+🔴 **Medido em 2026-08-21, depois da T-07 — o problema é mais estreito e mais concreto do que a tabela acima sugere.** O caminho real do `soma install` **não** usa `~/.soma-v2`: o `install.cjs:837` invoca o sync com `--soma-home=${SOURCE_CORE}`, e `SOURCE_CORE` é o **`core/` do checkout em execução** (`install.cjs:519`). Só o adapter de **projeto** (`install.cjs:942`) usa `--targets-file`.
+
+Portanto a pergunta real é: `source_path` é relativo a **`<repo>/core`** (o `somaHome` efetivo) ou à **raiz do repo**?
+
+Medido: um `source_path: "hooks/framework-guard.cjs"` resolvido contra o `somaHome` efetivo aponta para `<repo>/core/hooks/framework-guard.cjs`, e **`core/hooks/` não existe** — os 19 hooks moram em `<repo>/hooks/`, um nível acima. O contrato diz *"relativo à raiz do repositório SOMA"*, que é `<repo>`, não `<repo>/core`.
+
+**As três saídas, para a T-08 escolher com o conjunto real na mão**: (a) resolver subindo um nível a partir do `somaHome` — funciona, mas codifica a suposição "somaHome é sempre `<raiz>/core`"; (b) derivar a raiz da **localização do próprio arquivo de adapter** (`<X>/adapters/<tool>/install-targets.json` → raiz = `<X>/..`), que é robusto sem suposição de nome; (c) declarar `source_path` relativo ao `somaHome` e mover/duplicar os hooks para dentro de `core/`, que é mudança de layout do repo e tem custo próprio.
+
+**Consequência que a T-08 tem de resolver**: entry de arquivo com `source_path: "hooks/…"` **não resolve hoje em nenhum dos dois caminhos** sem uma dessas três decisões. A T-08 decide, com o conjunto real na mão, se a raiz é derivada da **localização do próprio arquivo de adapter** (robusto para os dois caminhos) ou se o `sync` default fica declaradamente fora para entries de arquivo — e, nesse caso, **falando alto**, nunca pulando em silêncio.
 
 ---
 
