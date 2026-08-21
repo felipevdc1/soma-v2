@@ -41,9 +41,11 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
+const { spawnSync } = require('node:child_process');
 
 const REPO_ROOT = path.resolve(__dirname, '../../..');
 const files = require(path.join(REPO_ROOT, 'core', 'scripts', 'install', 'files.cjs'));
+const INSTALL_CJS = path.join(REPO_ROOT, 'core', 'scripts', 'install.cjs');
 
 function mkTmp(prefix) {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -122,7 +124,7 @@ test('CONTRACT-FILES-LEDGER-02 caso 1: o ledger registra o sha256 do conteudo QU
   });
 });
 
-// ── Case 2 ─── PENDING T-05 ─────────────────────────────────────────────
+// ── Case 2 ─── RESOLVED BY T-05 ─────────────────────────────────────────
 // "os dois lados da whitelist: installedFiles é aceito pela whitelist;
 // campo desconhecido continua REJEITADO (dois lados)".
 //
@@ -142,16 +144,42 @@ test('CONTRACT-FILES-LEDGER-02 caso 1: o ledger registra o sha256 do conteudo QU
 // contract explicitly assigns to T-05. This is a finding, not an
 // obstacle to work around.
 //
-// Un-skips once T-05 extends `ALLOWED_STATE_FIELDS` with `installedFiles`
-// in `install.cjs` — point this case at `install.cjs`'s
-// `validateInstallState`, not at `files.cjs`.
-test(
-  'CONTRACT-FILES-LEDGER-02 caso 2: installedFiles aceito pela whitelist E campo desconhecido continua rejeitado (os dois lados)',
-  { skip: 'pending T-05 — ALLOWED_STATE_FIELDS/validateInstallState live in install.cjs, which files.cjs does not own or call (contract §"writeLedger não valida a whitelist")' },
-  () => {
-    assert.fail('unreachable while skipped — see skip reason above');
-  }
-);
+// Un-skipped by T-05: `install.cjs` now exports `validateInstallState`
+// (Spec 018, T-05) so this contract test can exercise the real validator —
+// `ALLOWED_STATE_FIELDS` (`install.cjs:74`) extended with `installedFiles`,
+// `validateInstallState` (`install.cjs:344`+) still rejects anything else.
+test('CONTRACT-FILES-LEDGER-02 caso 2: installedFiles aceito pela whitelist E campo desconhecido continua rejeitado (os dois lados)', () => {
+  const install = require(INSTALL_CJS);
+  const base = {
+    $schema: 'soma-install-state/v1',
+    status: 'complete',
+    timestamp: '2026-08-21T00:00:00Z',
+    snapshotId: '2026-08-21T00:00:00Z',
+    harness: 'claude',
+    installedVersion: '2.2.0',
+    blockIds: ['block.x'],
+  };
+
+  // Side A: installedFiles IS accepted by the extended whitelist.
+  assert.doesNotThrow(
+    () => install.validateInstallState({
+      ...base,
+      installedFiles: {
+        '~/.claude/hooks/framework-guard.cjs': files.buildLedgerEntry('a'.repeat(64), '2026-08-21T00:00:00Z'),
+      },
+    }),
+    'installedFiles must be accepted once ALLOWED_STATE_FIELDS is extended (AC-07)'
+  );
+
+  // Side B: an unrelated unknown field must still be rejected — extending
+  // the whitelist for installedFiles must not loosen additionalProperties:false
+  // for anything else.
+  assert.throws(
+    () => install.validateInstallState({ ...base, totallyUnknownField: 'nope' }),
+    /unknown field/,
+    'a field outside the whitelist must still be rejected (dois lados da whitelist)'
+  );
+});
 
 // ── Case 3 ───────────────────────────────────────────────────────────────
 // arquivo ausente em disco -> limpo -> escrito.
@@ -327,21 +355,47 @@ test('CONTRACT-FILES-LEDGER-02 caso 8a: planFileInstall (aborted ou nao) nunca c
   });
 });
 
-// PENDING T-05: the literal `status: 'partial-failed'` string is an enum
-// value owned by `install.cjs`'s `VALID_STATUSES` (`:62`) — `files.cjs`
-// has no `status` concept at all (planFileInstall's return shape is
-// `{ok, diverged, plan}`, no `status` field). Case 8a above proves the
-// structural invariant that makes a partial-status impossible to produce
-// from this module (zero fs mutation, aborted or not); the enum-level
-// guarantee that the status install.cjs actually writes on abort is never
-// `'partial-failed'` needs `install.cjs` as the target, which is T-05's.
-test(
-  'CONTRACT-FILES-LEDGER-02 caso 8b: o status gravado apos abort nunca e "partial-failed"',
-  { skip: 'pending T-05 — VALID_STATUSES/status writing live in install.cjs; files.cjs has no status field at all (see comment above)' },
-  () => {
-    assert.fail('unreachable while skipped — see skip reason above');
-  }
-);
+// Un-skipped by T-05. No kind:"file" adapter entries exist in the real repo
+// yet (T-08, still TODO per tasks.md) — SOURCE_CORE is hardcoded in
+// install.cjs, so a real `node install.cjs` invocation cannot be pointed at
+// a fixture adapter to trigger a live FILE_CONFLICT. Proven instead via the
+// BLOCK_CONFLICT (BF-06) path, which is real today and exercises the exact
+// same status-mapping code in install.cjs's orchestrate() Step 3: any
+// sync.cjs exit code 2 maps to status='drift-detected', never
+// 'partial-failed' — the mapping is exit-code-driven and does not branch on
+// *why* sync.cjs exited 2. The contract's own text names this precedent:
+// "é o que o sync --apply já faz para bloco" (§"Abort total (AC-04)").
+// FILE_CONFLICT (sync.cjs also exits 2 on it) therefore inherits the same
+// guarantee by construction. This is inference by construction, not a
+// direct FILE_CONFLICT exercise — see final report "Lacunas do documento".
+test('CONTRACT-FILES-LEDGER-02 caso 8b: o status gravado apos abort nunca e "partial-failed"', () => {
+  withTmp('contract-ledger-8b-', (d) => {
+    // First install: clean, must succeed (status=complete).
+    const first = spawnSync('node', [INSTALL_CJS, d, '--tool=claude'], { cwd: d, encoding: 'utf8', timeout: 60000 });
+    assert.equal(first.status, 0, `first install must succeed. stderr: ${first.stderr}`);
+
+    // Mutate inside the anchored block to force a sha256 mismatch (BF-06) —
+    // same abort family as FILE_CONFLICT: sync.cjs exits 2, install.cjs
+    // Step 3 maps any exit-2 sync failure to a non-partial-failed status.
+    const claudeMdPath = path.join(d, 'CLAUDE.md');
+    const original = fs.readFileSync(claudeMdPath, 'utf8');
+    const mutated = original.replace(
+      /(<!-- soma-v2:start[^\n]*\n)/,
+      '$1\n# CASE_8B_DRIFT_MARKER\n'
+    );
+    assert.notEqual(mutated, original, 'mutation must actually change CLAUDE.md content');
+    fs.writeFileSync(claudeMdPath, mutated);
+
+    const second = spawnSync('node', [INSTALL_CJS, d, '--tool=claude'], { cwd: d, encoding: 'utf8', timeout: 60000 });
+    assert.equal(second.status, 2, `abort must exit 2. stdout: ${second.stdout}\nstderr: ${second.stderr}`);
+
+    const stateFile = path.join(d, '.soma', 'install-state.json');
+    assert.ok(fs.existsSync(stateFile), 'install-state.json must exist after abort');
+    const state = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
+    assert.notEqual(state.status, 'partial-failed', 'abort must never produce status=partial-failed — nothing was applied partially');
+    assert.equal(state.status, 'drift-detected', `expected drift-detected, got "${state.status}"`);
+  });
+});
 
 // ── Case 9 ───────────────────────────────────────────────────────────────
 // rodar install 2x sem mudança no repo -> zero escrita na segunda
