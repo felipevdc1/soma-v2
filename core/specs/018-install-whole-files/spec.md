@@ -3,7 +3,7 @@
 **Feature ID:** 018-install-whole-files
 **Branch:** `feature/018-install-whole-files`
 **Created:** 2026-08-17
-**Status:** DRAFT
+**Status:** APPROVED — Gate #1 do Felipe em 2026-08-17, reafirmado em 2026-08-21 ("bora executar a spec 018"). Provenance: registrado em `~/.claude/plans/handoff-forge.md`; nenhum gate no código lê este campo (verificado: `grep -rn APPROVED core/scripts hooks` sem match), então ele é declaração para leitor humano.
 
 ---
 
