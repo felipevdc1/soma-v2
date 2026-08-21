@@ -707,15 +707,28 @@ function buildSummary(findings, totalEntries) {
 //      code, not to prove it stays identical after interleaving them.
 //
 // "Project root" for the file ledger (`{projeto}/.soma/install-state.json`,
-// CONTRACT-FILES-LEDGER-02): sync.cjs has no --project flag/concept the way
-// install.cjs does (install.cjs's ledger lives under the project cwd the
-// user ran `soma install` from). For sync.cjs's own standalone `--apply`
-// invocation, somaHome is already this file's local-state root — .snapshots
-// lives at `path.join(somaHome, '.snapshots')` a few lines below — so the
-// file ledger follows that existing precedent: `path.join(somaHome, '.soma',
-// 'install-state.json')` via files.cjs's own ledgerFilePath(). This is a
-// judgment call the contract does not pin down; see final report "Lacunas
-// do documento".
+// CONTRACT-FILES-LEDGER-02) is `process.cwd()`, NOT `somaHome`.
+//
+// FIXED 2026-08-21 — T-07 reopened. The first version of this comment
+// argued for `somaHome` "by analogy with .snapshots" and flagged it as an
+// open judgment call in the final report. That call was wrong, and
+// leaving the rationale here uncorrected would have been the exact
+// failure the fix corrects: a stale justification outliving the code it
+// justified. install.cjs ALWAYS invokes sync.cjs with `cwd:
+// projectPathAbs` and `--soma-home=SOURCE_CORE` (the repo dir) — two
+// DIFFERENT directories in every real invocation (verified by T-05,
+// install.cjs:841). Using `somaHome` here silently split the ledger:
+// install.cjs's writeInstallState and sync.cjs's runFileApplyMode were
+// writing to two different install-state.json files instead of one,
+// caught only because T-05 hit the exact two lines with a live fixture
+// (install-files-ledger.test.cjs, skipped case "T-05-06").
+//
+// `somaHome` keeps meaning exactly what it always meant elsewhere in this
+// file: where adapters/ and source_doc/source_path resolve from. Only the
+// ledger's root changed — `process.cwd()` is what `install.cjs` already
+// uses as `projectPathAbs`, and it's what every OTHER project-scoped path
+// in this file already resolves relative to (see the `--targets-file`
+// branch above: lines 1302, 1309, 1357, 1366, all "the project dir").
 
 /**
  * planFileInstall() wrapper that folds in the symlink guard. files.cjs is
@@ -831,7 +844,9 @@ function writeFileEntry(item) {
 function runFileApplyMode(entries, somaHome, useJson) {
   if (entries.length === 0) return { aborted: false, written: 0 };
 
-  const projectRootAbs = somaHome;
+  // Ledger root is process.cwd() (the project), never somaHome — see the
+  // "File entries" section comment above for why this changed.
+  const projectRootAbs = process.cwd();
   const { installedFiles: ledger } = filesModule.readLedger(projectRootAbs);
   const { ok, diverged, plan } = planFileInstallSafe(entries, somaHome, ledger);
 
@@ -1452,7 +1467,9 @@ function main() {
   // AC-10) and costs one extra fs.existsSync when there is nothing to do.
   const fileFindings = fileEntries.length > 0
     ? (() => {
-        const { installedFiles: ledger } = filesModule.readLedger(somaHome);
+        // Ledger root is process.cwd(), matching runFileApplyMode() and
+        // install.cjs — see the "File entries" section comment above.
+        const { installedFiles: ledger } = filesModule.readLedger(process.cwd());
         return computeFileFindings(fileEntries, somaHome, ledger).map((f) => ({
           ...f,
           adapter: adapters[0] || 'unknown',
