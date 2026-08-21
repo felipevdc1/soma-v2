@@ -114,9 +114,15 @@ fi
 echo "[SOMA] Phase 1.5: Hook collision detection..."
 HOOKS_TARGET="${HOME}/.claude/hooks"
 if [[ -d "${HOOKS_TARGET}" ]]; then
+  # --soma-dir gives detect-collisions.cjs a real sha reference (T-08c) —
+  # without it, EVERY SOMA-listed hook already present in the user's real
+  # ~/.claude/hooks/ was reported as a collision (measured: 18 false
+  # positives vs 2 real ones), and FORCE_OVERWRITE=1 would rename 16
+  # byte-identical files to .bak for nothing.
   COLLISIONS=$(node "${REPO_ROOT}/install/detect-collisions.cjs" \
     --target="${HOOKS_TARGET}" \
-    --soma-list="${REPO_ROOT}/install/soma-hooks-map.json" 2>/dev/null || echo "")
+    --soma-list="${REPO_ROOT}/install/soma-hooks-map.json" \
+    --soma-dir="${REPO_ROOT}/core/hooks" 2>/dev/null || echo "")
 else
   COLLISIONS=""
 fi
