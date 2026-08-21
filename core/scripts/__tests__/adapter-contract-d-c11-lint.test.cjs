@@ -12,6 +12,8 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
+const { isFileEntry } = require('../install/files.cjs');
+
 const REPO_ROOT = path.resolve(__dirname, '../../..');
 
 /**
@@ -27,9 +29,13 @@ test('D-C11 lint: claude triplet in adapter-contract.md matches install-targets.
   const contract = fs.readFileSync(path.join(REPO_ROOT, 'core/docs/adapter-contract.md'), 'utf8');
   const targets = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'core/adapters/claude/install-targets.json'), 'utf8'));
 
-  // Extract unique anchor section suffixes declared in install-targets.json
+  // Extract unique anchor section suffixes declared in install-targets.json.
+  // Filter to block entries first (Spec 018 added kind:"file" entries to
+  // this same array — those have no block_id and must not reach .map()).
+  const blockEntries = targets.entries.filter((e) => !isFileEntry(e));
+  assert.ok(blockEntries.length > 0, 'precondição: precisa haver ao menos 1 entry de bloco pra este teste fazer sentido');
   const declaredAnchors = [...new Set(
-    targets.entries.map(e => e.block_id.replace(/^block\.claude\.CLAUDE_md\./, ''))
+    blockEntries.map(e => e.block_id.replace(/^block\.claude\.CLAUDE_md\./, ''))
   )];
 
   const dc11Line = getDC11Line(contract);
@@ -48,9 +54,14 @@ test('D-C11 lint: codex triplet in adapter-contract.md matches install-targets.j
   const contract = fs.readFileSync(path.join(REPO_ROOT, 'core/docs/adapter-contract.md'), 'utf8');
   const targets = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'core/adapters/codex/install-targets.json'), 'utf8'));
 
-  // Extract unique anchor section suffixes declared in install-targets.json
+  // Extract unique anchor section suffixes declared in install-targets.json.
+  // Filter to block entries first — same reasoning as the claude test above;
+  // codex has no kind:"file" entries today, but this must not silently rely
+  // on that staying true.
+  const blockEntries = targets.entries.filter((e) => !isFileEntry(e));
+  assert.ok(blockEntries.length > 0, 'precondição: precisa haver ao menos 1 entry de bloco pra este teste fazer sentido');
   const declaredAnchors = [...new Set(
-    targets.entries.map(e => e.block_id.replace(/^block\.codex\.AGENTS\./, ''))
+    blockEntries.map(e => e.block_id.replace(/^block\.codex\.AGENTS\./, ''))
   )];
 
   const dc11Line = getDC11Line(contract);

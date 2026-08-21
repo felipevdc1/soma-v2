@@ -65,8 +65,14 @@ function readAdapterEntries(tool) {
 // `validateFileEntry` regresses.
 
 test('CONTRACT-FILE-ENTRY-01 caso 1: as 8 entries reais de bloco (claude+codex) passam por validateFileEntry sem kind e voltam intactas', () => {
-  const claudeEntries = readAdapterEntries('claude');
-  const codexEntries = readAdapterEntries('codex');
+  // Filter to BLOCK entries only — Spec 018's own T-08 added 31 kind:"file"
+  // entries to the claude adapter's same array (19 hooks + 12 commands).
+  // The "8" this case asserts was always about the block world (that is
+  // the whole premise of the case's name and of the comment above it) —
+  // readAdapterEntries() itself stays kind-agnostic (case 7 below needs the
+  // full set, file entries included) so the filtering lives here.
+  const claudeEntries = readAdapterEntries('claude').filter((e) => !files.isFileEntry(e));
+  const codexEntries = readAdapterEntries('codex').filter((e) => !files.isFileEntry(e));
   const allEntries = [...claudeEntries, ...codexEntries];
   assert.equal(allEntries.length, 8, 'contract text names 8 real block entries today (3 claude + 5 codex)');
 
