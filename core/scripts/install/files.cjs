@@ -250,10 +250,17 @@ function classifyFileState(targetPathAbs, ledgerEntry) {
  *
  * Each plan entry also carries `needsWrite`, the idempotency decision
  * (CONTRACT-FILES-LEDGER-02 stub case 9: a second run with no repo changes
- * must produce zero writes): true only when the entry is clean AND its
- * current source content differs from what the ledger says was last
- * installed. A clean entry whose source is unchanged needs no write even
- * though AC-03 permits overwriting it — "permits" is not "requires".
+ * must produce zero writes). True only when the entry is clean AND either:
+ *   - the target is missing from disk (always needs its first/renewed
+ *     write, no matter what the ledger says — recovery after deletion,
+ *     otherwise a deleted-but-recorded file silently never comes back), or
+ *   - the target is present but its content no longer matches what the
+ *     ledger recorded as last installed (source changed since then).
+ * A clean, present, matching entry needs no write even though AC-03
+ * permits overwriting it — "permits" is not "requires". `state` itself
+ * (clean/diverged) stays exactly the contract's 2-value table — it does
+ * NOT distinguish "never written" from "present and matching"; needsWrite
+ * is the layer that does, by also consulting disk existence.
  *
  * @param {object[]} entries       raw install-targets entries (block entries are skipped)
  * @param {{ repoRoot: string, ledger?: object }} opts
@@ -290,11 +297,24 @@ function planFileInstall(entries, opts = {}) {
     // Ledger is keyed by target_path verbatim (contract: "chave = O
     // target_path da entry, verbatim" — the operation is lookup by path).
     const ledgerEntry = ledger[entry.target_path];
+    // Read disk existence once, before classifyFileState does its own
+    // (separate) existsSync check — needed below to distinguish "clean
+    // because never written" from "clean because present and matching",
+    // which classifyFileState deliberately does NOT distinguish (that is
+    // the contract's decision table, and it stays a 2-value table).
+    const targetExists = fs.existsSync(targetPathAbs);
     const state = classifyFileState(targetPathAbs, ledgerEntry);
 
     if (state === 'diverged') diverged.push(entry.target_path);
 
-    const needsWrite = state === 'clean' && (!ledgerEntry || ledgerEntry.sha256 !== sourceSha256);
+    // needsWrite is the idempotency decision, one level below `state`: a
+    // target missing from disk always needs (re)writing regardless of what
+    // the ledger says (recovery after deletion — bug found in review: the
+    // old version compared only ledger-vs-source and silently treated a
+    // deleted-but-recorded file as "nothing to do"). A present-and-clean
+    // target only needs rewriting when its source has changed since the
+    // ledger was last updated.
+    const needsWrite = state === 'clean' && (!targetExists || !ledgerEntry || ledgerEntry.sha256 !== sourceSha256);
 
     plan.push({
       source_path: entry.source_path,
