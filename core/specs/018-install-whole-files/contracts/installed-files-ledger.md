@@ -139,6 +139,25 @@ Inventados pela T-07 por analogia, porque nenhum documento os definia. Ficam aqu
 
 ---
 
+## Três decisões do `doctor` fixadas em 2026-08-21, depois da T-06
+
+Nenhuma estava no contrato; as três foram decididas pela executora, reportadas em vez de enterradas no código, e ficam aqui para que T-08 e T-09 não as re-decidam.
+
+**1. O `doctor` compara disco × REPO. O instalador compara disco × LEDGER.** São perguntas diferentes:
+
+| Quem | Compara | Responde |
+|---|---|---|
+| `doctor` (AC-08) | arquivo instalado × **fonte no repo** | *"a fonte mudou e a instalação ficou para trás?"* |
+| `classifyFileState` / `planFileInstall` | arquivo instalado × **sha do ledger** | *"é seguro sobrescrever, ou o usuário editou?"* |
+
+O `doctor` **ignora** o `sha256` do ledger de propósito. É o que corresponde à narrativa causal do bug que originou a spec — 6 hooks defasados em relação ao repo por 3 meses — e à letra do AC-08 (*"comparar cada arquivo declarado contra a fonte do repo"*).
+
+**2. Zero entries `kind:"file"` declaradas + `install-state` ausente → nenhum finding, e não o aviso do AC-10.** Sem essa guarda, **toda** chamada existente do `doctor` ganharia ruído grátis — medido em 2026-08-21: nem o repo nem o `~/.soma-v2` declaram uma única entry de arquivo hoje. O aviso do AC-10 existe para dizer *"há N arquivos declarados que nunca foram instalados"*; com N=0 não há o que avisar, e avisar seria o oposto do AC-09.
+
+**3. Declarado e instalado, mas ausente do disco** (o usuário apagou) → `severity: 'missing'`, em paralelo ao mundo de bloco. O contrato só cobria os 3 estados da tabela abaixo; este é o quarto.
+
+---
+
 ## O que o `doctor` lê (AC-08, AC-09, AC-10)
 
 O `doctor.cjs` tem `detectTargetDrifts(somaHome, adapters)` para blocos e **não confere arquivo nenhum** — toca `~/.claude/hooks/` num único ponto (`:441`, procurando `auto-load-modules.cjs` para o check de context-routing). Foi cego para 6 hooks defasados por 3 meses.

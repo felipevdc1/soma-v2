@@ -139,6 +139,27 @@ Os dois rodam `git diff main -- core/scripts/lib/` e falham com diff não-vazio.
 
 ---
 
+## 🔴 BLOQUEADOR DA T-08, achado pela T-06 — o `doctor` ainda usa o loader antigo em dois pontos
+
+Registrado em 2026-08-21, **antes** de o código mudar. A T-06 achou ao instrumentar o `doctor` e classificou corretamente como fora do escopo dela.
+
+A D-018-06 fez o `sync.cjs` migrar para `loadInstallTargetsWithKinds`. O **`doctor.cjs` não migrou junto** — só o caminho novo dela (`:338`) usa o loader novo. Dois pontos seguem no antigo:
+
+| Ponto | Função | O que acontece quando existir a 1ª entry `kind:"file"` |
+|---|---|---|
+| `doctor.cjs:128` | `detectTargetDrifts` | `INSTALL_TARGETS_INVALID` → **o adapter inteiro é pulado**. Drift de **bloco** deixa de ser detectado para o `claude`, trocado por um finding de erro |
+| `doctor.cjs:812` | `computeInstallTargetsSummary` | mesmo erro → o adapter é marcado **`valid: false`** |
+
+**Por que é bloqueador e não observação**: a T-08 declara os 19 hooks e os comandos como entries `kind:"file"` no `core/adapters/claude/install-targets.json`. No instante em que isso entra, o `doctor` **para de vigiar drift de bloco no adapter `claude`** — e a mensagem `OK: No drift detected.` é substituída por um erro que mascara o resto. É a doença desta spec de novo, agora produzida por ela mesma: **um check que deixa de rodar, sem que ninguém peça.**
+
+Hoje é inofensivo porque **zero** entries `kind:"file"` existem em produção — medido: nem o repo nem o `~/.soma-v2` declaram nenhuma. É exatamente por isso que ninguém pisou nisso antes.
+
+**Correção mandatada, e ela é a mesma composição da D-018-06**: os dois pontos passam a `loadInstallTargetsWithKinds` e processam **apenas as entries de bloco**. O mundo de bloco não pode mudar de comportamento — vale aqui o mesmo padrão de prova do AC-02: capturar a saída do `doctor` antes, rodar depois, e o `diff` das partes de bloco tem de ser **vazio**.
+
+⚠️ **Ordem obrigatória**: isto entra **antes** da T-08. Declarar o conjunto real com o `doctor` cego seria entregar a spec com o vigia desligado justamente para o adapter que ela instrumenta.
+
+---
+
 ## Questão aberta, com dono — a raiz do `source_path` em tempo de execução
 
 Levantada em 2026-08-21 ao verificar o bloqueio da T-07. **Dono: T-08.** Não decidir aqui seria defer-and-forget; decidir aqui, sem o conjunto real na mão, seria decidir sem evidência.
