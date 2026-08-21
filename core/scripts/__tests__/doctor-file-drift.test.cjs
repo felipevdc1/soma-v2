@@ -301,6 +301,22 @@ test('T-06-09 (CLI wiring) @spec AC-08: main() surfaces the named drift finding 
   assert.equal(r.status, 1);
 });
 
+test('T-06-11 (CLI wiring, human output) @spec AC-08: diverged file is named in human-readable output, never "← undefined"', () => {
+  // Regression guard for a cosmetic bug found while pasting real `soma
+  // doctor` output for this task's report: the pre-existing human-output
+  // loop assumed every f.target_path finding was block-world shaped and
+  // printed `${target} ← ${f.target_anchor_id}` — file_drift findings have
+  // no target_anchor_id, so it printed a literal "← undefined".
+  const { somaHome, projectDir, targetPathAbs } = buildFixture('module.exports = { v: 8 };\n');
+  files.writeLedger(projectDir, {});
+  fs.writeFileSync(targetPathAbs, 'module.exports = { v: 8, tampered: true };\n', 'utf8');
+
+  const rText = spawnSync('node', [DOCTOR_CJS, `--soma-home=${somaHome}`, `--project=${projectDir}`],
+    { cwd: projectDir, encoding: 'utf8', timeout: 15000 });
+  assert.doesNotMatch(rText.stdout, /← undefined/, `human output must never print "← undefined". Got:\n${rText.stdout}`);
+  assert.ok(rText.stdout.includes(targetPathAbs), `human output must name the diverged path. Got:\n${rText.stdout}`);
+});
+
 test('T-06-10: detectFileDrifts is exported for direct/unit use', () => {
   assert.equal(typeof doctor.detectFileDrifts, 'function');
 });

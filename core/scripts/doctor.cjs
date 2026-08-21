@@ -966,7 +966,17 @@ function main() {
       for (const f of outputFindings) {
         if (f.severity === 'ok' && !flags.verbose) continue;
         const label = humanSeverityLabel(f.severity);
-        if (f.target_path) {
+        if (f.kind === 'file_drift') {
+          // T-06: file_drift findings have no target_anchor_id — the
+          // block-world `${shortTarget} ← ${f.target_anchor_id}` line below
+          // would print a literal "← undefined" for them. AC-08 requires
+          // naming the file, not naming an anchor that doesn't exist for
+          // this entry kind.
+          const shortTarget = f.target_path ? f.target_path.replace(os.homedir(), '~') : null;
+          process.stdout.write(shortTarget
+            ? `  ${label}   ${shortTarget} — ${f.message}\n`
+            : `  ${label}   ${f.message}\n`);
+        } else if (f.target_path) {
           const shortTarget = f.target_path.replace(os.homedir(), '~');
           process.stdout.write(`  ${label}   ${shortTarget} ← ${f.target_anchor_id}\n`);
         } else if (f.code === 'stale_hypothesis') {
