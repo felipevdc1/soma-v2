@@ -139,7 +139,11 @@ Os dois rodam `git diff main -- core/scripts/lib/` e falham com diff não-vazio.
 
 ---
 
-## 🔴 BLOQUEADOR DA T-08, achado pela T-06 — o `doctor` ainda usa o loader antigo em dois pontos
+## ✅ ~~BLOQUEADOR DA T-08~~ — **RESOLVIDO em `f179ba0` (2026-08-21).** Seção mantida como histórico; **não é mais instrução**
+
+> **Estado atual, medido em 2026-08-21 ao fechar a D-018-07** — `detectTargetDrifts` (`doctor.cjs:141`) e `computeInstallTargetsSummary` (`doctor.cjs:839`) **já chamam** `loadInstallTargetsWithKinds` (`doctor.cjs:147` e `:845`). Prova: `grep -n "loadInstallTargetsWithKinds" core/scripts/doctor.cjs` e `node --test core/scripts/__tests__/doctor-file-drift.test.cjs` → **13 pass / 0 fail**; o guarda do AC-02 é `doctor-mixed-kind-block-drift.test.cjs`, escrito no mesmo commit. **A "Ordem obrigatória" ao pé desta seção já foi cumprida** — reler isto como pendência mandaria refazer trabalho feito.
+>
+> Os números de linha citados no corpo abaixo (`doctor.cjs:128`, `:812`) eram **imprecisos já quando escritos**: as funções nomeadas ficam em `:141` e `:839`. O texto abaixo fica como estava, marcado, para não reescrever histórico.
 
 Registrado em 2026-08-21, **antes** de o código mudar. A T-06 achou ao instrumentar o `doctor` e classificou corretamente como fora do escopo dela.
 
@@ -160,7 +164,7 @@ Hoje é inofensivo porque **zero** entries `kind:"file"` existem em produção �
 
 ---
 
-## Questão aberta, com dono — a raiz do `source_path` em tempo de execução
+## ✅ D-018-07 — a raiz do `source_path` em tempo de execução (**FECHADA em 2026-08-21**, ratificada pelo Felipe)
 
 Levantada em 2026-08-21 ao verificar o bloqueio da T-07. **Dono: T-08.** Não decidir aqui seria defer-and-forget; decidir aqui, sem o conjunto real na mão, seria decidir sem evidência.
 
@@ -168,20 +172,59 @@ Os dois verbos leem o `install-targets.json` de **lugares diferentes**, e isso n
 
 | Verbo | De onde lê as entries | Raiz implícita |
 |---|---|---|
-| `soma install --tool claude` | `SOURCE_CORE/adapters/<tool>/…` — o `core/` do **checkout em execução** (`install.cjs:519, 1009`), passado ao `sync` via `--targets-file` | a raiz do repo — **`hooks/` existe** |
+| `soma install --tool claude` | `SOURCE_CORE/adapters/<tool>/…` — o `core/` do **checkout em execução** (`install.cjs:572`, e `--targets-file` em `:995`), passado ao `sync` | a raiz do repo — **`hooks/` existe** |
 | `soma sync --tool claude` (default) | `loadInstallTargets(somaHome, …)` → `~/.soma-v2/adapters/<tool>/…` | `~/.soma-v2` — **`hooks/` NÃO existe** |
 
 Medido em 2026-08-21: `~/.soma-v2/` não tem diretório `hooks/`, e seu `manifest.json` cobre **15 arquivos**, todos sob `docs/` e `adapters/` — **zero** hooks. A cópia instalada do `install-targets.json` está, hoje, byte-idêntica à do repo.
 
-🔴 **Medido em 2026-08-21, depois da T-07 — o problema é mais estreito e mais concreto do que a tabela acima sugere.** O caminho real do `soma install` **não** usa `~/.soma-v2`: o `install.cjs:837` invoca o sync com `--soma-home=${SOURCE_CORE}`, e `SOURCE_CORE` é o **`core/` do checkout em execução** (`install.cjs:519`). Só o adapter de **projeto** (`install.cjs:942`) usa `--targets-file`.
+🔴 **Medido em 2026-08-21, depois da T-07 — o problema é mais estreito e mais concreto do que a tabela acima sugere.** O caminho real do `soma install` **não** usa `~/.soma-v2`: o `install.cjs:890` invoca o sync com `--soma-home=${SOURCE_CORE}`, e `SOURCE_CORE` é o **`core/` do checkout em execução** (`install.cjs:572`). Só o adapter de **projeto** (`install.cjs:994-995`) usa `--targets-file`. *(Números corrigidos em 2026-08-21: as citações anteriores — `:519`, `:837`, `:942`, `:1009` — apontavam para `--dry-run`, `installedVersion` e um comentário. Reconferidas com `grep -n "SOURCE_CORE\s*=\|--soma-home=\|--targets-file=" core/scripts/install.cjs`.)*
 
 Portanto a pergunta real é: `source_path` é relativo a **`<repo>/core`** (o `somaHome` efetivo) ou à **raiz do repo**?
 
 Medido: um `source_path: "hooks/framework-guard.cjs"` resolvido contra o `somaHome` efetivo aponta para `<repo>/core/hooks/framework-guard.cjs`, e **`core/hooks/` não existe** — os 19 hooks moram em `<repo>/hooks/`, um nível acima. O contrato diz *"relativo à raiz do repositório SOMA"*, que é `<repo>`, não `<repo>/core`.
 
-**As três saídas, para a T-08 escolher com o conjunto real na mão**: (a) resolver subindo um nível a partir do `somaHome` — funciona, mas codifica a suposição "somaHome é sempre `<raiz>/core`"; (b) derivar a raiz da **localização do próprio arquivo de adapter** (`<X>/adapters/<tool>/install-targets.json` → raiz = `<X>/..`), que é robusto sem suposição de nome; (c) declarar `source_path` relativo ao `somaHome` e mover/duplicar os hooks para dentro de `core/`, que é mudança de layout do repo e tem custo próprio.
+🔴 **CORREÇÃO de 2026-08-21, medida — a opção (b) que este documento propunha estava ERRADA e foi removida.** Ela dizia "derivar a raiz da localização do próprio arquivo de adapter (`<X>/adapters/<tool>/install-targets.json` → raiz = `<X>/..`), robusto sem suposição de nome". Medido: **`adapters/` fica diretamente sob o `somaHome` nos DOIS layouts** (`manifest.cjs:126` e `targets.cjs:51` montam `path.join(somaHome, 'adapters', tool, ...)`). Portanto (b) devolve exatamente `somaHome` — é idêntica a (c) no efeito e **não alcança a raiz do repo**. Eu publiquei uma saída que não existe.
 
-**Consequência que a T-08 tem de resolver**: entry de arquivo com `source_path: "hooks/…"` **não resolve hoje em nenhum dos dois caminhos** sem uma dessas três decisões. A T-08 decide, com o conjunto real na mão, se a raiz é derivada da **localização do próprio arquivo de adapter** (robusto para os dois caminhos) ou se o `sync` default fica declaradamente fora para entries de arquivo — e, nesse caso, **falando alto**, nunca pulando em silêncio.
+**O quadro real, medido:**
+
+| Layout | `somaHome` | `adapters/` fica em | subir 1 dá | os hooks estão em |
+|---|---|---|---|---|
+| caminho do `install` | `<repo>/core` | `<repo>/core/adapters` | `<repo>` ✅ | `<repo>/hooks` |
+| `sync` standalone | `~/.soma-v2` | `~/.soma-v2/adapters` | `~` 🔴 absurdo | **não existem** |
+
+**As saídas avaliadas (14 agentes, 62 achados medidos, 2026-08-21):**
+
+- **(a) `source_path` relativo a `somaHome/..`** — 🔴 **REJEITADA: é um buraco de leitura arbitrária, medido.** No caminho standalone `somaHome/..` = `$HOME`. Rodando o `validateFileEntry` real com `repoRoot=$HOME`, as entries `source_path: ".ssh/known_hosts"`, `".claude/CLAUDE.md"` e `".zshrc"` **são ACEITAS** — sem `..`, sem symlink, sem truque. Sob (c) as três são rejeitadas (`source_path does not exist in repo`) e o controle positivo (`adapters/claude/install-targets.json`) é aceito. O único guarda de leitura é `files.cjs:174-180` (`sourcePathAbs.startsWith(repoRootAbs + path.sep)`), e ele só contém enquanto `repoRoot` for o subtree do repo.
+- **(c) `source_path` relativo a `somaHome`, com os fontes vivendo sob ele** — ✅ **ESCOLHIDA.** Ver a prova e o custo abaixo.
+- **(d)** — o `install-targets.json` ganha um campo declarando a raiz dos fontes (ex.: `source_root`), resolvido relativo ao próprio arquivo de adapter. Viável, e mais explícita. **Rejeitada por custo sem ganho**: exige mudar 3 call sites hoje ancorados em `somaHome` (`targets.cjs:124`, `sync.cjs:749`, `doctor.cjs:397`) de forma **coordenada** — se só um mudar, `sync` e `doctor` resolvem a mesma entry contra raízes diferentes e divergem em silêncio —, exige absorver um campo novo na §"Superfície fixada" **antes** de qualquer exemplo, e **não resolve o standalone**: não existe pasta-fonte de hooks dentro de `~/.soma-v2` para o `source_root` apontar.
+
+### Por que (c), com as provas
+
+1. **É o que o código já faz.** `doctor.cjs:397` (`path.resolve(somaHome, entry.source_path)`), `sync.cjs:749` (`{ repoRoot: somaHome }`) e `targets.cjs:124` (`opts.repoRoot || somaHome`). **Zero mudança de código.**
+2. **O custo que este documento alegava para (c) era falso.** A versão anterior dizia que ela exige "que os hooks cheguem ao `~/.soma-v2`, que hoje não tem `hooks/`". Medido: `install.sh:142` faz `rsync -a "${REPO_ROOT}/core/" "${HOME}/.soma-v2/"` — a árvore inteira de `core/`, **sem um único `--exclude`/`--filter` no arquivo**. Depois do `git mv`, `~/.soma-v2/hooks/` passa a ser entregue **sem editar uma letra** do instalador.
+3. **A premissa de qual caminho é "produção" estava invertida.** `core/INSTALL.md` manda rodar `node ~/.soma-v2/scripts/install.cjs` em **8 de 8** invocações (`:26,73,90,93,94,108,111,131`) — nunca `node core/scripts/install.cjs`. O standalone é o fluxo canônico; `<repo>/core` é o laboratório.
+4. **Os 8 blocos ficam intactos por construção, não por sorte.** Bloco resolve por `source_doc` (`sync.cjs:420` e `:1131`, `path.join(somaHome, entry.source_doc)`); `kind:"file"` resolve por `repoRoot`. Superfície de regressão sobre o AC-02: **vazia**.
+5. **O exemplo do contrato já está correto sob (c)** — `contracts/install-file-entry.md:21` traz `"source_path": "hooks/framework-guard.cjs"`, e `path.resolve("<repo>/core", "hooks/framework-guard.cjs")` = `<repo>/core/hooks/framework-guard.cjs`, exatamente onde o arquivo passa a morar. **Nenhuma edição de contrato é necessária** — ao contrário de (d).
+
+### O custo de (c), enumerado — e três dos cinco pontos falham em SILÊNCIO
+
+O `git mv hooks core/hooks` move 19 `.cjs` + `hooks.json` + `lib/` + `__tests__/`. **Cinco pontos referenciam o caminho antigo.** Os três silenciosos são o risco real desta decisão: nenhum deles produz erro, os três produzem *ausência*.
+
+| # | Ponto | Como falha | Prova de que falha calado |
+|---|---|---|---|
+| 1 | `package.json:19` — glob `hooks/__tests__/*.test.cjs` | 🔇 **SILENCIOSO** — 7 arquivos de teste somem da suíte | `node --test 'hooks/__tests__/NAO_EXISTE_*.test.cjs'` sai **limpo**, `# fail 0`, sem avisar que o glob não casou nada |
+| 2 | `hooks/framework-guard.cjs:53` — `PROTECTED_PATTERNS: 'hooks/**'` | 🔇 **SILENCIOSO** — o guarda para de proteger os próprios hooks | padrão literal ancorado, sem `**/` líder: `core/hooks/x.cjs` não casa `hooks/**` |
+| 3 | `install.sh:168` — `rsync "${REPO_ROOT}/hooks/" "${HOME}/.claude/hooks/"` | 🔇 **SILENCIOSO** — para de instalar os hooks no destino | `rsync` de origem inexistente falha, mas o script segue se o `run` não abortar — **conferir** |
+| 4 | `core/scripts/__tests__/contract-run-state.test.cjs:37` | 🔊 alto — teste vermelho | `path.resolve(REPO_ROOT, 'hooks', 'spec-completeness-gate.cjs')` |
+| 5 | `core/scripts/__tests__/trilho-e2e.test.cjs:37` | 🔊 alto — teste vermelho | `path.resolve(REPO_ROOT, 'hooks', 'framework-guard.cjs')` |
+
+Fora do executável, a doc a acompanhar: `core/specs/016-artifact-gated-trilho/contracts/framework-guard-hook.md:30` (o `PROTECTED_PATTERNS` do contrato) e seu teste na linha 95. **Não quebram nada se esquecidos — apenas passam a mentir.**
+
+**Controle positivo da varredura** (para não confundir origem com destino): as **53** referências a `~/.claude/hooks` apontam para o **destino** da instalação e **não** são afetadas. A régua distinguiu os dois sentidos: acusou os 5 de origem e ficou quieta nos 53 de destino.
+
+⚠️ **Nenhum dos 5 pontos está nominalmente na T-08 hoje.** Entram como subtarefas explícitas — sem isso, a decisão fica escrita e o código a contradiz, que é o defeito recorrente desta base.
+
+**Consequência para a T-08**: declarar as entries com `source_path` relativo ao `somaHome` (ex.: `"hooks/framework-guard.cjs"`, que resolve para `<repo>/core/hooks/…` após o `git mv`). O `sync` standalone passa a funcionar assim que um `install.sh` novo rodar — o `rsync` de `core/` entrega os fontes. Até lá, `validateFileEntry` **falha alto** (`source_path does not exist in repo`), nunca em silêncio.
 
 ---
 
