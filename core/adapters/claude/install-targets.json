@@ -1,6 +1,12 @@
 {
   "schema": "soma-install-targets/v1",
   "tool": "claude",
+  "excluded": [
+    {
+      "source_path": "adapters/claude/commands/soma-run.md",
+      "reason": "AC-12 (spec 018-install-whole-files): decisão do Felipe em 2026-08-17 — ele quer rodar um laboratório à mão com a versão de 296 linhas de soma-run.md antes dela virar default. A versão que ele roda hoje tem 474 linhas, 0 `Gate:`, 0 `Report:`, e state ainda em /tmp; trocar isso sem ele ver é mudança de fluxo de trabalho, não refresh de arquivo. Ver spec.md NO-GOS e contracts/install-file-entry.md secao \"Exclusao declarada (AC-12)\"."
+    }
+  ],
   "entries": [
     {
       "block_id": "block.claude.CLAUDE_md.hyd-v2",
@@ -19,6 +25,161 @@
       "source_doc": "docs/output-style.md",
       "target_path": "~/.claude/CLAUDE.md",
       "target_anchor_id": "block.claude.CLAUDE_md.soma-voxel"
+    },
+    {
+      "kind": "file",
+      "source_path": "hooks/agent-mode-gate.cjs",
+      "target_path": "~/.claude/hooks/agent-mode-gate.cjs"
+    },
+    {
+      "kind": "file",
+      "source_path": "hooks/capture-defer-gate.cjs",
+      "target_path": "~/.claude/hooks/capture-defer-gate.cjs"
+    },
+    {
+      "kind": "file",
+      "source_path": "hooks/cognitive-gate-unlock.cjs",
+      "target_path": "~/.claude/hooks/cognitive-gate-unlock.cjs"
+    },
+    {
+      "kind": "file",
+      "source_path": "hooks/cognitive-gate.cjs",
+      "target_path": "~/.claude/hooks/cognitive-gate.cjs"
+    },
+    {
+      "kind": "file",
+      "source_path": "hooks/depth-guard.cjs",
+      "target_path": "~/.claude/hooks/depth-guard.cjs"
+    },
+    {
+      "kind": "file",
+      "source_path": "hooks/discover-before-specify.cjs",
+      "target_path": "~/.claude/hooks/discover-before-specify.cjs"
+    },
+    {
+      "kind": "file",
+      "source_path": "hooks/framework-guard.cjs",
+      "target_path": "~/.claude/hooks/framework-guard.cjs"
+    },
+    {
+      "kind": "file",
+      "source_path": "hooks/hyd-gate.cjs",
+      "target_path": "~/.claude/hooks/hyd-gate.cjs"
+    },
+    {
+      "kind": "file",
+      "source_path": "hooks/insight-action-coupling.cjs",
+      "target_path": "~/.claude/hooks/insight-action-coupling.cjs"
+    },
+    {
+      "kind": "file",
+      "source_path": "hooks/pre-commit-gate.cjs",
+      "target_path": "~/.claude/hooks/pre-commit-gate.cjs"
+    },
+    {
+      "kind": "file",
+      "source_path": "hooks/reuse-gate.cjs",
+      "target_path": "~/.claude/hooks/reuse-gate.cjs"
+    },
+    {
+      "kind": "file",
+      "source_path": "hooks/session-end.cjs",
+      "target_path": "~/.claude/hooks/session-end.cjs"
+    },
+    {
+      "kind": "file",
+      "source_path": "hooks/session-init.cjs",
+      "target_path": "~/.claude/hooks/session-init.cjs"
+    },
+    {
+      "kind": "file",
+      "source_path": "hooks/spec-completeness-gate.cjs",
+      "target_path": "~/.claude/hooks/spec-completeness-gate.cjs"
+    },
+    {
+      "kind": "file",
+      "source_path": "hooks/spec-test-traceability.cjs",
+      "target_path": "~/.claude/hooks/spec-test-traceability.cjs"
+    },
+    {
+      "kind": "file",
+      "source_path": "hooks/subagent-init.cjs",
+      "target_path": "~/.claude/hooks/subagent-init.cjs"
+    },
+    {
+      "kind": "file",
+      "source_path": "hooks/subagent-stop-thermal.cjs",
+      "target_path": "~/.claude/hooks/subagent-stop-thermal.cjs"
+    },
+    {
+      "kind": "file",
+      "source_path": "hooks/thermal-guard.cjs",
+      "target_path": "~/.claude/hooks/thermal-guard.cjs"
+    },
+    {
+      "kind": "file",
+      "source_path": "hooks/write-compact-marker.cjs",
+      "target_path": "~/.claude/hooks/write-compact-marker.cjs"
+    },
+    {
+      "kind": "file",
+      "source_path": "adapters/claude/commands/depth-score.md",
+      "target_path": "~/.claude/commands/depth-score.md"
+    },
+    {
+      "kind": "file",
+      "source_path": "adapters/claude/commands/dispatch.md",
+      "target_path": "~/.claude/commands/dispatch.md"
+    },
+    {
+      "kind": "file",
+      "source_path": "adapters/claude/commands/elicit.md",
+      "target_path": "~/.claude/commands/elicit.md"
+    },
+    {
+      "kind": "file",
+      "source_path": "adapters/claude/commands/encerrar.md",
+      "target_path": "~/.claude/commands/encerrar.md"
+    },
+    {
+      "kind": "file",
+      "source_path": "adapters/claude/commands/gap-finder.md",
+      "target_path": "~/.claude/commands/gap-finder.md"
+    },
+    {
+      "kind": "file",
+      "source_path": "adapters/claude/commands/handoff.md",
+      "target_path": "~/.claude/commands/handoff.md"
+    },
+    {
+      "kind": "file",
+      "source_path": "adapters/claude/commands/hyd.md",
+      "target_path": "~/.claude/commands/hyd.md"
+    },
+    {
+      "kind": "file",
+      "source_path": "adapters/claude/commands/plan-sdd.md",
+      "target_path": "~/.claude/commands/plan-sdd.md"
+    },
+    {
+      "kind": "file",
+      "source_path": "adapters/claude/commands/quality-check.md",
+      "target_path": "~/.claude/commands/quality-check.md"
+    },
+    {
+      "kind": "file",
+      "source_path": "adapters/claude/commands/soma-install.md",
+      "target_path": "~/.claude/commands/soma-install.md"
+    },
+    {
+      "kind": "file",
+      "source_path": "adapters/claude/commands/sonar-audit.md",
+      "target_path": "~/.claude/commands/sonar-audit.md"
+    },
+    {
+      "kind": "file",
+      "source_path": "adapters/claude/commands/specify.md",
+      "target_path": "~/.claude/commands/specify.md"
     }
   ]
 }
