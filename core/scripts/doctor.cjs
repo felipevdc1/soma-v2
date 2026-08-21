@@ -32,6 +32,16 @@ const { loadManifest, loadInstallTargets, listAdapters } = require('./lib/manife
 const { scanStaleHypothesis } = require('./lib/module-store.cjs');
 const { runFoundationCheck, formatHumanOutput } = require('./lib/foundation-check.cjs');
 const { runMigrationCheck } = require('./lib/migration.cjs');
+// Spec 018 (T-06): file-drift detection (AC-08/AC-09/AC-10). Deliberately
+// NOT `./lib/manifest.cjs`'s loadInstallTargets() — that loader's
+// validateInstallTargetsSchema() requires block_id/source_doc/
+// target_anchor_id on every entry and throws on a kind:"file" entry (see
+// CONTRACT-FILES-LEDGER-02's "O que o doctor lê"). loadInstallTargetsWithKinds
+// (T-07) is the mixed-aware loader: block entries validated the old way,
+// file entries validated by files.cjs's own validateFileEntry, target_path
+// left verbatim for file entries (the ledger key — CONTRACT-FILES-LEDGER-02).
+const { loadInstallTargetsWithKinds } = require('./install/targets.cjs');
+const { isFileEntry, expandHome: expandFileHome, sha256OfFile, readLedger, ledgerFilePath } = require('./install/files.cjs');
 
 // ---- Arg parsing ----
 
@@ -271,6 +281,143 @@ function detectTargetDrifts(somaHome, adapters) {
         expected_sha256: expectedSha256,
         actual_sha256: actualSha256,
         message: 'In sync'
+      });
+    }
+  }
+
+  return findings;
+}
+
+/**
+ * Detect drift for `kind: "file"` install-targets entries (Spec 018, T-06;
+ * AC-08/AC-09/AC-10; CONTRACT-FILES-LEDGER-02 §"O que o doctor lê").
+ *
+ * detectTargetDrifts() above is block-only — it "não confere arquivo
+ * nenhum", which is exactly how 6 hooks went 3 months stale unnoticed. This
+ * function is the file-world counterpart, and follows the contract's
+ * 3-row table literally (not a per-file matrix crossed with ledger state):
+ *
+ *   | situação                                  | saída                    |
+ *   | install-state ausente                     | "nunca instalado", 1x    |
+ *   | arquivo declarado divergindo da fonte      | finding nomeando o arq.  |
+ *   | todos os declarados idênticos              | silêncio (severity 'ok', filtered by default) |
+ *
+ * "Divergindo da fonte do repo" (AC-08) is a DIRECT disk-vs-repo sha256
+ * comparison — it does NOT consult the ledger's recorded sha256. That is
+ * deliberately different from files.cjs's classifyFileState()/
+ * planFileInstall(), which compare disk state against what the ledger last
+ * recorded (the install-time "is it safe to overwrite" decision). Doctor
+ * is a health check, not an installer: it answers "does what's on disk
+ * match what the repo says today", which is the literal question AC-08
+ * asks and the literal gap the "6 hooks stale 3 months" incident exposed.
+ *
+ * Judgment call (undocumented by the contract, see task report "Lacunas do
+ * documento"): if this SOMA home declares ZERO kind:"file" entries across
+ * all adapters, this function returns [] — no "never installed" finding
+ * either. Measured 2026-08-21: neither the repo's core/adapters/*
+ * install-targets.json nor the real ~/.soma-v2 install has any kind:"file"
+ * entry yet, so emitting the AC-10 warning unconditionally would add pure
+ * noise to every existing doctor invocation. The warning only makes sense
+ * once there is something declared to have (not) installed.
+ *
+ * @param {string} somaHome
+ * @param {string[]} adapters
+ * @param {string} projectPathAbs  absolute path to the project whose
+ *   `.soma/install-state.json` is the file ledger (CONTRACT-FILES-LEDGER-02
+ *   §"ONDE o ledger mora": `<projectPathAbs>/.soma/install-state.json`,
+ *   never `somaHome` — that was T-07's own fixed bug).
+ * @returns {object[]} findings, kind: 'file_drift'
+ */
+function detectFileDrifts(somaHome, adapters, projectPathAbs) {
+  const findings = [];
+  const declaredFileEntries = []; // { adapter, entry }
+
+  for (const adapter of adapters) {
+    let targetsData;
+    try {
+      targetsData = loadInstallTargetsWithKinds(somaHome, adapter);
+    } catch (err) {
+      // INSTALL_TARGETS_INVALID for this adapter is already reported as an
+      // 'error' finding by detectTargetDrifts() above (it calls the OLD
+      // block-only loader on the same file) — do not double-report here.
+      // Any other error (e.g. a malformed kind:"file" entry — a config bug,
+      // not a drift) propagates, matching detectTargetDrifts()'s own
+      // precedent of rethrowing non-INSTALL_TARGETS_INVALID errors.
+      if (err.code === 'INSTALL_TARGETS_INVALID') continue;
+      throw err;
+    }
+    for (const entry of targetsData.entries) {
+      if (isFileEntry(entry)) declaredFileEntries.push({ adapter, entry });
+    }
+  }
+
+  if (declaredFileEntries.length === 0) return findings; // nothing declared -> nothing to check
+
+  const { installed } = readLedger(projectPathAbs);
+  if (!installed) {
+    // AC-10: explicit "never installed", never silence, never "No drift
+    // detected" — silence here is the exact bug this task exists to kill.
+    findings.push({
+      kind: 'file_drift',
+      severity: 'warning',
+      code: 'file_never_installed',
+      adapter: null,
+      target_path: null,
+      source_path: null,
+      expected_sha256: null,
+      actual_sha256: null,
+      message: `No install-state found for this project (${ledgerFilePath(projectPathAbs)}) — ` +
+        `${declaredFileEntries.length} declared file(s) were never installed by SOMA; drift not evaluated.`,
+    });
+    return findings;
+  }
+
+  for (const { adapter, entry } of declaredFileEntries) {
+    const targetPathAbs = expandFileHome(entry.target_path);
+    const sourcePathAbs = path.resolve(somaHome, entry.source_path);
+
+    if (!fs.existsSync(targetPathAbs)) {
+      findings.push({
+        kind: 'file_drift',
+        severity: 'missing',
+        adapter,
+        target_path: entry.target_path,
+        source_path: entry.source_path,
+        expected_sha256: null,
+        actual_sha256: null,
+        message: `Installed file not found: ${entry.target_path}`,
+      });
+      continue;
+    }
+
+    const expectedSha256 = sha256OfFile(sourcePathAbs);
+    const actualSha256 = sha256OfFile(targetPathAbs);
+
+    if (expectedSha256 !== actualSha256) {
+      // AC-08: never "No drift detected" — name the file.
+      findings.push({
+        kind: 'file_drift',
+        severity: 'drift',
+        adapter,
+        target_path: entry.target_path,
+        source_path: entry.source_path,
+        expected_sha256: expectedSha256,
+        actual_sha256: actualSha256,
+        message: `Installed file differs from repo source: ${entry.target_path}`,
+      });
+    } else {
+      // AC-09: emitted as 'ok' for --verbose parity with target_drift; the
+      // default/quiet filters in main() already drop severity:'ok', which
+      // is what makes this "silence" in the default/quiet output.
+      findings.push({
+        kind: 'file_drift',
+        severity: 'ok',
+        adapter,
+        target_path: entry.target_path,
+        source_path: entry.source_path,
+        expected_sha256: expectedSha256,
+        actual_sha256: actualSha256,
+        message: 'In sync',
       });
     }
   }
@@ -714,6 +861,15 @@ function main() {
 
   const somaHome = flags.somaHome || process.env.SOMA_HOME || path.join(os.homedir(), '.soma-v2');
   const projectPath = flags.project || null;
+  // T-06: file-drift ledger root — CONTRACT-FILES-LEDGER-02's
+  // `<projectPathAbs>/.soma/install-state.json`. Unlike projectPath above
+  // (which stays null when --project is omitted, and skips the stale-
+  // hypothesis scan entirely), this defaults to process.cwd() to match
+  // install.cjs/sync.cjs's own convention (sync.cjs:748 comment block,
+  // install.cjs:841 `runStep(..., { cwd: projectPathAbs })`) — the file
+  // ledger always has SOME project root, there is no "skip if absent" case
+  // for it the way stale-hypothesis scanning has.
+  const projectPathAbs = flags.project ? path.resolve(flags.project) : process.cwd();
 
   // Load manifest
   let manifest;
@@ -738,7 +894,10 @@ function main() {
   // Only scan if --project is provided (doctor needs to know which project to scan)
   const staleHypothesisFindings = projectPath ? scanStaleHypothesis(projectPath) : [];
 
-  const allFindings = [...targetDriftFindings, ...stalenessFindings, ...staleHypothesisFindings];
+  // AC-08/AC-09/AC-10: file-drift findings (Spec 018, T-06).
+  const fileDriftFindings = detectFileDrifts(somaHome, adapters, projectPathAbs);
+
+  const allFindings = [...targetDriftFindings, ...stalenessFindings, ...staleHypothesisFindings, ...fileDriftFindings];
 
   // Filter based on verbosity
   let outputFindings;
@@ -797,7 +956,12 @@ function main() {
         process.stdout.write(`DRIFT: ${driftFindings.length} finding(s)\n`);
       }
       if (warningFindings.length > 0) {
-        process.stdout.write(`WARNINGS: ${warningFindings.length} stale-hypothesis module(s)\n`);
+        // T-06: was hardcoded to "stale-hypothesis module(s)", which is now
+        // false for the AC-10 file_never_installed warning this task adds
+        // (and would have been misleading for any other future warning
+        // kind too) — genericized to the count only; each finding's own
+        // message is still printed individually in the loop below.
+        process.stdout.write(`WARNINGS: ${warningFindings.length} warning(s)\n`);
       }
       for (const f of outputFindings) {
         if (f.severity === 'ok' && !flags.verbose) continue;
@@ -830,6 +994,7 @@ if (require.main === module) {
 module.exports = {
   scanContextRouting,
   detectTargetDrifts,
+  detectFileDrifts,
   detectSourceStaleness,
   buildSummary,
 };
