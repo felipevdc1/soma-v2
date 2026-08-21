@@ -82,8 +82,8 @@ Alternativa rejeitada: comparar `mtime` ou tamanho. Rejeitada porque as duas dã
 
 ---
 
-**D-018-05 — o `manifest.cjs` é corrigido na fonte; `sync.cjs` NÃO duplica o carregamento.**
-*Decisão do Felipe em 2026-08-21, depois que a T-07 parou e reportou o bloqueio, e depois de eu reproduzir as quatro alegações dela.*
+**D-018-05 — ~~o `manifest.cjs` é corrigido na fonte~~ — SUPERSEDIDA no mesmo dia pela D-018-06. Leia a D-018-06 antes de agir sobre qualquer coisa nesta seção.**
+*A decisão original é de 2026-08-21 e foi tomada sobre uma medição minha que estava errada em dois pontos; o diagnóstico do defeito, abaixo, continua válido e é o que motiva a D-018-06.*
 
 **O que a Discovery original não viu**: o porteiro do `install-targets.json` não é nenhuma das três fontes que a spec analisou — é um **quarto** arquivo, `core/scripts/lib/manifest.cjs`. Isso torna falsa, como escrita, a frase do §Technical Approach *"nenhum dos três é reescrito"*: continua verdadeira para os três, e passa a ser insuficiente como descrição do escopo.
 
@@ -96,17 +96,46 @@ Alternativa rejeitada: comparar `mtime` ou tamanho. Rejeitada porque as duas dã
 
 **A terceira alternativa** — estreitar o AC-02 tirando o `soma sync --dry-run` de escopo, já que o `soma install` não passa pelo caminho quebrado — foi considerada e rejeitada: faria o `sync` pular entries de arquivo **em silêncio**, que é a doença que esta spec inteira existe pra matar.
 
-### ⚠️ Exceção declarada ao "frozen libs invariant"
+### ⚠️ ~~Exceção declarada ao "frozen libs invariant"~~ — REVOGADA pela D-018-06 (nenhum frozen lib é tocado)
 
-Tocar `core/scripts/lib/` acende **2 testes**, medidos e nomeados:
+🔴 **As duas afirmações abaixo eram FALSAS quando escritas. Ficam registradas, corrigidas, porque o erro é instrutivo.**
+
+**Erro 1 — a contagem.** Escrevi "2 testes, medidos e nomeados". São **8**. Minha régua foi um `grep` pela string `core/scripts/lib/`, que só encontra guardas baseados em `git diff`; os que comparam **sha256 contra baseline hardcoded** não citam esse caminho e ficaram invisíveis. Medido depois, com as mudanças da T-07 no working tree — 8 fails novos, confirmados 1:1 com a medição independente dela:
+`AC-07 [T-02] frozen libs invariant` · `AC-07 [T-10] frozen lib manifest.cjs sha256 matches baseline` · `frozen libs: shasums match baseline (Spec 013 AC-17)` · `Regression: locked lib files in scratch repo not modified` · `Regression: locked lib files in scratch repo match SOMA_HOME originals` · `migrateCbmDeprecation: orchestrates full lifecycle (sandbox)` · `migrateCbmDeprecation: G3 bypassed with --force (W-B-3)` · `migrateCbmDeprecation: cleans .migration.lock on rollback path`.
+Pior que o número: eu escrevi *"se aparecer um oitavo nome, é seu"*, transferindo à executora o ônus de uma medição minha incompleta. Ela recusou, e estava certa.
+
+**Erro 2, o grave — "voltam ao verde no merge, sem ação" é falso para a maioria.** Vale só para os guardas baseados em `git diff main`. Os baseados em **sha256 contra baseline** comparam conteúdo contra uma constante hardcoded e **não curam no merge** — ficariam vermelhos indefinidamente. E três dos oito não são teste: são o gate funcional **G6** (`migrate.cjs:314`), que aborta a migração antes dos gates G1-G5 quando os libs derivam.
+
+**O que a cerimônia realmente custaria** (medido com `grep` pelo valor **antigo**, `08a0f164…`, e não pelo novo): o sha vive em **9 ocorrências, 8 arquivos** — `lib/migrate.cjs`, **três testes-guarda** (`bf-04-frozen-libs-invariant`, `ac-15-regression`, `frozen-libs-invariant-014`), `docs/TROUBLESHOOTING.md`, mais registros históricos da spec 013 e um relatório de evidência datado. Atualizar os três testes-guarda não é "bumpar versão" — é **afrouxar os guardas**, ato diferente do que a decisão original descrevia.
+
+Para registro, o que acenderia (não acende mais, ver D-018-06):
 - `core/scripts/__tests__/frozen-libs-invariant-014.test.cjs:43`
 - `core/scripts/__tests__/manifest.test.cjs:345` (`AC-07 [T-02] frozen libs invariant`)
 
 Os dois rodam `git diff main -- core/scripts/lib/` e falham com diff não-vazio. **É tripwire, não proibição**: existe para que mudança em `lib/` seja visível e deliberada. Esta é deliberada e está escrita aqui.
 
-**Consequência na medição, e isto é normativo para toda task seguinte**: enquanto a branch `feature/018-install-whole-files` não for mergeada em `main`, o baseline de falhas é **7**, não 5 — as 5 pré-existentes **mais** esses 2, nominalmente identificáveis. Os 2 voltam ao verde no merge, sem ação. **Um executor que medir 7 e reportar "2 regressões" está lendo o tripwire como defeito.**
+🔴 **REVOGADO pela D-018-06 — o baseline segue sendo 5.** ~~Consequência na medição: enquanto a branch não for mergeada, o baseline de falhas é **7**, não 5~~ — as 5 pré-existentes **mais** esses 2, nominalmente identificáveis. Os 2 voltam ao verde no merge, sem ação. **Um executor que medir 7 e reportar "2 regressões" está lendo o tripwire como defeito.**
 
 **O que NÃO muda**: a versão do schema continua `soma-install-targets/v1`. O `kind` segue aditivo e opcional; o que estava errado era o validador, que nunca soube da existência de dois tipos de entry.
+
+---
+
+**D-018-06 — composição, não correção-na-fonte nem duplicação: um módulo novo REUSA o validador congelado.**
+*Decisão do Felipe em 2026-08-21, tomada depois de eu medir a cerimônia de verdade e reportar que a minha estimativa anterior estava errada.*
+
+`core/scripts/lib/manifest.cjs` fica **byte-idêntico**. Nasce `core/scripts/install/targets.cjs`, na mesma casa que a D-018-03 já escolheu para o código novo desta spec, e ele:
+
+1. lê o `install-targets.json`, tira comentários e faz `JSON.parse` — ~4 linhas triviais, a única duplicação aceita, e **não é duplicação de validação**;
+2. separa `entries[]` por `kind`;
+3. chama o **`validateInstallTargetsSchema` exportado pelo `manifest.cjs`** sobre `{schema, entries: <só as de bloco>}`. Validação de bloco byte-a-byte idêntica **por ser literalmente a mesma função**, não uma reimplementação equivalente;
+4. valida as entries de arquivo pelo `files.cjs` da T-01;
+5. expande `~` **apenas** nas entries de bloco. As de arquivo chegam ao consumidor **verbatim**, como a §"A chave do ledger é o `target_path` VERBATIM" exige.
+
+**O que isto compra**: zero fail de frozen-lib · G6 intacto · nenhum teste-guarda editado · nenhum bump de versão · baseline segue **5**.
+
+**A alternativa rejeitada continua sendo a duplicação** — `sync.cjs` reimplementar a validação — pelos motivos da D-018-05, que seguem válidos. A diferença entre "duplicar" e "compor" é que a composição **chama** o validador congelado em vez de reescrevê-lo, e portanto não pode divergir dele.
+
+⚠️ **O risco que sobra, e como ele é medido**: o caminho default de carregamento passa a atravessar o módulo novo para **todos** os adapters, inclusive os que não têm entry de arquivo nenhuma. É exatamente o que a prova obrigatória do AC-02 mede — capturar os findings das entries de bloco **antes** de qualquer mudança, rodar depois, e o `diff` tem de ser **vazio**. Sem essa prova, a T-07 não fecha.
 
 ---
 
