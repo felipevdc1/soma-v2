@@ -320,6 +320,66 @@ test('T-01-27: planFileInstall throws (does not silently skip) on a malformed en
   });
 });
 
+test('T-01-37: needsWrite is true when the target was deleted from disk, even though the ledger sha still matches the source (recovery after deletion)', () => {
+  // Bug found by team-lead review: classifyFileState correctly returns
+  // 'clean' for BOTH "never written" and "present and matching" (that is
+  // the contract's decision table, and it must stay that way). The old
+  // needsWrite composition only compared the ledger to the source and
+  // never looked at the disk, so a deleted-but-still-recorded file read as
+  // "no write needed" — AC-01 broken in silence, exit 0.
+  withTmp('soma-install-files-plan-', (repo) => {
+    withTmp('soma-install-files-target-', (targetDir) => {
+      makeRepoWithFiles(repo, { 'a.cjs': 'A\n' });
+      const target = path.join(targetDir, 'a.cjs');
+      const sourceSha = files.sha256OfFile(path.join(repo, 'a.cjs'));
+      // Ledger says this was already installed and the source hasn't
+      // changed since — but the target is NOT written to disk at all,
+      // simulating the user (or anything else) deleting it after install.
+      const ledger = { [target]: { sha256: sourceSha, installedAt: 'z' } };
+      const entries = [{ kind: 'file', source_path: 'a.cjs', target_path: target }];
+
+      const result = files.planFileInstall(entries, { repoRoot: repo, ledger });
+      assert.equal(result.plan[0].state, 'clean', 'absent target still classifies as clean per the contract table');
+      assert.equal(
+        result.plan[0].needsWrite,
+        true,
+        'a target missing from disk must always need (re)writing, regardless of what the ledger says'
+      );
+    });
+  });
+});
+
+test('T-01-38: needsWrite distinguishes "never materialized" from "already materialized and unchanged", for the SAME ledger entry', () => {
+  // The control side of T-01-37: proves the fix does not regress the
+  // idempotency guarantee (CONTRACT-FILES-LEDGER-02 stub #9) while fixing
+  // the deletion-recovery gap.
+  withTmp('soma-install-files-plan-', (repo) => {
+    withTmp('soma-install-files-target-', (targetDir) => {
+      makeRepoWithFiles(repo, { 'a.cjs': 'A\n' });
+      const targetMissing = path.join(targetDir, 'missing.cjs');
+      const targetPresent = path.join(targetDir, 'present.cjs');
+      fs.writeFileSync(targetPresent, 'A\n');
+
+      const sourceSha = files.sha256OfFile(path.join(repo, 'a.cjs'));
+      const ledgerEntry = { sha256: sourceSha, installedAt: 'z' };
+      const ledger = { [targetMissing]: ledgerEntry, [targetPresent]: ledgerEntry };
+      const entries = [
+        { kind: 'file', source_path: 'a.cjs', target_path: targetMissing },
+        { kind: 'file', source_path: 'a.cjs', target_path: targetPresent },
+      ];
+
+      const result = files.planFileInstall(entries, { repoRoot: repo, ledger });
+      const byTarget = Object.fromEntries(result.plan.map((p) => [p.target_path, p]));
+
+      assert.equal(byTarget[targetMissing].state, 'clean');
+      assert.equal(byTarget[targetMissing].needsWrite, true, 'deleted-but-ledger-matches must be re-written');
+
+      assert.equal(byTarget[targetPresent].state, 'clean');
+      assert.equal(byTarget[targetPresent].needsWrite, false, 'present-and-matching must stay a no-op (idempotency)');
+    });
+  });
+});
+
 // ── readLedger / writeLedger — CONTRACT-FILES-LEDGER-02 ────────────────────
 
 test('T-01-28: readLedger on a project with no install-state.json -> installed:false, installedFiles:{}', () => {
