@@ -44,7 +44,7 @@
 
 | ID | Description | spec_ref | files | depends_on | Status |
 |---|---|---|---|---|---|
-| T-02 | `[P]` Contract test de `contracts/install-file-entry.md` — os 7 casos do stub, incluindo os de **rejeição**: `target_anchor_id` numa entry de arquivo é REJEITADA e não ignorada (é quase certamente entry de bloco malformada, e tratá-la como arquivo sobrescreveria o `CLAUDE.md` inteiro), `..` rejeitado antes de qualquer path ser construído, e `kind` desconhecido não cai em default silencioso | [CONTRACT:install-file-entry] | `core/scripts/__tests__/contract-file-entry.test.cjs` | T-01 | TODO |
+| T-02 | `[P]` Contract test de `contracts/install-file-entry.md` — os 7 casos do stub, incluindo os de **rejeição**: `target_anchor_id` numa entry de arquivo é REJEITADA e não ignorada (é quase certamente entry de bloco malformada, e tratá-la como arquivo sobrescreveria o `CLAUDE.md` inteiro), `..` rejeitado antes de qualquer path ser construído, e `kind` desconhecido não cai em default silencioso | [CONTRACT:install-file-entry] | `core/scripts/__tests__/contract-file-entry.test.cjs` | T-01 | DONE |
 | T-03 | `[P]` Contract test de `contracts/installed-files-ledger.md` — os 12 casos do stub, incluindo os **dois lados** da whitelist (aceita `installedFiles`, continua rejeitando campo desconhecido), o caso "presente sem entrada no ledger → divergido", a exigência de que 2 divergidos nomeiem **os dois**, e a idempotência | [CONTRACT:installed-files-ledger] | `core/scripts/__tests__/contract-files-ledger.test.cjs` | T-01 | TODO |
 
 ---

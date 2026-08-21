@@ -7,7 +7,9 @@
 
 ## Artifact Path
 
-`core/adapters/{tool}/install-targets.json`, campo `entries[]`. O mesmo array que hoje carrega as 8 entries de bloco.
+`core/adapters/{tool}/install-targets.json`, campo `entries[]`. O mesmo array que hoje carrega as entries de bloco.
+
+⚠️ **As 8 entries de bloco existentes estão em DOIS arquivos, e nenhum array tem 8**: `claude` tem **3**, `codex` tem **5** (medido em 2026-08-21; é o mesmo número da §Discovery da `spec.md`). O `target_path` desta seção é por adapter — ler "as 8" como "as 8 deste array" é erro de leitura que a T-02 flagrou em vez de assumir. O AC-02 fala em **3** porque é escopado ao adapter `claude`; não há contradição entre os dois números.
 
 ---
 
@@ -25,7 +27,7 @@
 
 | Campo | Tipo | Obrigatório | Restrições |
 |---|---|---|---|
-| `kind` | string | não | `"file"` ou `"block"`. **Ausente = `"block"`** — é o que preserva as 8 entries existentes intactas |
+| `kind` | string | não | `"file"` ou `"block"`. **Ausente = `"block"`** — é o que preserva intactas as entries existentes (3 no `claude` + 5 no `codex`) |
 | `source_path` | string | sim (se `kind: "file"`) | Relativo à raiz do repo SOMA. Não-vazio. Sem `..`. Tem que existir no repo |
 | `target_path` | string | sim | Absoluto ou iniciado por `~`. Sem `..`. Mesma convenção do `target_path` das entries de bloco |
 | `target_anchor_id` | — | **proibido** quando `kind: "file"` | Arquivo não tem âncora. Presença é erro de validação, não campo ignorado |
@@ -59,7 +61,7 @@ O contrato original citava apenas `..`. Isso deixava passar um `source_path` **a
 
 O mesmo `entries[]` carrega os dois tipos. Garantias:
 
-- As 8 entries existentes **não são editadas** por esta spec e continuam produzindo findings idênticos.
+- As entries de bloco existentes — **3 no adapter `claude`, 5 no `codex`** — **não são editadas** por esta spec e continuam produzindo findings idênticos.
 - O gate de schema (`sync.cjs:1130`) continua exigindo `soma-install-targets/v1` — **a versão do schema não muda**, porque `kind` é aditivo e opcional.
 - Entries de arquivo aparecem no output com o **mesmo vocabulário de `action`** das de bloco. Um consumidor que só conta ações não precisa saber que arquivos existem.
 

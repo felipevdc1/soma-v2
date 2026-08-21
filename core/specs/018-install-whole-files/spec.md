@@ -146,6 +146,12 @@ As duas questões que esta spec abriu foram fechadas em 2026-08-17, antes do `/p
 
 **Q2 — abort total ou aplicação parcial quando 1 de N divergiu?** → **Abort total**, ver AC-04. Segue o precedente do `sync --apply` com `BLOCK_CONFLICT`.
 
+**Q3 — o `framework-guard.cjs` entra no conjunto declarado, apesar de bloquear `git commit`?** → **Sim, entra.** Decisão do Felipe em 2026-08-21, tomada depois de o conflito ser levantado explicitamente: o handoff `~/.claude/plans/handoff-forge.md` registrava, de 2026-08-17, *"framework-guard fica só no repo por enquanto — não sincronizar pro `~/.claude/hooks/` sem ele na frente do terminal"*, o que contradizia a Q1 ("todos os 19") e a User Story 4.
+
+A contradição se resolve porque **declarar não é instalar**. A T-08 escreve a entry; o smoke da T-09 roda em `$HOME` temporário; e o `soma install` contra o `~/.claude` real continua sendo comando que o Felipe roda, com o AC-04 abortando enquanto os 2 hooks divergidos não forem reconciliados à mão.
+
+⚠️ **Consequência aceita, e registrada aqui para não ser redescoberta como surpresa**: quando ele reconciliar os 2 divergidos e rodar o install de verdade, o `framework-guard` passa a bloquear `git commit` **em qualquer repositório** cujo staged toque `hooks/`, `core/scripts/`, `install/` ou arquivos de constituição — os padrões são relativos ao repo, então o efeito não fica contido no `soma-v2`. O bypass é por marker de sessão. Ele sabe disso e escolheu assim.
+
 **Consequência imediata e conhecida**: com o estado atual, o primeiro `soma install` **vai abortar** — porque `spec-completeness-gate.cjs` e `spec-test-traceability.cjs` estão divergidos. Isso é o AC-04 funcionando, não um bug. A reconciliação desses dois é ação manual do usuário, informada pelo abort. A alternativa — instalar parcialmente — esconderia o fato.
 
 ---
