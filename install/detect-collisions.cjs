@@ -97,11 +97,30 @@ function detectCollisions(targetDir, somaBasenames, somaShaSums) {
  * available" branch already handles that (a hook the map lists but that
  * doesn't exist on disk is itself worth flagging, not silently skipped).
  *
+ * T-08c pt.3: `dir` not existing (or not being a directory), or matching
+ * ZERO of the given basenames, is NOT a valid "nothing shipped" result —
+ * it is a broken reference, and returning {} for it would reproduce the
+ * exact blind-collision bug this function exists to fix (every basename
+ * looks like "no shipped sha available" → reported as a collision, with
+ * no error at all). Both cases throw instead, naming `dir`. Measured,
+ * not hypothetical: hooks/ became core/hooks/ on THIS branch today
+ * (T-08a); a future re-move, rename, or a REPO_ROOT that resolves
+ * differently would otherwise reopen this hole in total silence.
+ *
  * @param {string} dir
  * @param {string[]} basenames
  * @returns {Record<string,string>}
+ * @throws {Error} if `dir` doesn't exist / isn't a directory, or matches none of `basenames`
  */
 function computeShaSumsFromDir(dir, basenames) {
+  if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) {
+    throw new Error(
+      `computeShaSumsFromDir: --soma-dir "${dir}" does not exist (or is not a directory) — ` +
+      `refusing to silently treat every SOMA-listed hook as "no shipped sha available" ` +
+      `(that reproduces the exact false-collision bug this function exists to fix)`
+    );
+  }
+
   const sums = {};
   for (const basename of basenames) {
     const filePath = path.join(dir, `${basename}.cjs`);
@@ -109,6 +128,14 @@ function computeShaSumsFromDir(dir, basenames) {
       sums[basename] = sha256File(filePath);
     }
   }
+
+  if (basenames.length > 0 && Object.keys(sums).length === 0) {
+    throw new Error(
+      `computeShaSumsFromDir: --soma-dir "${dir}" exists but matched none of the ${basenames.length} SOMA-listed basename(s) — ` +
+      `this looks like a broken reference (wrong directory, or hooks moved), not a real "nothing shipped" result`
+    );
+  }
+
   return sums;
 }
 

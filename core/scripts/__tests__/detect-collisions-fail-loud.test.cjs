@@ -30,6 +30,11 @@
  * and core/hooks/). install.sh itself is NEVER invoked, and the real
  * ~/.claude/hooks/ is NEVER read or written.
  *
+ * T-08c pt.3 adds one more case here: install.sh's real --soma-dir
+ * argument (${REPO_ROOT}/core/hooks) going missing (see
+ * computeShaSumsFromDir's own fix in detect-collisions.cjs) also has to
+ * abort THIS block, end to end — not just the standalone CLI.
+ *
  * @spec [SPEC:AC-05]
  * @task T-08c
  */
@@ -126,6 +131,41 @@ test('install.sh: detector com JSON corrompido em --soma-list falha alto, não v
   });
 });
 
+test('install.sh: --soma-dir (core/hooks) inexistente também aborta — não vira "sem colisões" (T-08c pt.3)', () => {
+  // Cenário real, não hipotético: install.sh sempre passa
+  // --soma-dir="${REPO_ROOT}/core/hooks". Se esse diretório sumir de novo
+  // (outro `git mv`, um REPO_ROOT que resolve diferente), o detector
+  // precisa abortar — não silenciosamente reportar todo hook do target
+  // como colisão (T-08c pt.1) nem silenciosamente "sem colisões" (o
+  // bug que este arquivo inteiro existe pra matar).
+  withTmp('detect-collisions-home-', (fakeHome) => {
+    withTmp('detect-collisions-reporoot-', (fakeRepoRoot) => {
+      fs.mkdirSync(path.join(fakeHome, '.claude', 'hooks'), { recursive: true });
+      fs.writeFileSync(path.join(fakeHome, '.claude', 'hooks', 'meu-hook.cjs'), '// hook do soma no destino');
+
+      fs.mkdirSync(path.join(fakeRepoRoot, 'install'), { recursive: true });
+      fs.copyFileSync(REAL_DETECT_CJS, path.join(fakeRepoRoot, 'install', 'detect-collisions.cjs'));
+      fs.writeFileSync(path.join(fakeRepoRoot, 'install', 'soma-hooks-map.json'), JSON.stringify(['meu-hook']));
+      // Deliberadamente SEM core/hooks/ — install.sh aponta --soma-dir pra
+      // lá incondicionalmente; isto simula ele ter sumido.
+      assert.ok(!fs.existsSync(path.join(fakeRepoRoot, 'core', 'hooks')), 'precondição: core/hooks/ não pode existir neste fixture');
+
+      const r = runExtractedBlock({ repoRoot: fakeRepoRoot, home: fakeHome });
+
+      assert.notEqual(r.status, 0, `bloco de install.sh deveria abortar quando --soma-dir não existe. status=${r.status} stdout=${r.stdout} stderr=${r.stderr}`);
+      assert.ok(r.stderr.includes('core/hooks') || r.stderr.includes(path.join(fakeRepoRoot, 'core', 'hooks')), `stderr devia nomear o --soma-dir ausente: ${r.stderr}`);
+      assert.ok(
+        !r.stdout.includes('meu-hook.cjs'),
+        `não deveria listar meu-hook.cjs como colisão — seria o bug T-08c pt.1 reaberto por um --soma-dir quebrado: stdout=${r.stdout}`
+      );
+      assert.ok(
+        !r.stdout.includes('COLLISIONS_RESULT='),
+        `o script tem que abortar ANTES do echo final: stdout=${r.stdout}`
+      );
+    });
+  });
+});
+
 test('install.sh: zero colisões reais -> COLLISIONS fica vazio de verdade (não "No collisions detected.")', () => {
   withTmp('detect-collisions-home-', (fakeHome) => {
     withTmp('detect-collisions-reporoot-', (fakeRepoRoot) => {
@@ -134,10 +174,13 @@ test('install.sh: zero colisões reais -> COLLISIONS fica vazio de verdade (não
       fs.writeFileSync(path.join(fakeHome, '.claude', 'hooks', 'user-hook.cjs'), '// user hook');
 
       buildFakeRepoRoot(fakeRepoRoot, {
-        // "some-hook" está na lista mas não existe em nenhum lado — zero
-        // colisões possíveis (nem no destino, nem no soma-dir).
+        // "some-hook" existe no soma-dir (senão o guarda da T-08c pt.3
+        // dispararia: "--soma-dir não casou nenhum basename" também é
+        // falha alta, e por bom motivo) mas NÃO existe no destino — zero
+        // colisões possíveis, porque detectCollisions só olha os
+        // arquivos que EXISTEM em --target.
         somaListContent: JSON.stringify(['some-hook']),
-        hookFiles: {},
+        hookFiles: { 'some-hook.cjs': '// shipped version, not installed anywhere' },
       });
 
       const r = runExtractedBlock({ repoRoot: fakeRepoRoot, home: fakeHome });
