@@ -11,29 +11,29 @@
  * entries.
  *
  * WHY MOST OF THIS SUITE CALLS detectFileDrifts() DIRECTLY INSTEAD OF
- * SPAWNING THE CLI: manifest.cjs's loadInstallTargets() (the OLD,
- * block-only loader `detectTargetDrifts()` still uses) requires
- * block_id/source_doc/target_anchor_id on EVERY entry in an adapter's
- * install-targets.json, including kind:"file" ones — which CONTRACT-FILE-
- * ENTRY-01 forbids those fields on. So ANY adapter that declares a
- * kind:"file" entry makes `loadInstallTargets()` throw INSTALL_TARGETS_
- * INVALID for that adapter, and `detectTargetDrifts()` turns that into an
- * unrelated severity:'error' target_drift finding — which is ALSO
- * severity:'error' (blocking) and masks the human-readable "OK: No drift
- * detected." branch regardless of what detectFileDrifts() itself found.
- * This is a genuine pre-existing gap (see this task's final report,
- * "Lacunas do documento") — `detectTargetDrifts()`/`loadInstallTargets()`
- * do not know kind:"file" exists yet, and teaching them is out of T-06's
- * scope (touching that code risks AC-02: "8 existing block entries must
- * not change behavior", and the task's brief is explicit: this task's
- * change to doctor.cjs is additive, detectTargetDrifts is not touched).
- * Direct unit calls to detectFileDrifts() sidestep this confound entirely
- * and test exactly what T-06 owns. A handful of CLI-level tests at the
- * bottom prove the wiring (main() actually calls detectFileDrifts and
- * merges its output) without asserting on exit code/the "OK: No drift"
- * branch, which the confound above makes unreliable to assert on in a
- * fixture that (necessarily, to test this feature at all) declares a
- * kind:"file" entry.
+ * SPAWNING THE CLI: at the time this file was first written,
+ * `detectTargetDrifts()` still called manifest.cjs's loadInstallTargets()
+ * (the OLD, block-only loader), which required block_id/source_doc/
+ * target_anchor_id on EVERY entry in an adapter's install-targets.json —
+ * including kind:"file" ones, which CONTRACT-FILE-ENTRY-01 forbids those
+ * fields on. Any adapter declaring a kind:"file" entry made
+ * `detectTargetDrifts()` throw and mask the human-readable "OK: No drift
+ * detected." branch regardless of what detectFileDrifts() itself found,
+ * confounding CLI-level exit-code/text assertions in a fixture that
+ * (necessarily, to test this feature at all) declares a kind:"file" entry.
+ *
+ * FIXED as a same-day T-06 follow-up (see doctor-mixed-kind-block-drift.
+ * test.cjs, plan.md "BLOQUEADOR DA T-08"): `detectTargetDrifts()` and
+ * `computeInstallTargetsSummary()` both migrated to
+ * loadInstallTargetsWithKinds() and now skip kind:"file" entries instead
+ * of choking on them. The confound above no longer exists — verified live
+ * (T-06-08b/T-06-09b below now assert exit code and the "OK: No drift
+ * detected." text directly, which was NOT safe to do when this comment
+ * was first written). The direct-unit-call structure below is kept
+ * anyway: it is still the faster, more isolated way to exercise
+ * detectFileDrifts()'s own branches, independent of whatever
+ * detectTargetDrifts() does elsewhere in the same JSON payload — but it is
+ * no longer a workaround for a bug, just a design preference.
  *
  * These tests use a fully self-contained fixture (fake --soma-home + fake
  * --project), never the real ~/.soma-v2 or ~/.claude — doctor READS the
@@ -209,9 +209,11 @@ test('T-06-05 @spec AC-09: default/quiet main() output filters severity:"ok" fil
   // .filter(f => f.severity !== 'ok')` filter — reused as-is, not
   // reimplemented — also applies to kind:'file_drift' findings. Exercises
   // main()'s own filter predicate directly against detectFileDrifts()'s
-  // output, without spawning the CLI (see file header: CLI-level
-  // assertions on this exact scenario are confounded by the pre-existing
-  // block-validator/kind:"file" incompatibility).
+  // output, without spawning the CLI — isolates the assertion to exactly
+  // this filter, independent of whatever else main() puts in the same
+  // JSON payload (see file header: this used to also be the only safe way
+  // to test this scenario, before the T-06 follow-up fix; it no longer is,
+  // but is kept for the isolation).
   const content = 'module.exports = { v: 3b };\n';
   const { somaHome, projectDir, targetPathAbs } = buildFixture(content);
   files.writeLedger(projectDir, {});
@@ -255,9 +257,11 @@ test('T-06-07: an adapter whose install-targets.json is INSTALL_TARGETS_INVALID 
 // ─────────────────────────────────────────────────────────────────────────
 // CLI-level wiring tests: prove main() actually calls detectFileDrifts()
 // and merges its output into the real JSON `findings` array. Exit code and
-// the "OK: No drift detected." human branch are NOT asserted here — see
-// file header for why that is confounded by a pre-existing, out-of-scope
-// gap (detectTargetDrifts/loadInstallTargets choking on kind:"file").
+// the "OK: No drift detected." human branch ARE now asserted below —
+// see the T-06-08b/T-06-09b variants, which exercise exactly what the file
+// header used to call unsafe. Kept the original T-06-08/09 (content-only
+// assertions) so this suite still passes if any future change reintroduces
+// a similar confound; T-06-08b/09b are the ones that would catch it.
 // ─────────────────────────────────────────────────────────────────────────
 
 function runDoctorJson(somaHome, projectDir) {
@@ -293,12 +297,56 @@ test('T-06-09 (CLI wiring) @spec AC-08: main() surfaces the named drift finding 
   assert.equal(findings.length, 1, `expected exactly 1 file_drift finding via CLI, got: ${JSON.stringify(findings)}`);
   assert.equal(findings[0].severity, 'drift');
   assert.equal(findings[0].target_path, targetPathAbs);
-  // drift IS blocking (severity !== 'ok' && !== 'warning'); the CLI-level
-  // exit code assertion is safe here specifically because BOTH the real
-  // reason (drift) and the pre-existing confound (kind:"file" adapter
-  // tripping the old block validator) agree on exit 1 — unlike the
-  // AC-09/AC-10 CLI scenarios where the confound would fight the assertion.
+  // drift IS blocking (severity !== 'ok' && !== 'warning').
   assert.equal(r.status, 1);
+});
+
+// ── T-06 follow-up (2026-08-21): now that detectTargetDrifts()/
+// computeInstallTargetsSummary() no longer choke on kind:"file" entries
+// (doctor-mixed-kind-block-drift.test.cjs), exit code and the human "OK:
+// No drift detected." branch are safe to assert directly against a
+// fixture that declares a kind:"file" entry. These would have failed for
+// the wrong reason before that fix (an unrelated severity:'error' finding
+// masking everything) — see this file's header for the history.
+
+function runDoctorHuman(somaHome, projectDir) {
+  return spawnSync(
+    'node',
+    [DOCTOR_CJS, `--soma-home=${somaHome}`, `--project=${projectDir}`],
+    { cwd: projectDir, encoding: 'utf8', timeout: 15000 }
+  );
+}
+
+test('T-06-08b (CLI wiring, post-follow-up-fix) @spec AC-10: never-installed warning does not block exit, and never falsely claims "No drift detected"', () => {
+  const { somaHome, projectDir } = buildFixture('module.exports = { v: 6b };\n');
+  const r = runDoctorJson(somaHome, projectDir);
+  assert.equal(r.status, 0, `AC-10 warning must not block exit code now that the block-validator confound is fixed. stdout: ${r.stdout}`);
+
+  const rText = runDoctorHuman(somaHome, projectDir);
+  assert.doesNotMatch(rText.stdout, /OK: No drift detected\./,
+    `human output must not claim "no drift" while install-state is absent. Got:\n${rText.stdout}`);
+  assert.match(rText.stdout, /never installed by SOMA/);
+});
+
+test('T-06-09b (CLI wiring, post-follow-up-fix) @spec AC-09: clean file_drift + clean block_drift together -> real "OK: No drift detected.", exit 0', () => {
+  const { somaHome, projectDir, targetPathAbs } = buildFixture('module.exports = { v: 7b };\n');
+  files.writeLedger(projectDir, {});
+  fs.writeFileSync(targetPathAbs, 'module.exports = { v: 7b };\n', 'utf8'); // byte-identical to source
+
+  const r = runDoctorJson(somaHome, projectDir);
+  assert.equal(r.status, 0, `expected exit 0 when everything is clean, got ${r.status}. stdout: ${r.stdout}`);
+  const findings = fileDriftFindings(r.stdout);
+  // JSON mode emits every finding regardless of severity (main()'s own
+  // "JSON mode: always emit all") — so the clean entry's 'ok' record IS
+  // expected here (it is the non-blindness proof: the check ran). What
+  // must be zero is anything NON-ok.
+  assert.equal(findings.length, 1, `expected the clean entry's 'ok' record, got: ${JSON.stringify(findings)}`);
+  assert.equal(findings[0].severity, 'ok');
+  assert.equal(findings.filter((f) => f.severity !== 'ok').length, 0);
+
+  const rText = runDoctorHuman(somaHome, projectDir);
+  assert.match(rText.stdout, /OK: No drift detected\./,
+    `human output must confirm no drift once the confound is fixed and everything is clean. Got:\n${rText.stdout}`);
 });
 
 test('T-06-11 (CLI wiring, human output) @spec AC-08: diverged file is named in human-readable output, never "← undefined"', () => {

@@ -28,7 +28,12 @@ const os = require('node:os');
 const crypto = require('node:crypto');
 
 const { extractBlock, parseAnchorAttrs, computeBlockSha256 } = require('./lib/anchored-blocks.cjs');
-const { loadManifest, loadInstallTargets, listAdapters } = require('./lib/manifest.cjs');
+// T-06 follow-up: loadInstallTargets (the OLD block-only loader) is no
+// longer used anywhere in this file — detectTargetDrifts() and
+// computeInstallTargetsSummary() both migrated to loadInstallTargetsWithKinds
+// below (plan.md "BLOQUEADOR DA T-08"). Left out of this destructure
+// deliberately, not an oversight.
+const { loadManifest, listAdapters } = require('./lib/manifest.cjs');
 const { scanStaleHypothesis } = require('./lib/module-store.cjs');
 const { runFoundationCheck, formatHumanOutput } = require('./lib/foundation-check.cjs');
 const { runMigrationCheck } = require('./lib/migration.cjs');
@@ -115,6 +120,20 @@ function humanSeverityLabel(severity) {
  * Detect target_drift findings from install-targets entries.
  * For each entry, check if the target file has the expected anchored block.
  *
+ * T-06 follow-up (2026-08-21, plan.md "BLOQUEADOR DA T-08"): was
+ * `loadInstallTargets(somaHome, adapter)` — manifest.cjs's OLD block-only
+ * loader, which throws INSTALL_TARGETS_INVALID for the WHOLE adapter the
+ * instant it contains a single kind:"file" entry (that loader requires
+ * block_id/source_doc/target_anchor_id on every entry unconditionally;
+ * CONTRACT-FILE-ENTRY-01 forbids those fields on a file entry). That
+ * silently swallowed every real block drift in the same adapter — the
+ * exact disease this spec exists to cure, reproduced by the spec itself
+ * the moment T-08 declares its first kind:"file" entry. Migrated to
+ * install/targets.cjs's loadInstallTargetsWithKinds() (D-018-06's same
+ * composition sync.cjs already uses), then explicitly skip kind:"file"
+ * entries in the loop below — this function's block-parsing logic
+ * (target_anchor_id/source_doc/extractBlock) is meaningless for them.
+ *
  * @param {string} somaHome
  * @param {string[]} adapters
  * @returns {object[]} findings
@@ -125,7 +144,7 @@ function detectTargetDrifts(somaHome, adapters) {
   for (const adapter of adapters) {
     let targetsData;
     try {
-      targetsData = loadInstallTargets(somaHome, adapter);
+      targetsData = loadInstallTargetsWithKinds(somaHome, adapter);
     } catch (err) {
       if (err.code === 'INSTALL_TARGETS_INVALID') {
         // Skip invalid adapters with a warning finding
@@ -146,6 +165,7 @@ function detectTargetDrifts(somaHome, adapters) {
     }
 
     for (const entry of targetsData.entries) {
+      if (isFileEntry(entry)) continue; // T-06: file entries are detectFileDrifts()'s concern, not this loop's.
       const targetPath = entry.target_path; // already expanded by loadInstallTargets
       const anchorId = entry.target_anchor_id;
       const sourceDocRelative = entry.source_doc;
@@ -799,6 +819,19 @@ function runMigrationCheckMode(flags) {
  * Compute aggregate install-targets summary across all adapters.
  * Returns total entry count and a validity flag.
  *
+ * T-06 follow-up (2026-08-21, plan.md "BLOQUEADOR DA T-08"): was
+ * `loadInstallTargets` (see detectTargetDrifts()'s docstring above for the
+ * full failure mode — same root cause, same fix). `count` is deliberately
+ * BLOCK-ENTRIES-ONLY here, matching the team-lead's explicit instruction
+ * ("os dois pontos ... processam apenas as entries de bloco") and
+ * detectTargetDrifts()'s own scope — this is `checks.install_targets_count`
+ * in the JSON output, which existed before kind:"file" entries did and was
+ * never documented as covering them. Flagged in this task's report as a
+ * judgment call: once kind:"file" entries exist, this count will NOT
+ * include them (it undercounts the full declared surface rather than the
+ * block-only surface it always meant to report on) — a deliberate,
+ * conservative reading, not an oversight.
+ *
  * @param {string} somaHome
  * @param {string[]} adapters
  * @returns {{ count: number, valid: boolean }}
@@ -809,8 +842,8 @@ function computeInstallTargetsSummary(somaHome, adapters) {
 
   for (const adapter of adapters) {
     try {
-      const data = loadInstallTargets(somaHome, adapter);
-      count += data.entries.length;
+      const data = loadInstallTargetsWithKinds(somaHome, adapter);
+      count += data.entries.filter((e) => !isFileEntry(e)).length;
     } catch (err) {
       if (err.code === 'INSTALL_TARGETS_INVALID') {
         // Adapter present but targets file invalid or missing → mark invalid
@@ -1006,5 +1039,6 @@ module.exports = {
   detectTargetDrifts,
   detectFileDrifts,
   detectSourceStaleness,
+  computeInstallTargetsSummary,
   buildSummary,
 };
