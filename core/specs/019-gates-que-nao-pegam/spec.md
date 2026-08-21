@@ -22,6 +22,12 @@ Verificado em 2026-08-19 contra `soma-v2` e `~/.claude/`:
 
 | lacuna | onde vive hoje | confirmada por |
 |---|---|---|
+⚠️ **Nota de proveniência acrescentada em 2026-08-21 pela spec 018 (T-04), sem alterar nenhum achado desta spec.**
+
+Os caminhos `commands/plan-sdd.md` e `commands/specify.md` citados na tabela abaixo referem-se às cópias que viviam na **raiz do repositório**. Elas **não existem mais**: a T-04 da spec 018 consolidou os comandos num lugar só (AC-11), movendo os 6 órfãos e removendo os 5 duplicados stale da raiz. Recuperáveis por `git show 295dc2f:commands/plan-sdd.md`.
+
+🔴 **Não reponte estes caminhos para `core/adapters/claude/commands/` sem re-verificar.** As duas cópias **divergiam** — `plan-sdd.md` em **43** linhas e `specify.md` em **42**, medido em 2026-08-21. Os achados G1, G5 e G9 foram medidos contra a cópia da **raiz**; repontar sem medir de novo faria esta spec afirmar sobre um arquivo que ela nunca examinou. **Antes de agir sobre eles, reproduza a medição contra o adapter, que é agora o canônico.**
+
 | G1 precondição vs template | `commands/plan-sdd.md` §1 × `templates/spec.md:100` | grep — o template contém a string que a precondição aborta |
 | G2 AC com sufixo invisível | `hooks/spec-test-traceability.cjs:51`, `soma-run.md:107` | regex `AC-\d+:` não casa `AC-01b:` |
 | G3 cobertura mede referência | `core/scripts/lib/spec-lint/context.cjs:114` | `[SPEC:AC-XX]` conta presença, não adequação |
