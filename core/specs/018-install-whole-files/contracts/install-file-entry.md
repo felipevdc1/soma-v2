@@ -36,6 +36,25 @@
 
 ---
 
+## Semântica de validação — fixado em 2026-08-21, depois da T-01
+
+Duas coisas que o contrato não dizia e que a T-01 teve de decidir. Ficam aqui para que T-02 (contract test) e T-07 (consumidor) não inventem respostas diferentes.
+
+**`repoRoot` é opcional na validação, e o que ele liga é a checagem de existência.**
+
+| Chamada | O que é verificado |
+|---|---|
+| sem `repoRoot` | **shape apenas** — `kind`, campos obrigatórios, campos proibidos, `..`, forma do `target_path` |
+| com `repoRoot` | tudo acima **mais** existência do `source_path` no repo e a checagem de escape abaixo |
+
+O caminho real (`planFileInstall`) **sempre** passa `repoRoot`, então a checagem de existência nunca é pulada em produção. A forma sem `repoRoot` existe para validar formato de entry sem precisar de fixture de repo.
+
+**`source_path` que escapa do `repoRoot` é REJEITADO — não só o `..` literal.**
+
+O contrato original citava apenas `..`. Isso deixava passar um `source_path` **absoluto** apontando para fora do repositório, que é o mesmo dano por outro caminho: o instalador copiaria conteúdo arbitrário do disco para dentro do `~/.claude` do usuário. A regra é resolvida, não textual — `path.resolve(repoRoot, source_path)` tem de cair **dentro** de `repoRoot`. Coerente com o §"Invariante de propriedade" abaixo: o instalador só toca o que uma entry declara, e só carrega o que o repositório possui.
+
+---
+
 ## Coexistência com entries de bloco (AC-02)
 
 O mesmo `entries[]` carrega os dois tipos. Garantias:
@@ -73,4 +92,7 @@ Ausência silenciosa seria indistinguível de esquecimento. A entry ausente é i
 // 5. entry com kind:"file" apontando source_path inexistente no repo é REJEITADA
 // 6. kind desconhecido (ex: "directory") é REJEITADO — não cai em default silencioso
 // 7. o conjunto declarado do adapter claude NÃO contém soma-run.md
+// 8. entry com kind:"file" e source_path ABSOLUTO apontando fora do repoRoot é
+//    REJEITADA (o ".." literal nao e' a unica forma de escapar) — ver §Semantica
+//    de validacao. Fixado em 2026-08-21 depois da T-01.
 ```

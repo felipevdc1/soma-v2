@@ -59,6 +59,39 @@ A última linha importa: arquivo que existe mas que o SOMA nunca registrou **nã
 
 ---
 
+## A chave do ledger é o `target_path` VERBATIM — não expandido
+
+Fixado em 2026-08-21 depois da T-01, porque T-05 e T-07 escrevem e leem este mesmo ledger e **têm de usar a mesma string**.
+
+A chave é o `target_path` **exatamente como a entry o declara** — `~/.claude/hooks/framework-guard.cjs`, com o `~` intacto. A forma expandida (`/Users/<user>/.claude/...`) é usada **apenas** para tocar o filesystem, **nunca** como chave.
+
+⚠️ **O modo de falhar é silencioso, e é por isso que está escrito aqui.** Se um consumidor gravar com a chave expandida e outro procurar com a verbatim, o lookup do AC-04 devolve `undefined` → o arquivo é classificado como *"presente sem entrada no ledger"* → **divergido** → a instalação aborta com uma acusação falsa. Nenhum teste de unidade dos dois lados pegaria isso; só o encontro entre eles.
+
+---
+
+## `needsWrite` — campo composto, e o que ele NÃO é
+
+Fixado em 2026-08-21 depois da T-01. Não estava no contrato original; a T-01 precisou dele para tornar a idempotência (stub #9) decidível no módulo puro, em vez de cada consumidor recomputar sha e comparar por conta própria — que é como três cópias divergentes nasceriam.
+
+`planFileInstall` devolve, por item do `plan[]`: `source_path`, `target_path`, `sourcePathAbs`, `targetPathAbs`, `state`, `sourceSha256`, `needsWrite`.
+
+- **`state`** é fiel à tabela literal acima (`clean` | `diverged`) e **não muda**.
+- **`needsWrite`** é derivado: `state === 'clean'` **e** (alvo ausente do disco **ou** sem entrada no ledger **ou** sha do ledger ≠ sha da fonte).
+
+⚠️ **A cláusula "alvo ausente do disco" não é redundante.** `state` devolve `clean` tanto para *"ausente, primeira instalação"* quanto para *"presente e idêntico ao registrado"* — são situações opostas quanto a precisar de escrita. Sem essa cláusula, um arquivo **apagado pelo usuário** com o ledger ainda em dia produz `needsWrite: false`, e o `soma install` vira no-op silencioso com exit 0: o hook nunca volta. Isso contradiz o AC-01 diretamente. Medido e reproduzido com controle em 2026-08-21, contra a primeira implementação da T-01.
+
+**Consumidor escreve quando `needsWrite` é `true`.** Não recompute a decisão — se ela precisar mudar, muda aqui e no módulo, não no consumidor.
+
+---
+
+## `writeLedger` não valida a whitelist — quem valida é a T-05
+
+Fixado em 2026-08-21 depois da T-01. O módulo `core/scripts/install/files.cjs` **não** requer `install.cjs`: a dependência corre `install.cjs → files.cjs`, nunca o inverso, para não fechar ciclo. Consequência prática: `writeLedger` faz merge do campo `installedFiles` preservando o resto do state, e **não** roda `ALLOWED_STATE_FIELDS` nem `validateInstallState`.
+
+Portanto o stub #2 deste contrato — *"os dois lados da whitelist"* — é responsabilidade da **T-05**, que é dona do `install.cjs`. Os testes da T-01 provam apenas o merge e o round-trip. **T-05: a validação não está feita; ela é sua.**
+
+---
+
 ## Abort total (AC-04)
 
 **Duas passadas, e a fronteira entre elas é o contrato.**
