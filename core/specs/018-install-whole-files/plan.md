@@ -208,13 +208,13 @@ Medido: um `source_path: "hooks/framework-guard.cjs"` resolvido contra o `somaHo
 
 ### O custo de (c), enumerado — e três dos cinco pontos falham em SILÊNCIO
 
-O `git mv hooks core/hooks` move 19 `.cjs` + `hooks.json` + `lib/` + `__tests__/`. **Cinco pontos referenciam o caminho antigo.** Os três silenciosos são o risco real desta decisão: nenhum deles produz erro, os três produzem *ausência*.
+O `git mv hooks core/hooks` move 19 `.cjs` + `hooks.json` + `lib/` + `__tests__/`. **Cinco pontos referenciam o caminho antigo.** Os **dois** silenciosos (1 e 2) são o risco real desta decisão: nenhum produz erro, os dois produzem *ausência*. O ponto 3 foi reclassificado como ALTO por medição — ver a tabela.
 
 | # | Ponto | Como falha | Prova de que falha calado |
 |---|---|---|---|
 | 1 | `package.json:19` — glob `hooks/__tests__/*.test.cjs` | 🔇 **SILENCIOSO** — 7 arquivos de teste somem da suíte | `node --test 'hooks/__tests__/NAO_EXISTE_*.test.cjs'` sai **limpo**, `# fail 0`, sem avisar que o glob não casou nada |
 | 2 | `hooks/framework-guard.cjs:53` — `PROTECTED_PATTERNS: 'hooks/**'` | 🔇 **SILENCIOSO** — o guarda para de proteger os próprios hooks | padrão literal ancorado, sem `**/` líder: `core/hooks/x.cjs` não casa `hooks/**` |
-| 3 | `install.sh:168` — `rsync "${REPO_ROOT}/hooks/" "${HOME}/.claude/hooks/"` | 🔇 **SILENCIOSO** — para de instalar os hooks no destino | `rsync` de origem inexistente falha, mas o script segue se o `run` não abortar — **conferir** |
+| 3 | `install.sh:168` — `rsync "${REPO_ROOT}/hooks/" "${HOME}/.claude/hooks/"` | 🔊 **ALTO** *(corrigido em 2026-08-21 — este documento dizia SILENCIOSO)* | medido: `install.sh:11` tem `set -euo pipefail` e `run()` faz `eval "$@"` sem fallback, então `rsync` de origem inexistente **aborta o instalador**. O "conferir" que estava aqui foi conferido: são **2** pontos silenciosos, não 3 |
 | 4 | `core/scripts/__tests__/contract-run-state.test.cjs:37` | 🔊 alto — teste vermelho | `path.resolve(REPO_ROOT, 'hooks', 'spec-completeness-gate.cjs')` |
 | 5 | `core/scripts/__tests__/trilho-e2e.test.cjs:37` | 🔊 alto — teste vermelho | `path.resolve(REPO_ROOT, 'hooks', 'framework-guard.cjs')` |
 
