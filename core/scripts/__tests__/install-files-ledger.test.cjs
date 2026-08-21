@@ -24,9 +24,11 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
+const { spawnSync } = require('node:child_process');
 
 const REPO_ROOT = path.resolve(__dirname, '..', '..', '..');
 const INSTALL_CJS = path.join(REPO_ROOT, 'core', 'scripts', 'install.cjs');
+const SYNC_CJS = path.join(REPO_ROOT, 'core', 'scripts', 'sync.cjs');
 const install = require(INSTALL_CJS);
 const files = require(path.join(REPO_ROOT, 'core', 'scripts', 'install', 'files.cjs'));
 
@@ -188,43 +190,102 @@ test('T-05-05: install.cjs writeInstallState and files.cjs writeLedger/readLedge
 
 // ── "ONDE o ledger mora" — install.cjs (cwd) × sync.cjs subprocess ────────
 //
-// BLOCKED — this is the risk the contract flags as "🔴 ONDE o ledger mora",
-// and this task cannot close it: fixing it means editing sync.cjs, which is
-// out of T-05's file scope (owned by T-07, already DONE per tasks.md).
-//
-// Empirically, as of this commit, sync.cjs's kind:"file" pipeline does NOT
-// use process.cwd() to locate the ledger — it uses the `somaHome` variable
-// (the `--soma-home` CLI flag value):
-//   - core/scripts/sync.cjs:834  runFileApplyMode(entries, somaHome, useJson)
-//       `const projectRootAbs = somaHome;`
-//   - core/scripts/sync.cjs:1455 (dry-run path) `filesModule.readLedger(somaHome)`
-// sync.cjs's own contract test (sync-file-entries.test.cjs:335) asserts
-// exactly this: `const ledgerPath = path.join(somaHome, '.soma', 'install-state.json');`
-//
-// install.cjs invokes sync.cjs with `cwd: projectPathAbs` (the project
-// directory) but ALWAYS `--soma-home=${SOURCE_CORE}` (the repo's own
-// core/ dir — install.cjs:837, :941, unchanged by this task). So inside
-// that child process, `somaHome !== process.cwd()`: `somaHome` resolves to
-// `<repo>/core`, not the project. Concretely, when the kind:"file" pipeline
-// eventually has real entries (T-08, still TODO), sync.cjs would write the
+// RESOLVED. This was BLOCKED: sync.cjs's kind:"file" pipeline used to key
+// the ledger off the `somaHome` variable (the --soma-home CLI flag value)
+// instead of process.cwd() — `runFileApplyMode` (sync.cjs:834) and the
+// dry-run ledger read (sync.cjs:1455). install.cjs invokes sync.cjs with
+// `cwd: projectPathAbs` but ALWAYS `--soma-home=${SOURCE_CORE}` (the repo's
+// own core/ dir, install.cjs:837/941), so the two variables are NEVER the
+// same value in the real pipeline — the old code would have written the
 // file ledger to `<repo>/core/.soma/install-state.json` while install.cjs
-// writes/reads its own state at `<projectPathAbs>/.soma/install-state.json`
-// — TWO different files, exactly the silent divergence the contract warns
-// about (a project's own installed files would read back as "diverged"
-// forever, since install.cjs's copy of installedFiles never receives what
-// sync.cjs wrote).
+// writes/reads its own state at `<projectPathAbs>/.soma/install-state.json`.
+// sync.cjs has since been fixed to use process.cwd() in both places
+// (sync-file-entries.test.cjs's own fixture helper now documents this:
+// "the ledger root fix ... makes the file-entry ledger land at
+// process.cwd(), not --soma-home").
 //
-// process.cwd() DOES reach projectPathAbs correctly when sync.cjs is
-// spawned this way (sync.cjs already relies on process.cwd() elsewhere,
-// e.g. --targets-file mode's relative target_path resolution) — so the
-// contract's rule itself is sound. The gap is that runFileApplyMode/the
-// dry-run ledger read do not use it. This is a finding for the
-// orchestrator to route to a sync.cjs owner, not a "regra não funciona"
-// case — see final report.
-test(
-  'T-05-06 BLOCKED @spec AC-06: install.cjs (writeInstallState at projectPathAbs) and sync.cjs (runFileApplyMode at somaHome, sync.cjs:834) target the SAME file — cannot verify GREEN without editing sync.cjs (out of T-05 scope)',
-  { skip: 'BLOCKED — sync.cjs:834 runFileApplyMode uses `somaHome` (the --soma-home flag) as projectRootAbs, not process.cwd(); install.cjs always invokes sync.cjs with --soma-home=SOURCE_CORE (the repo dir), never the project dir. Today this writes two different install-state.json files instead of one. Fix belongs in sync.cjs (out of T-05\'s file scope: install.cjs, install-files-ledger.test.cjs, contract-files-ledger.test.cjs only) — recommended fix: change `const projectRootAbs = somaHome;` (sync.cjs:834) and `filesModule.readLedger(somaHome)` (sync.cjs:1455) to use `process.cwd()`, matching how install.cjs already invokes sync.cjs (`cwd: projectPathAbs`) and matching the contract\'s fixed rule. See final report "PROVA DO LEDGER ÚNICO".' },
-  () => {
-    assert.fail('unreachable while skipped — see skip reason above');
-  }
-);
+// This test is the encounter no unit test on either side catches (files.cjs
+// alone, install.cjs alone, or sync.cjs alone all pass regardless of which
+// variable it used — only running BOTH real producers together, with
+// somaHome and the project DELIBERATELY different directories, would have
+// failed against the old code). It spawns sync.cjs exactly as install.cjs
+// spawns it (`cwd: project`, `--soma-home=<a different dir>`) — not a
+// hand-called `files.writeLedger`, the actual producer — then calls
+// install.cjs's own `writeInstallState` the way orchestrate()'s Step 4
+// does, without mentioning installedFiles, and proves the ledger sync.cjs
+// wrote survives.
+test('T-05-06 @spec AC-06: install.cjs (writeInstallState) and sync.cjs (the real kind:"file" producer, spawned exactly as install.cjs invokes it) target the SAME ledger file', () => {
+  withTmp('t05-encounter-soma-home-', (somaHome) => {
+    withTmp('t05-encounter-project-', (project) => {
+      // somaHome and project MUST be different directories — that was
+      // exactly the shape of the bug. A test that (by accident) used the
+      // same dir for both would pass even against the old, wrong code.
+      assert.notEqual(somaHome, project, 'fixture bug: somaHome and project must be distinct directories');
+
+      fs.writeFileSync(
+        path.join(somaHome, 'manifest.json'),
+        JSON.stringify({ schema: 'soma-manifest/v1', version: '2.2.0', files: [] })
+      );
+      const hookRel = 'hooks/encounter-check.cjs';
+      const hookContent = 'module.exports = { encounter: true };\n';
+      fs.mkdirSync(path.join(somaHome, 'hooks'), { recursive: true });
+      fs.writeFileSync(path.join(somaHome, hookRel), hookContent);
+
+      const targetAbs = path.join(project, '.claude-fake', 'encounter-check.cjs');
+      const adapterDir = path.join(somaHome, 'adapters', 'claude');
+      fs.mkdirSync(adapterDir, { recursive: true });
+      fs.writeFileSync(path.join(adapterDir, 'install-targets.json'), JSON.stringify({
+        schema: 'soma-install-targets/v1',
+        tool: 'claude',
+        entries: [{ kind: 'file', source_path: hookRel, target_path: targetAbs }],
+      }, null, 2));
+
+      // Invoke sync.cjs EXACTLY as install.cjs invokes it (install.cjs:837,
+      // :853): cwd = the project directory, --soma-home = a directory that
+      // is NOT the project (install.cjs always passes SOURCE_CORE, the
+      // repo dir — never the project).
+      const apply = spawnSync('node', [
+        SYNC_CJS, '--apply', '--json', '--tool=claude', '--allow-local-edits', `--soma-home=${somaHome}`,
+      ], { cwd: project, encoding: 'utf8', timeout: 15000 });
+      assert.equal(apply.status, 0, `sync --apply must succeed. stdout: ${apply.stdout}\nstderr: ${apply.stderr}`);
+      assert.equal(fs.existsSync(targetAbs), true, 'the file must actually be installed');
+      assert.deepEqual(fs.readFileSync(targetAbs), Buffer.from(hookContent), 'installed content must be byte-identical to source');
+
+      // (a) sync.cjs must have written the ledger into the PROJECT, not somaHome.
+      assert.equal(
+        fs.existsSync(path.join(project, '.soma', 'install-state.json')), true,
+        'sync.cjs must write the ledger at the project (cwd), not somaHome'
+      );
+      assert.equal(
+        fs.existsSync(path.join(somaHome, '.soma')), false,
+        'somaHome must receive no .soma/ at all — the ledger must never land there'
+      );
+      assert.equal(files.ledgerFilePath(project), path.join(project, '.soma', 'install-state.json'));
+
+      // (b) install.cjs's writeInstallState — called next, exactly as
+      // orchestrate()'s Step 4 does, WITHOUT mentioning installedFiles —
+      // must not clobber what sync.cjs (the real producer) just wrote.
+      const writtenPath = install.writeInstallState(project, baseCompleteState());
+      assert.equal(writtenPath, path.join(project, '.soma', 'install-state.json'));
+
+      const finalState = JSON.parse(fs.readFileSync(writtenPath, 'utf8'));
+      assert.equal(finalState.status, 'complete', 'install.cjs\'s own fields must still be written');
+      assert.ok(finalState.installedFiles, 'installedFiles must be present after install.cjs writes its own state');
+      assert.ok(
+        finalState.installedFiles[targetAbs],
+        'the exact entry sync.cjs wrote must have survived — merge-preserve exercised against the REAL producer, not a hand-called writeLedger'
+      );
+      assert.equal(
+        finalState.installedFiles[targetAbs].sha256,
+        files.sha256OfContent(hookContent),
+        'the preserved sha256 must be the content sync.cjs actually wrote'
+      );
+
+      // (c) One file, two producers, one reader API — files.cjs's own
+      // reader must see exactly what's in install.cjs's JSON output.
+      const { installed, installedFiles } = files.readLedger(project);
+      assert.equal(installed, true);
+      assert.deepEqual(installedFiles, finalState.installedFiles, 'both readers must see identical content — one file, not two');
+    });
+  });
+});
