@@ -1337,7 +1337,20 @@ function main() {
       // --dry-run/--apply`). Skip rather than feed a file entry into
       // computeEntryAction, which assumes target_anchor_id exists. See
       // final report "Lacunas do documento".
-      if (filesModule.isFileEntry(entry)) continue;
+      //
+      // The skip itself is unchanged — this only makes it AUDIBLE.
+      // AC-10's own point applies at small scale here too: "silêncio de
+      // check que não rodou é indistinguível de silêncio de check limpo"
+      // — a mute `continue` reads, from the terminal, identically to "no
+      // file entries were present at all." Always stderr, never stdout,
+      // so --json callers (install.cjs parses this stdout) keep getting
+      // parseable JSON regardless of how many file entries got skipped.
+      if (filesModule.isFileEntry(entry)) {
+        process.stderr.write(
+          `WARNING [FILE_ENTRY_UNSUPPORTED_IN_TARGETS_FILE_MODE]: kind:"file" entry skipped (not supported via --targets-file): ${entry.target_path}\n`
+        );
+        continue;
+      }
 
       // Resolve relative target_path against cwd (critical contract for project-level sync).
       // Absolute paths and ~ paths use existing expansion logic (expandHome).

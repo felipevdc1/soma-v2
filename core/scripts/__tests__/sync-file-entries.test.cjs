@@ -339,3 +339,64 @@ test('ledger key: a ~-prefixed target_path is recorded verbatim in the ledger, n
     `ledger key must be the verbatim "${tildeTargetPath}" string, not the expanded path. Keys present: ${Object.keys(ledger.installedFiles).join(', ')}`
   );
 });
+
+// ── --targets-file mode: skipped file entries must be AUDIBLE ─────────────
+//
+// kind:"file" is out of scope for --targets-file mode (not part of the
+// fixed CLI surface — see the comment above the skip in sync.cjs's
+// --targets-file loop). The skip itself is correct and unchanged; what was
+// missing is that it was silent. AC-10's own point at small scale: a mute
+// `continue` reads, from the terminal, identically to "no file entries
+// were present at all" — the same shape of bug that left 6 hooks invisible
+// to `doctor` for 3 months. Requested by the orchestrator after reviewing
+// T-07's GREEN commit.
+
+function createTargetsFileFixture(name, { entries }) {
+  const fixtureDir = path.join(FIXTURE_BASE, name);
+  const somaHome = path.join(fixtureDir, 'soma-home');
+  fs.mkdirSync(somaHome, { recursive: true });
+  fs.writeFileSync(path.join(somaHome, 'manifest.json'), JSON.stringify({ schema: 'soma-manifest/v1', version: '2.1.0', files: [] }));
+
+  const targetsFilePath = path.join(fixtureDir, 'install-targets.custom.json');
+  fs.writeFileSync(targetsFilePath, JSON.stringify({
+    schema: 'soma-install-targets/v1',
+    tool: 'claude',
+    entries,
+  }, null, 2));
+
+  return { somaHome, targetsFilePath, fixtureDir };
+}
+
+test('--targets-file mode: a skipped kind:"file" entry emits an audible stderr warning naming its target_path', () => {
+  const skippedTargetPath = path.join(FIXTURE_BASE, 'targets-file-warn', 'hook.cjs');
+  const { somaHome, targetsFilePath } = createTargetsFileFixture('targets-file-warn', {
+    entries: [fileEntry('hooks/hook.cjs', skippedTargetPath)],
+  });
+
+  const dry = runSync(['--dry-run', '--json', '--tool=claude', `--soma-home=${somaHome}`, `--targets-file=${targetsFilePath}`]);
+
+  assert.match(dry.stderr, /WARNING \[FILE_ENTRY_UNSUPPORTED_IN_TARGETS_FILE_MODE\]/, `expected an audible warning on stderr, got: ${dry.stderr}`);
+  assert.ok(dry.stderr.includes(skippedTargetPath), `warning must name the skipped entry's target_path. stderr: ${dry.stderr}`);
+
+  // stdout must still be valid, parseable JSON — the warning must never
+  // leak into stdout (install.cjs parses this stream).
+  const out = JSON.parse(dry.stdout);
+  assert.equal(out.tool, 'sync');
+});
+
+test('--targets-file mode: no warning is emitted when there are no kind:"file" entries to skip', () => {
+  const blockTargetPath = path.join(FIXTURE_BASE, 'targets-file-no-warn', 'CLAUDE.md');
+  const { somaHome, targetsFilePath } = createTargetsFileFixture('targets-file-no-warn', {
+    entries: [
+      { block_id: 'block.claude.CLAUDE_md.cbm', source_doc: 'docs/cbm.md', target_path: blockTargetPath, target_anchor_id: 'block.claude.CLAUDE_md.cbm' },
+    ],
+  });
+  fs.mkdirSync(path.join(somaHome, 'docs'), { recursive: true });
+  fs.writeFileSync(path.join(somaHome, 'docs', 'cbm.md'), '<!-- soma-v2:start id=block.claude.CLAUDE_md.cbm version=1.0 -->\n# x\n<!-- soma-v2:end id=block.claude.CLAUDE_md.cbm -->');
+
+  const dry = runSync(['--dry-run', '--json', '--tool=claude', `--soma-home=${somaHome}`, `--targets-file=${targetsFilePath}`]);
+
+  assert.equal(dry.stderr.includes('FILE_ENTRY_UNSUPPORTED_IN_TARGETS_FILE_MODE'), false, `no file entries present -> no warning expected. stderr: ${dry.stderr}`);
+  const out = JSON.parse(dry.stdout);
+  assert.equal(out.tool, 'sync');
+});
