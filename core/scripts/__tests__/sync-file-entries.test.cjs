@@ -48,11 +48,12 @@ function sha256(content) {
   return crypto.createHash('sha256').update(content).digest('hex');
 }
 
-function runSync(args, envOverrides) {
+function runSync(args, envOverrides, spawnOptOverrides) {
   return spawnSync('node', [SYNC_CJS, ...args], {
     env: { ...process.env, ...envOverrides },
     encoding: 'utf8',
     timeout: 15000,
+    ...spawnOptOverrides,
   });
 }
 
@@ -63,16 +64,29 @@ function runSync(args, envOverrides) {
  * `<somaHome>/<relPath>` for each `[relPath, content]` pair — that is what
  * kind:"file" entries' source_path resolves against (planFileInstallSafe
  * uses repoRoot=somaHome, matching how block source_doc already resolves
- * against somaHome in computeEntryAction).
+ * against somaHome in computeEntryAction — that did NOT change).
  *
- * @returns {{ somaHome: string, targetsDir: string }}
+ * Also builds `projectDir`, a directory DISTINCT from `somaHome` — the
+ * ledger root fix (this commit) makes the file-entry ledger land at
+ * `process.cwd()`, not `--soma-home`, matching how install.cjs invokes
+ * sync.cjs (`cwd: projectPathAbs`, never `somaHome`). Every runSync() call
+ * that applies (writes) or reads back ledger state MUST pass
+ * `{ cwd: projectDir }` explicitly — spawnSync without an explicit `cwd`
+ * inherits the test runner's OWN cwd, which would write `.soma/` into
+ * wherever `npm test` happens to run from. Two SEPARATE directories here
+ * is deliberate, not incidental: a test that (by accident) used the same
+ * dir for both would pass even with the old, wrong code.
+ *
+ * @returns {{ somaHome: string, targetsDir: string, projectDir: string }}
  */
 function createFixture(name, { entries, sourceFiles = [] }) {
   const fixtureDir = path.join(FIXTURE_BASE, name);
   const somaHome = path.join(fixtureDir, 'soma-home');
   const targetsDir = path.join(fixtureDir, 'targets');
+  const projectDir = path.join(fixtureDir, 'project');
   fs.mkdirSync(somaHome, { recursive: true });
   fs.mkdirSync(targetsDir, { recursive: true });
+  fs.mkdirSync(projectDir, { recursive: true });
 
   fs.writeFileSync(path.join(somaHome, 'manifest.json'), JSON.stringify({ schema: 'soma-manifest/v1', version: '2.1.0', files: [] }));
 
@@ -90,7 +104,7 @@ function createFixture(name, { entries, sourceFiles = [] }) {
     entries,
   }, null, 2));
 
-  return { somaHome, targetsDir, fixtureDir };
+  return { somaHome, targetsDir, projectDir, fixtureDir };
 }
 
 function fileEntry(sourceRel, targetAbs) {
@@ -102,17 +116,17 @@ function fileEntry(sourceRel, targetAbs) {
 test('AC-01: kind:"file" entry with no prior install copies source to target byte-for-byte', () => {
   const content = 'module.exports = { guard: true };\n';
   const targetPath = path.join(FIXTURE_BASE, 'ac01-not-yet-created', 'framework-guard.cjs');
-  const { somaHome } = createFixture('ac01', {
+  const { somaHome, projectDir } = createFixture('ac01', {
     sourceFiles: [['hooks/framework-guard.cjs', content]],
     entries: [fileEntry('hooks/framework-guard.cjs', targetPath)],
   });
 
-  const dry = runSync(['--dry-run', '--json', '--tool=claude', `--soma-home=${somaHome}`]);
+  const dry = runSync(['--dry-run', '--json', '--tool=claude', `--soma-home=${somaHome}`], {}, { cwd: projectDir });
   const dryOut = JSON.parse(dry.stdout);
   const finding = dryOut.findings.find((f) => f.kind === 'file');
   assert.equal(finding.action, 'insert', `expected insert for a never-installed file, got: ${JSON.stringify(finding)}`);
 
-  const apply = runSync(['--apply', '--json', '--tool=claude', '--allow-local-edits', `--soma-home=${somaHome}`]);
+  const apply = runSync(['--apply', '--json', '--tool=claude', '--allow-local-edits', `--soma-home=${somaHome}`], {}, { cwd: projectDir });
   assert.equal(apply.status, 0, `apply should succeed: stdout=${apply.stdout} stderr=${apply.stderr}`);
   assert.equal(fs.existsSync(targetPath), true, 'target must exist after apply');
   assert.deepEqual(fs.readFileSync(targetPath), Buffer.from(content), 'target content must be byte-identical to source');
@@ -132,11 +146,11 @@ test('AC-02: block entry finding (action + message) is identical whether or not 
   const blockOnlyEntries = [
     { block_id: 'block.claude.CLAUDE_md.cbm', source_doc: 'docs/cbm.md', target_path: blockTargetPath, target_anchor_id: 'block.claude.CLAUDE_md.cbm' },
   ];
-  const { somaHome: somaHomeBlockOnly } = createFixture('ac02-block-only', {
+  const { somaHome: somaHomeBlockOnly, projectDir: projectDirBlockOnly } = createFixture('ac02-block-only', {
     sourceFiles: [['docs/cbm.md', `<!-- soma-v2:start id=block.claude.CLAUDE_md.cbm version=1.0 -->\n${blockSourceContent}\n<!-- soma-v2:end id=block.claude.CLAUDE_md.cbm -->`]],
     entries: blockOnlyEntries,
   });
-  const dryBlockOnly = JSON.parse(runSync(['--dry-run', '--json', '--tool=claude', `--soma-home=${somaHomeBlockOnly}`]).stdout);
+  const dryBlockOnly = JSON.parse(runSync(['--dry-run', '--json', '--tool=claude', `--soma-home=${somaHomeBlockOnly}`], {}, { cwd: projectDirBlockOnly }).stdout);
 
   const fileContent = 'module.exports = {};\n';
   const fileTargetPath = path.join(FIXTURE_BASE, 'ac02-target-mixed', 'hook.cjs');
@@ -144,14 +158,14 @@ test('AC-02: block entry finding (action + message) is identical whether or not 
     { block_id: 'block.claude.CLAUDE_md.cbm', source_doc: 'docs/cbm.md', target_path: blockTargetPath, target_anchor_id: 'block.claude.CLAUDE_md.cbm' },
     fileEntry('hooks/hook.cjs', fileTargetPath),
   ];
-  const { somaHome: somaHomeMixed } = createFixture('ac02-mixed', {
+  const { somaHome: somaHomeMixed, projectDir: projectDirMixed } = createFixture('ac02-mixed', {
     sourceFiles: [
       ['docs/cbm.md', `<!-- soma-v2:start id=block.claude.CLAUDE_md.cbm version=1.0 -->\n${blockSourceContent}\n<!-- soma-v2:end id=block.claude.CLAUDE_md.cbm -->`],
       ['hooks/hook.cjs', fileContent],
     ],
     entries: mixedEntries,
   });
-  const dryMixed = JSON.parse(runSync(['--dry-run', '--json', '--tool=claude', `--soma-home=${somaHomeMixed}`]).stdout);
+  const dryMixed = JSON.parse(runSync(['--dry-run', '--json', '--tool=claude', `--soma-home=${somaHomeMixed}`], {}, { cwd: projectDirMixed }).stdout);
 
   const blockFindingAlone = dryBlockOnly.findings.find((f) => f.target_anchor_id === 'block.claude.CLAUDE_md.cbm');
   const blockFindingMixed = dryMixed.findings.find((f) => f.target_anchor_id === 'block.claude.CLAUDE_md.cbm');
@@ -171,24 +185,24 @@ test('AC-03: installed file with source changed since install is overwritten wit
   const oldContent = 'module.exports = { v: 1 };\n';
   const newContent = 'module.exports = { v: 2 };\n';
   const targetPath = path.join(FIXTURE_BASE, 'ac03-target', 'hook.cjs');
-  const { somaHome } = createFixture('ac03', {
+  const { somaHome, projectDir } = createFixture('ac03', {
     sourceFiles: [['hooks/hook.cjs', oldContent]],
     entries: [fileEntry('hooks/hook.cjs', targetPath)],
   });
 
   // First install.
-  let apply = runSync(['--apply', '--json', '--tool=claude', '--allow-local-edits', `--soma-home=${somaHome}`]);
+  let apply = runSync(['--apply', '--json', '--tool=claude', '--allow-local-edits', `--soma-home=${somaHome}`], {}, { cwd: projectDir });
   assert.equal(apply.status, 0, `first apply should succeed: ${apply.stdout} ${apply.stderr}`);
   assert.deepEqual(fs.readFileSync(targetPath), Buffer.from(oldContent));
 
   // Source changes in the repo; target on disk is untouched by the user.
   fs.writeFileSync(path.join(somaHome, 'hooks', 'hook.cjs'), newContent);
 
-  const dry = JSON.parse(runSync(['--dry-run', '--json', '--tool=claude', `--soma-home=${somaHome}`]).stdout);
+  const dry = JSON.parse(runSync(['--dry-run', '--json', '--tool=claude', `--soma-home=${somaHome}`], {}, { cwd: projectDir }).stdout);
   const finding = dry.findings.find((f) => f.kind === 'file');
   assert.equal(finding.action, 'replace', 'source changed since install -> replace, not insert or drift');
 
-  apply = runSync(['--apply', '--json', '--tool=claude', '--allow-local-edits', `--soma-home=${somaHome}`]);
+  apply = runSync(['--apply', '--json', '--tool=claude', '--allow-local-edits', `--soma-home=${somaHome}`], {}, { cwd: projectDir });
   assert.equal(apply.status, 0, `second apply should succeed without any prompt/flag: ${apply.stdout} ${apply.stderr}`);
   assert.deepEqual(fs.readFileSync(targetPath), Buffer.from(newContent), 'target must now match the NEW source content');
 });
@@ -204,7 +218,7 @@ test('AC-04: one diverged file among several aborts the entire file apply — no
   // Present on disk, but SOMA never installed it (no ledger entry) -> diverged.
   fs.writeFileSync(divergedTarget, 'a user already had this file before SOMA existed\n');
 
-  const { somaHome } = createFixture('ac04', {
+  const { somaHome, projectDir } = createFixture('ac04', {
     sourceFiles: [
       ['hooks/clean-hook.cjs', cleanContent],
       ['hooks/foreign-hook.cjs', otherContent],
@@ -216,7 +230,7 @@ test('AC-04: one diverged file among several aborts the entire file apply — no
   });
 
   const beforeDiverged = fs.readFileSync(divergedTarget);
-  const apply = runSync(['--apply', '--json', '--tool=claude', '--allow-local-edits', `--soma-home=${somaHome}`]);
+  const apply = runSync(['--apply', '--json', '--tool=claude', '--allow-local-edits', `--soma-home=${somaHome}`], {}, { cwd: projectDir });
 
   assert.equal(apply.status, 2, `expected exit 2 on file divergence, got ${apply.status}. stdout=${apply.stdout} stderr=${apply.stderr}`);
   const out = JSON.parse(apply.stdout);
@@ -238,12 +252,12 @@ test('AC-05: files inside the same target directory that no entry declares are l
   fs.writeFileSync(undeclaredFile, undeclaredContent);
 
   const declaredTarget = path.join(targetsDir, 'declared-hook.cjs');
-  const { somaHome } = createFixture('ac05', {
+  const { somaHome, projectDir } = createFixture('ac05', {
     sourceFiles: [['hooks/declared-hook.cjs', declaredContent]],
     entries: [fileEntry('hooks/declared-hook.cjs', declaredTarget)],
   });
 
-  const apply = runSync(['--apply', '--json', '--tool=claude', '--allow-local-edits', `--soma-home=${somaHome}`]);
+  const apply = runSync(['--apply', '--json', '--tool=claude', '--allow-local-edits', `--soma-home=${somaHome}`], {}, { cwd: projectDir });
   assert.equal(apply.status, 0, `apply should succeed: ${apply.stdout} ${apply.stderr}`);
 
   assert.deepEqual(fs.readFileSync(undeclaredFile), Buffer.from(undeclaredContent), 'undeclared sibling file must be byte-for-byte unchanged');
@@ -257,23 +271,23 @@ test('AC-05: files inside the same target directory that no entry declares are l
 test('idempotency: running --apply twice with no source changes performs zero writes on the second run', () => {
   const content = 'module.exports = { stable: true };\n';
   const targetPath = path.join(FIXTURE_BASE, 'idempotency-target', 'hook.cjs');
-  const { somaHome } = createFixture('idempotency', {
+  const { somaHome, projectDir } = createFixture('idempotency', {
     sourceFiles: [['hooks/hook.cjs', content]],
     entries: [fileEntry('hooks/hook.cjs', targetPath)],
   });
 
-  const first = runSync(['--apply', '--json', '--tool=claude', '--allow-local-edits', `--soma-home=${somaHome}`]);
+  const first = runSync(['--apply', '--json', '--tool=claude', '--allow-local-edits', `--soma-home=${somaHome}`], {}, { cwd: projectDir });
   assert.equal(first.status, 0);
   const firstOut = JSON.parse(first.stdout);
   assert.equal(firstOut.summary.files_touched.length >= 0, true); // sanity: block summary unaffected either way
 
   const mtimeBefore = fs.statSync(targetPath).mtimeMs;
 
-  const dry = JSON.parse(runSync(['--dry-run', '--json', '--tool=claude', `--soma-home=${somaHome}`]).stdout);
+  const dry = JSON.parse(runSync(['--dry-run', '--json', '--tool=claude', `--soma-home=${somaHome}`], {}, { cwd: projectDir }).stdout);
   const finding = dry.findings.find((f) => f.kind === 'file');
   assert.equal(finding.action, 'skip', 'second run with no repo changes must classify the file as skip');
 
-  const second = runSync(['--apply', '--json', '--tool=claude', '--allow-local-edits', `--soma-home=${somaHome}`]);
+  const second = runSync(['--apply', '--json', '--tool=claude', '--allow-local-edits', `--soma-home=${somaHome}`], {}, { cwd: projectDir });
   assert.equal(second.status, 0);
   const mtimeAfter = fs.statSync(targetPath).mtimeMs;
   assert.equal(mtimeAfter, mtimeBefore, 'file must not have been rewritten on the second, no-op apply');
@@ -292,23 +306,71 @@ test('symlink guard: a target_path that already exists as a symlink is refused, 
   const targetPath = path.join(targetsDir, 'hook.cjs');
   fs.symlinkSync(outsideFile, targetPath);
 
-  const { somaHome } = createFixture('symlink', {
+  const { somaHome, projectDir } = createFixture('symlink', {
     sourceFiles: [['hooks/hook.cjs', content]],
     entries: [fileEntry('hooks/hook.cjs', targetPath)],
   });
 
-  const dry = JSON.parse(runSync(['--dry-run', '--json', '--tool=claude', `--soma-home=${somaHome}`]).stdout);
+  const dry = JSON.parse(runSync(['--dry-run', '--json', '--tool=claude', `--soma-home=${somaHome}`], {}, { cwd: projectDir }).stdout);
   const finding = dry.findings.find((f) => f.kind === 'file');
   assert.equal(finding.action, 'drift', 'a symlinked target must be treated as diverged/drift even before any write is attempted');
 
   const beforeOutside = fs.readFileSync(outsideFile);
-  const apply = runSync(['--apply', '--json', '--tool=claude', '--allow-local-edits', `--soma-home=${somaHome}`]);
+  const apply = runSync(['--apply', '--json', '--tool=claude', '--allow-local-edits', `--soma-home=${somaHome}`], {}, { cwd: projectDir });
   assert.equal(apply.status, 2, `expected abort on symlinked target: ${apply.stdout} ${apply.stderr}`);
   const out = JSON.parse(apply.stdout);
   assert.equal(out.error.code, 'FILE_CONFLICT');
 
   assert.equal(fs.lstatSync(targetPath).isSymbolicLink(), true, 'the symlink itself must still be a symlink (never replaced with a regular file)');
   assert.deepEqual(fs.readFileSync(outsideFile), beforeOutside, 'the file the symlink points to must be byte-for-byte untouched — write must never follow the symlink');
+});
+
+// ── Ledger root is process.cwd(), never --soma-home ────────────────────────
+//
+// Reopened T-07: the ledger was landing at --soma-home (the repo/adapters
+// root), not process.cwd() (the project the user is actually installing
+// into). install.cjs always invokes sync.cjs with `cwd: projectPathAbs`
+// and `--soma-home=SOURCE_CORE` (the repo dir) — two DIFFERENT
+// directories in every real invocation — so the old code wrote
+// install-state.json under the repo, not the project, silently splitting
+// the ledger install.cjs and sync.cjs each believe they own. Caught by
+// T-05 (install-files-ledger.test.cjs, skipped case "T-05-06"), which
+// could not fix it without touching sync.cjs (out of T-05's scope).
+//
+// somaHome and projectDir must be DIFFERENT directories on purpose — if a
+// test used the same dir for both, it would pass even with the old, wrong
+// code (the very trap the orchestrator named when reopening this task).
+
+test('ledger root: install-state.json for kind:"file" entries lands at process.cwd() (the project dir), never at --soma-home', () => {
+  const content = 'module.exports = {};\n';
+  const targetPath = path.join(FIXTURE_BASE, 'ledger-root-target', 'hook.cjs');
+  const { somaHome, projectDir } = createFixture('ledger-root', {
+    sourceFiles: [['hooks/hook.cjs', content]],
+    entries: [fileEntry('hooks/hook.cjs', targetPath)],
+  });
+
+  assert.notEqual(
+    path.resolve(projectDir), path.resolve(somaHome),
+    'sanity: cwd and --soma-home must be DIFFERENT directories, or this test proves nothing'
+  );
+
+  const apply = runSync(
+    ['--apply', '--json', '--tool=claude', '--allow-local-edits', `--soma-home=${somaHome}`],
+    {},
+    { cwd: projectDir }
+  );
+  assert.equal(apply.status, 0, `apply should succeed: ${apply.stdout} ${apply.stderr}`);
+
+  const ledgerAtCwd = path.join(projectDir, '.soma', 'install-state.json');
+  const ledgerAtSomaHome = path.join(somaHome, '.soma', 'install-state.json');
+  assert.equal(
+    fs.existsSync(ledgerAtCwd), true,
+    `ledger must be written at process.cwd() (${projectDir}), the project dir — matching how install.cjs invokes sync.cjs with cwd: projectPathAbs`
+  );
+  assert.equal(
+    fs.existsSync(ledgerAtSomaHome), false,
+    `ledger must NOT be written at --soma-home (${somaHome}) — that is where adapters/source_doc live, not the project ledger`
+  );
 });
 
 // ── Ledger key stays verbatim (~-prefixed), never expanded ────────────────
@@ -320,19 +382,26 @@ test('ledger key: a ~-prefixed target_path is recorded verbatim in the ledger, n
   const relTarget = '.claude/hooks/hook.cjs';
   const tildeTargetPath = `~/${relTarget}`;
 
-  const { somaHome } = createFixture('verbatim-key', {
+  const { somaHome, projectDir } = createFixture('verbatim-key', {
     sourceFiles: [['hooks/hook.cjs', content]],
     entries: [fileEntry('hooks/hook.cjs', tildeTargetPath)],
   });
 
   const apply = runSync(
     ['--apply', '--json', '--tool=claude', '--allow-local-edits', `--soma-home=${somaHome}`],
-    { HOME: fakeHomeDir }
+    { HOME: fakeHomeDir },
+    { cwd: projectDir }
   );
   assert.equal(apply.status, 0, `apply should succeed: ${apply.stdout} ${apply.stderr}`);
   assert.deepEqual(fs.readFileSync(path.join(fakeHomeDir, relTarget)), Buffer.from(content), 'file must land at the ~-expanded real path on disk');
 
-  const ledgerPath = path.join(somaHome, '.soma', 'install-state.json');
+  // Ledger root fix: the ledger lives at process.cwd() (projectDir), NOT
+  // --soma-home — matching how install.cjs invokes sync.cjs
+  // (cwd: projectPathAbs). See the "ledger root" test below for the
+  // dedicated proof; this assertion only needed to move to the new
+  // location to keep testing what it always meant to test (the KEY, not
+  // the file's location).
+  const ledgerPath = path.join(projectDir, '.soma', 'install-state.json');
   const ledger = JSON.parse(fs.readFileSync(ledgerPath, 'utf8'));
   assert.ok(
     Object.prototype.hasOwnProperty.call(ledger.installedFiles, tildeTargetPath),
