@@ -165,7 +165,7 @@ fi
 # ── Phases 3–5: Hooks, commands, templates, output-styles ───────────────────
 echo "[SOMA] Phase 3-5: Copy hooks / commands / templates / output-styles..."
 run "mkdir -p \"${HOME}/.claude/hooks/lib\" \"${HOME}/.claude/commands\" \"${HOME}/.claude/templates\" \"${HOME}/.claude/output-styles\""
-run "rsync -a \"${REPO_ROOT}/hooks/\" \"${HOME}/.claude/hooks/\""
+run "rsync -a \"${REPO_ROOT}/core/hooks/\" \"${HOME}/.claude/hooks/\""
 run "rsync -a \"${REPO_ROOT}/commands/\" \"${HOME}/.claude/commands/\""
 run "rsync -a \"${REPO_ROOT}/templates/\" \"${HOME}/.claude/templates/\""
 run "rsync -a \"${REPO_ROOT}/output-styles/\" \"${HOME}/.claude/output-styles/\""

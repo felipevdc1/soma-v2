@@ -16,6 +16,6 @@
     "node": ">=22"
   },
   "scripts": {
-    "test": "node --test core/scripts/__tests__/*.test.cjs hooks/__tests__/*.test.cjs"
+    "test": "node --test core/scripts/__tests__/*.test.cjs core/hooks/__tests__/*.test.cjs"
   }
 }

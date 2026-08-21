@@ -47,10 +47,17 @@ function getSessionId() {
 // the file at any depth, but NOT the contents of `constitution-amendments/`
 // (that directory's last path segment is the amendment's own `.md` name, not
 // something starting with "constitution"); `**/constitution*/**` closes that
-// half. `hooks/**`, `core/scripts/**`, and `install/**` are directory
+// half. `core/hooks/**`, `core/scripts/**`, and `install/**` are directory
 // prefixes, unaffected by the fix).
+//
+// `core/hooks/**` (T-08a / D-018-07, 2026-08-21): was the literal `hooks/**`
+// until the repo layout moved hooks/ under core/hooks/ (git mv). A literal
+// prefix pattern has no leading `**/`, so it does NOT match paths under the
+// new location on its own — this exact silent-failure risk is why the move
+// and this pattern update are the same task: `core/hooks/x.cjs` would stop
+// being protected without a single test going red.
 const PROTECTED_PATTERNS = [
-  'hooks/**',
+  'core/hooks/**',
   'core/scripts/**',
   '**/constitution*',
   '**/constitution*/**',

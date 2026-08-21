@@ -15,7 +15,7 @@
  *     AC-10 invariant: no error/absence/unreadability path may ever exit 0.
  *     This file's [SPEC:AC-10] tag covers ONLY the "illegible artifact"
  *     slice (corrupt JSON). The "external check never runs" slice is T-15's
- *     (hooks/spec-test-traceability.cjs), already DONE — not touched here.
+ *     (core/hooks/spec-test-traceability.cjs), already DONE — not touched here.
  *
  *   soma run gate [--run <runId>] --validate <taskId> --validator <agentName>
  *     Thin wrapper around run/validator-invariant.cjs's

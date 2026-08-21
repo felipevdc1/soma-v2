@@ -84,7 +84,7 @@ SOMA ships **17 SOMA-CORE hooks** installed to `~/.claude/hooks/` — 16 event-r
 
 **Note on `spec-test-traceability.cjs`:** **Atualizado em 2026-08-16 (spec 016, T-15).** Este hook era, até então, apenas um *utility callable* — invocado via `--check-red-phase` ou `SOMA_RED_PHASE_STRICT=1`, e **ausente** das registrações de evento em `soma-hooks-map.json`. Esta nota dizia exatamente isso, e contradizia a tabela acima. **A partir da T-15 ele É registrado** sob `PreToolUse` matcher `Bash`, e a tabela passou a ser a versão correta. O registro é **prova de wiring, não enforcement**: o hook sai `0` imediatamente quando invocado sem argv (o caso PreToolUse), sem ler stdin nem tocar disco — o enforcement do AC-10 vive no exit code e no payload do modo CLI (`validate <specPath>`), lido pelo `STEP_5_VALIDATE`. Registrar um não-gate no mapa de gates é uma tensão de design reconhecida e registrada, não um descuido.
 
-Hooks in `hooks/lib/` are shared utilities: `auto-load-modules.cjs` (module resolution), `context-tracker.cjs` (in-flight agent accounting).
+Hooks in `core/hooks/lib/` are shared utilities: `auto-load-modules.cjs` (module resolution), `context-tracker.cjs` (in-flight agent accounting).
 
 ---
 

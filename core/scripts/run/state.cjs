@@ -85,7 +85,7 @@ const REPORT_ENTRY_SCHEMA = {
 
 // ── Helpers ─────────────────────────────────────────────────────────────
 
-/** Same convention as hooks/spec-completeness-gate.cjs's getSessionId(). */
+/** Same convention as core/hooks/spec-completeness-gate.cjs's getSessionId(). */
 function getSessionId() {
   return process.env.CK_SESSION_ID || process.env.CLAUDE_SESSION_ID || `pid-${process.ppid}`;
 }

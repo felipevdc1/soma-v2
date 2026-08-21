@@ -32,7 +32,16 @@ const os = require('node:os');
 const path = require('node:path');
 
 const HOOK = path.join(__dirname, '..', 'framework-guard.cjs');
-const HOOKS_MAP = path.join(__dirname, '..', '..', 'install', 'soma-hooks-map.json');
+// T-08a/D-018-07: hooks/ moved to core/hooks/, but install/soma-hooks-map.json
+// did NOT move — it stays at the repo root. __dirname is now
+// <repo>/core/hooks/__tests__, so reaching the repo root takes THREE '..'
+// (__tests__ -> hooks -> core -> repo root), not two. Left at two, this
+// resolves to <repo>/core/install/soma-hooks-map.json, which does not
+// exist — a loud ENOENT in the registry test below, not a silent gap, but
+// a regression this move would otherwise introduce with zero warning from
+// the move itself (discovered while executing T-08a, not listed among the
+// task's original 5 points).
+const HOOKS_MAP = path.join(__dirname, '..', '..', '..', 'install', 'soma-hooks-map.json');
 
 // ── fixtures ────────────────────────────────────────────────────────────
 
@@ -111,10 +120,10 @@ test('CONTRACT: staged em hooks/** sem marker -> exit 2 listando o path', async 
   const repo = initTmpRepo();
   const sessionId = `fw-t1-${process.pid}-${Date.now()}`;
   try {
-    stageFile(repo, 'hooks/thermal-guard.cjs'); // exemplo do próprio AC-07 no spec.md
+    stageFile(repo, 'core/hooks/thermal-guard.cjs'); // exemplo do próprio AC-07 no spec.md
     const { code, stderr } = await runHook({ cwd: repo, sessionId });
     assert.equal(code, 2, `esperava exit 2, veio ${code}. stderr: ${stderr}`);
-    assert.ok(stderr.includes('hooks/thermal-guard.cjs'), `esperava o path ofensor na stderr, veio: ${stderr}`);
+    assert.ok(stderr.includes('core/hooks/thermal-guard.cjs'), `esperava o path ofensor na stderr, veio: ${stderr}`);
   } finally {
     cleanup(repo);
   }
@@ -124,12 +133,12 @@ test('CONTRACT: CONTEÚDO — a stderr nomeia cada path ofensor, não só "bloqu
   const repo = initTmpRepo();
   const sessionId = `fw-t2-${process.pid}-${Date.now()}`;
   try {
-    stageFile(repo, 'hooks/foo.cjs');
+    stageFile(repo, 'core/hooks/foo.cjs');
     stageFile(repo, 'core/scripts/bar.cjs');
     const { code, stderr } = await runHook({ cwd: repo, sessionId });
     assert.equal(code, 2, `esperava exit 2, veio ${code}. stderr: ${stderr}`);
     const lines = stderr.split('\n');
-    assert.ok(lines.some(l => l.includes('hooks/foo.cjs')), `esperava linha citando hooks/foo.cjs, stderr: ${stderr}`);
+    assert.ok(lines.some(l => l.includes('core/hooks/foo.cjs')), `esperava linha citando core/hooks/foo.cjs, stderr: ${stderr}`);
     assert.ok(lines.some(l => l.includes('core/scripts/bar.cjs')), `esperava linha citando core/scripts/bar.cjs, stderr: ${stderr}`);
   } finally {
     cleanup(repo);
@@ -193,12 +202,12 @@ test('CONTRACT: AC-13 — com marker -> exit 0 E stderr declara o override', asy
   const sessionId = `fw-t4-${process.pid}-${Date.now()}`;
   const marker = writeMarker(os.tmpdir(), sessionId);
   try {
-    stageFile(repo, 'hooks/foo.cjs');
+    stageFile(repo, 'core/hooks/foo.cjs');
     stageFile(repo, 'constitution.md');
     const { code, stderr } = await runHook({ cwd: repo, sessionId });
     assert.equal(code, 0, `esperava exit 0 com marker presente, veio ${code}. stderr: ${stderr}`);
     assert.notEqual(stderr.trim(), '', 'AC-13: o override nunca é silencioso — esperava stderr declarando o override, veio vazio');
-    assert.ok(stderr.includes('hooks/foo.cjs'), `esperava os paths liberados citados na stderr, veio: ${stderr}`);
+    assert.ok(stderr.includes('core/hooks/foo.cjs'), `esperava os paths liberados citados na stderr, veio: ${stderr}`);
     assert.ok(stderr.includes('constitution.md'), `esperava os paths liberados citados na stderr, veio: ${stderr}`);
   } finally {
     cleanup(repo, marker);
@@ -211,7 +220,7 @@ test('CONTRACT: marker de OUTRA sessão não libera — continua bloqueando', as
   const sessionB = `fw-t5-b-${process.pid}-${Date.now()}`;
   const marker = writeMarker(os.tmpdir(), sessionA);
   try {
-    stageFile(repo, 'hooks/foo.cjs');
+    stageFile(repo, 'core/hooks/foo.cjs');
     const { code, stderr } = await runHook({ cwd: repo, sessionId: sessionB });
     assert.equal(code, 2, `esperava exit 2 (marker é da sessão ${sessionA}, hook roda como ${sessionB}), veio ${code}. stderr: ${stderr}`);
   } finally {
@@ -227,7 +236,7 @@ test('CONTRACT: sessionId vem de env var, não de stdin', async () => {
   const sessionStdin = `fw-t6-stdin-${process.pid}-${Date.now()}`; // TEM marker
   const marker = writeMarker(os.tmpdir(), sessionStdin);
   try {
-    stageFile(repo, 'hooks/foo.cjs');
+    stageFile(repo, 'core/hooks/foo.cjs');
     // Payload PreToolUse real carrega session_id no topo — o hook TEM que
     // ignorá-lo e usar CK_SESSION_ID/CLAUDE_SESSION_ID. Se ele lesse do
     // stdin, acharia o marker de sessionStdin e liberaria por engano.
@@ -253,7 +262,7 @@ test('CONTRACT: usa os.tmpdir(), não /tmp hardcoded — TMPDIR alterado é onde
   assert.notEqual(customTmpA, customTmpB);
   writeMarker(customTmpA, sessionId); // marker só existe em A, não em B
   try {
-    stageFile(repo, 'hooks/foo.cjs');
+    stageFile(repo, 'core/hooks/foo.cjs');
 
     // Positivo: TMPDIR=A (tem o marker) -> libera
     const positive = await runHook({ cwd: repo, sessionId, tmpdir: customTmpA });

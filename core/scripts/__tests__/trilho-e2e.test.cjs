@@ -34,7 +34,7 @@ const path = require('node:path');
 
 const REPO_ROOT = path.resolve(__dirname, '..', '..', '..');
 const RUN_CLI = path.resolve(__dirname, '..', 'run.cjs');
-const FRAMEWORK_GUARD = path.resolve(REPO_ROOT, 'hooks', 'framework-guard.cjs');
+const FRAMEWORK_GUARD = path.resolve(REPO_ROOT, 'core', 'hooks', 'framework-guard.cjs');
 const { resolveSomaPaths } = require(path.resolve(__dirname, '..', 'run', 'paths.cjs'));
 
 // ── Helpers ──────────────────────────────────────────────────────────────
@@ -179,14 +179,17 @@ test('E2E (c): git commit staged em path protegido -> exit 2 listando o path; pa
     assert.equal(clean.stderr.trim(), '', `esperava silêncio, veio: ${clean.stderr}`);
     execFileSync('git', ['reset'], { cwd: dir });
 
-    // Positivo: path protegido.
-    fs.mkdirSync(path.join(dir, 'hooks'), { recursive: true });
-    fs.writeFileSync(path.join(dir, 'hooks', 'sneaky.cjs'), 'x\n');
-    execFileSync('git', ['add', 'hooks/sneaky.cjs'], { cwd: dir });
+    // Positivo: path protegido. (T-08a/D-018-07: PROTECTED_PATTERNS passou
+    // de `hooks/**` para `core/hooks/**` junto com o git mv do repo real —
+    // o fixture tem que encenar o layout NOVO, senão este teste continuaria
+    // passando por acidente enquanto testa um padrão que não existe mais.)
+    fs.mkdirSync(path.join(dir, 'core', 'hooks'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'core', 'hooks', 'sneaky.cjs'), 'x\n');
+    execFileSync('git', ['add', 'core/hooks/sneaky.cjs'], { cwd: dir });
     const blocked = runFrameworkGuard({ cwd: dir, sessionId });
     assert.equal(blocked.code, 2, `esperava exit 2 (path protegido), veio ${blocked.code}. stderr: ${blocked.stderr}`);
     assert.ok(
-      blocked.stderr.includes('hooks/sneaky.cjs'),
+      blocked.stderr.includes('core/hooks/sneaky.cjs'),
       `stderr tem que nomear o path ofensor, não só "bloqueado". stderr: ${blocked.stderr}`
     );
   } finally {
