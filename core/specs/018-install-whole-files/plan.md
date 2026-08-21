@@ -264,3 +264,11 @@ Nenhum gate violado. **Complexity Tracking:** vazio, de propósito.
 - **O primeiro `soma install` vai abortar, e isso é o AC-04 funcionando.** Dos 19 hooks do repo: 16 estão vivos e byte-idênticos, 1 não está instalado (`framework-guard.cjs`), e 2 divergiram com o repo à frente (`spec-completeness-gate.cjs`, curado pelo K2 da 016; `spec-test-traceability.cjs`, consertado pela T-15). Os 2 divergidos disparam o abort. Reconciliá-los é ação manual do usuário. **Não "consertar" isso relaxando o AC-04.**
 - **`install-state.json` não existe em lugar nenhum** — nem no repo, nem em `~/.soma-v2`. O caminho "primeira instalação" é o caminho comum, não a exceção, e o AC-10 existe porque ausência de state precisa ser distinguível de ausência de drift.
 - **A ordem importa no abort.** A primeira passada avalia **todas** as entries e acumula os divergidos; a mensagem nomeia **todos** de uma vez, não só o primeiro. Abortar no primeiro faria o usuário descobrir os problemas um por rodada.
+
+**O quarteto do instalador desta noite (T-08a/b/c, 2026-08-21) — a mesma doença, quatro formas**: `install.sh` nunca teve um teste de que as suas próprias referências são reais.
+1. `install.sh:168` (hooks) — `rsync` apontando pro `hooks/` antigo depois do `git mv` da T-08a. Falhava **alto** (exit 23, `set -euo pipefail`).
+2. `install.sh:169` (comandos) — mesma classe, achada pela T-08: `rsync` apontando pro `commands/` que a T-04 apagou. Também falhava alto.
+3. `detect-collisions.cjs` (T-08c pt.1) — sem `--soma-sums`, tratava **ausência de referência** como colisão certa: reporta **demais** (18 falsos positivos vs 2 reais, medido contra o `~/.claude/hooks` real).
+4. `install.sh:117` `2>/dev/null || echo ""` (T-08c pt.2) — qualquer falha do detector virava `COLLISIONS=""` silenciosamente: reporta **de menos**, e de menos é pior porque zero colisões lê como aprovação.
+
+Os dois primeiros são fail-loud por acidente (`set -e` salvou); os dois últimos eram fail-silent por design (um otimista demais, o outro pessimista demais) até esta rodada de tasks. Nenhum dos quatro tinha um teste perguntando "essa referência que o script confia é real?" — é a pergunta que `install-sh-rsync-origins.test.cjs` e `detect-collisions-fail-loud.test.cjs` fazem agora.
