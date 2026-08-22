@@ -63,6 +63,7 @@ const {
   withFakeHome,
   fakeHomeEnv,
 } = require('./helpers/fake-home.cjs');
+const { runInstall: realCliRunInstall } = require('./helpers/cli-run-install.cjs');
 
 const REPO_ROOT = path.resolve(__dirname, '..', '..', '..');
 const INSTALL_CJS = path.join(REPO_ROOT, 'core', 'scripts', 'install.cjs');
@@ -159,6 +160,74 @@ test('HOME-GUARD: an install.cjs run through the isolated helper never touches a
     'install.cjs run through the isolated helper wrote under the decoy ambient HOME. ' +
     'This is exactly the leakage Bucket G exists to prevent — every spawnSync of ' +
     'install.cjs in this suite must go through helpers/fake-home.cjs.'
+  );
+
+  fs.rmSync(decoyAmbientHome, { recursive: true, force: true });
+});
+
+/**
+ * Review round 2 (2026-08-22): the test above only ever proved that ITS
+ * OWN hand-written spawnSync call was safe — never install-cli.contract
+ * .test.cjs's actual, production runInstall(), which at the time had a
+ * real bug (11 call sites spawned install.cjs bare, no HOME isolation at
+ * all). Because those 11 all WRITE successfully rather than fail, the
+ * "does the fixed test pass" framing this whole bucket used never caught
+ * it — a test that writes to the real ~/.claude and then asserts on exit
+ * code / stdout still passes. This second guard closes that blind spot:
+ * it imports and calls the SAME runInstall() the 16 CC-* tests above
+ * depend on (helpers/cli-run-install.cjs), the exact way most of them do
+ * — no explicit env override — and watches a decoy standing in for "the
+ * test process's own ambient $HOME" (never the real one) around that
+ * call.
+ */
+test('HOME-GUARD (real runInstall): install-cli.contract.test.cjs\'s production runInstall() never touches the test process\'s ambient $HOME', () => {
+  // decoyAmbientHome stands in for "whatever process.env.HOME already is
+  // for this test process" — normally the real $HOME of whoever runs
+  // `npm test`. We never read or write the real one; instead we
+  // substitute this decoy for the duration of the call below, so it IS
+  // "the test process's $HOME" for anything that reads
+  // process.env.HOME/os.homedir() without its own override — exactly
+  // the scenario a bare `runInstall([...])` call (no opts.env) is in.
+  const decoyAmbientHome = mkTmp('home-guard-real-runinstall-decoy-');
+  seedSomaHome(decoyAmbientHome);
+
+  const before = fingerprintClaudeGlobals(decoyAmbientHome);
+  assert.deepEqual(
+    before,
+    { hooks: null, commands: null, claudeMd: null },
+    'guard setup: decoy ambient home must start with .claude/{hooks,commands,CLAUDE.md} absent'
+  );
+
+  const projectDir = mkTmp('home-guard-real-runinstall-project-');
+  const savedHome = process.env.HOME;
+  process.env.HOME = decoyAmbientHome;
+  let r;
+  try {
+    // Exactly how CC-02a, CC-03a, CC-04c, etc. call it in
+    // install-cli.contract.test.cjs: no explicit opts.env. If
+    // runInstall() ever regresses to not injecting its own isolated HOME
+    // by default, this call inherits decoyAmbientHome via plain
+    // spawnSync env inheritance and writes there.
+    r = realCliRunInstall([projectDir, '--tool=claude']);
+  } finally {
+    if (savedHome === undefined) delete process.env.HOME;
+    else process.env.HOME = savedHome;
+    fs.rmSync(projectDir, { recursive: true, force: true });
+  }
+
+  assert.equal(
+    r.status, 0,
+    `guard setup: runInstall must succeed. stderr: ${r.stderr}`
+  );
+
+  const after = fingerprintClaudeGlobals(decoyAmbientHome);
+  assert.deepEqual(
+    after,
+    before,
+    'install-cli.contract.test.cjs\'s production runInstall() wrote under the decoy ' +
+    'standing in for the test process\'s ambient $HOME. This is exactly the leakage ' +
+    'the review round 2 measurement found (11 call sites in that file writing 32 ' +
+    'files silently) — runInstall() must isolate every call by default.'
   );
 
   fs.rmSync(decoyAmbientHome, { recursive: true, force: true });
