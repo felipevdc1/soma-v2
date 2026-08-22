@@ -30,15 +30,27 @@ const SCRIPTS_DIR = path.resolve(__dirname, '..');
 const INSTALL_CJS = path.join(SCRIPTS_DIR, 'install.cjs');
 const SOMA_CJS = path.join(SCRIPTS_DIR, 'soma.cjs');
 
+// Bucket G (Spec 018): 17 of this file's tests spawn install.cjs's full
+// pipeline (init.cjs -> manifest.cjs -> sync.cjs), which reaches
+// ~/.claude and ~/.soma-v2 via os.homedir(). Tests that stop before that
+// (argv-only stubs, early-exit validation, lockfile contention that
+// aborts before Step 1) are left untouched — see helpers/fake-home.cjs
+// for the full rationale.
+const { withFakeHome, fakeHomeEnv } = require('./helpers/fake-home.cjs');
+
 /**
  * Run install.cjs directly with given args.
  * @param {string[]} args
+ * @param {object} [opts] spawnSync options override (e.g. { env } from
+ *   fakeHomeEnv(fakeHome) — see helpers/fake-home.cjs — to isolate
+ *   ~/.claude writes inside a withFakeHome() callback)
  * @returns spawnSync result with encoding utf8
  */
-function runInstall(args = []) {
+function runInstall(args = [], opts = {}) {
   return spawnSync('node', [INSTALL_CJS, ...args], {
     encoding: 'utf8',
     timeout: 10000,
+    ...opts,
   });
 }
 
@@ -109,17 +121,19 @@ test('T-01-S3: --merge-claude-md + --replace-claude-md together → exit 1', () 
 // @spec AC-06
 
 test('T-01-S4: path with space and leading hyphen is accepted (exit 0 stub)', () => {
-  // Create a temp dir with space + hyphen in name
-  const baseDir = os.tmpdir();
-  const hyphenDir = path.join(baseDir, '- soma test fresh hyphen');
-  fs.mkdirSync(hyphenDir, { recursive: true });
-  try {
-    const r = runInstall([hyphenDir]);
-    assert.equal(r.status, 0,
-      `Expected exit 0 for path with space+hyphen "${hyphenDir}". Got ${r.status}. stderr: ${r.stderr}`);
-  } finally {
-    try { fs.rmSync(hyphenDir, { recursive: true, force: true }); } catch (_) {}
-  }
+  withFakeHome('t01s4-home-', (fakeHome) => {
+    // Create a temp dir with space + hyphen in name
+    const baseDir = os.tmpdir();
+    const hyphenDir = path.join(baseDir, '- soma test fresh hyphen');
+    fs.mkdirSync(hyphenDir, { recursive: true });
+    try {
+      const r = runInstall([hyphenDir], { env: fakeHomeEnv(fakeHome) });
+      assert.equal(r.status, 0,
+        `Expected exit 0 for path with space+hyphen "${hyphenDir}". Got ${r.status}. stderr: ${r.stderr}`);
+    } finally {
+      try { fs.rmSync(hyphenDir, { recursive: true, force: true }); } catch (_) {}
+    }
+  });
 });
 
 // ── T-01-S5: dispatcher integration — soma install routes to install.cjs ──────
@@ -161,9 +175,11 @@ test('T-07-S1: AC-06 path with leading hyphen and spaces (real existing dir) →
       `parseArgs must have zero errors for valid input. Got: ${JSON.stringify(parsed.errors)}`);
 
     // Subprocess must exit 0 (path exists, valid invocation)
-    const r = runInstall([hyphenPath, '--tool=claude']);
-    assert.equal(r.status, 0,
-      `Expected exit 0 for existing hyphen-space path "${hyphenPath}". Got ${r.status}. stderr: ${r.stderr}`);
+    withFakeHome('t07s1-home-', (fakeHome) => {
+      const r = runInstall([hyphenPath, '--tool=claude'], { env: fakeHomeEnv(fakeHome) });
+      assert.equal(r.status, 0,
+        `Expected exit 0 for existing hyphen-space path "${hyphenPath}". Got ${r.status}. stderr: ${r.stderr}`);
+    });
   } finally {
     try { fs.rmSync(hyphenPath, { recursive: true, force: true }); } catch (_) {}
   }
@@ -246,57 +262,60 @@ test('T-07-S4: resolveProjectPath helper returns absolute path', () => {
  * Runs install on a fresh directory, asserts state file is created with correct schema.
  */
 test('T-09-S1: AC-16 install writes valid install-state.json with required fields', async (t) => {
-  const freshDir = fs.mkdtempSync(path.join(os.tmpdir(), 'soma-t09-state-'));
-  try {
-    const r = spawnSync('node', [INSTALL_CJS, freshDir, '--tool=claude'], {
-      encoding: 'utf8',
-      timeout: 30000,
-    });
+  withFakeHome('t09s1-home-', (fakeHome) => {
+    const freshDir = fs.mkdtempSync(path.join(os.tmpdir(), 'soma-t09-state-'));
+    try {
+      const r = spawnSync('node', [INSTALL_CJS, freshDir, '--tool=claude'], {
+        encoding: 'utf8',
+        timeout: 30000,
+        env: fakeHomeEnv(fakeHome),
+      });
 
-    // Must exit 0 (pipeline success)
-    assert.equal(r.status, 0,
-      `T-09-S1: install must exit 0 for valid greenfield. Got ${r.status}. stderr: ${r.stderr}`);
+      // Must exit 0 (pipeline success)
+      assert.equal(r.status, 0,
+        `T-09-S1: install must exit 0 for valid greenfield. Got ${r.status}. stderr: ${r.stderr}`);
 
-    const stateFile = path.join(freshDir, '.soma', 'install-state.json');
-    assert.ok(
-      fs.existsSync(stateFile),
-      `T-09-S1: [RED — T-09] install-state.json must be created at ${stateFile}`
-    );
+      const stateFile = path.join(freshDir, '.soma', 'install-state.json');
+      assert.ok(
+        fs.existsSync(stateFile),
+        `T-09-S1: [RED — T-09] install-state.json must be created at ${stateFile}`
+      );
 
-    const raw = fs.readFileSync(stateFile, 'utf8');
-    let parsed;
-    assert.doesNotThrow(() => { parsed = JSON.parse(raw); },
-      `T-09-S1: [RED — T-09] install-state.json must be valid JSON`);
+      const raw = fs.readFileSync(stateFile, 'utf8');
+      let parsed;
+      assert.doesNotThrow(() => { parsed = JSON.parse(raw); },
+        `T-09-S1: [RED — T-09] install-state.json must be valid JSON`);
 
-    // Required fields per CONTRACT-02 schema
-    const required = ['status', 'timestamp', 'snapshotId', 'harness', 'installedVersion'];
-    for (const field of required) {
-      assert.ok(field in parsed && parsed[field] !== null && parsed[field] !== undefined,
-        `T-09-S1: [RED — T-09] Required field "${field}" missing or null in install-state.json`);
+      // Required fields per CONTRACT-02 schema
+      const required = ['status', 'timestamp', 'snapshotId', 'harness', 'installedVersion'];
+      for (const field of required) {
+        assert.ok(field in parsed && parsed[field] !== null && parsed[field] !== undefined,
+          `T-09-S1: [RED — T-09] Required field "${field}" missing or null in install-state.json`);
+      }
+
+      // Status must be a valid enum value
+      const validStatuses = ['complete', 'partial-failed', 'drift-detected'];
+      assert.ok(validStatuses.includes(parsed.status),
+        `T-09-S1: [RED — T-09] status must be one of ${validStatuses.join('|')}. Got: "${parsed.status}"`);
+
+      // harness must be a valid enum value
+      const validHarnesses = ['claude', 'codex', 'both'];
+      assert.ok(validHarnesses.includes(parsed.harness),
+        `T-09-S1: [RED — T-09] harness must be one of ${validHarnesses.join('|')}. Got: "${parsed.harness}"`);
+
+      // timestamp must be ISO-8601 with Z suffix
+      const ISO_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/;
+      assert.ok(typeof parsed.timestamp === 'string' && ISO_RE.test(parsed.timestamp),
+        `T-09-S1: [RED — T-09] timestamp must be ISO-8601 UTC (Z suffix). Got: "${parsed.timestamp}"`);
+
+      // installedVersion must match semver pattern
+      const SEMVER_RE = /^\d+\.\d+\.\d+/;
+      assert.ok(typeof parsed.installedVersion === 'string' && SEMVER_RE.test(parsed.installedVersion),
+        `T-09-S1: [RED — T-09] installedVersion must match semver N.N.N. Got: "${parsed.installedVersion}"`);
+    } finally {
+      try { fs.rmSync(freshDir, { recursive: true, force: true }); } catch (_) {}
     }
-
-    // Status must be a valid enum value
-    const validStatuses = ['complete', 'partial-failed', 'drift-detected'];
-    assert.ok(validStatuses.includes(parsed.status),
-      `T-09-S1: [RED — T-09] status must be one of ${validStatuses.join('|')}. Got: "${parsed.status}"`);
-
-    // harness must be a valid enum value
-    const validHarnesses = ['claude', 'codex', 'both'];
-    assert.ok(validHarnesses.includes(parsed.harness),
-      `T-09-S1: [RED — T-09] harness must be one of ${validHarnesses.join('|')}. Got: "${parsed.harness}"`);
-
-    // timestamp must be ISO-8601 with Z suffix
-    const ISO_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/;
-    assert.ok(typeof parsed.timestamp === 'string' && ISO_RE.test(parsed.timestamp),
-      `T-09-S1: [RED — T-09] timestamp must be ISO-8601 UTC (Z suffix). Got: "${parsed.timestamp}"`);
-
-    // installedVersion must match semver pattern
-    const SEMVER_RE = /^\d+\.\d+\.\d+/;
-    assert.ok(typeof parsed.installedVersion === 'string' && SEMVER_RE.test(parsed.installedVersion),
-      `T-09-S1: [RED — T-09] installedVersion must match semver N.N.N. Got: "${parsed.installedVersion}"`);
-  } finally {
-    try { fs.rmSync(freshDir, { recursive: true, force: true }); } catch (_) {}
-  }
+  });
 });
 
 /**
@@ -304,26 +323,29 @@ test('T-09-S1: AC-16 install writes valid install-state.json with required field
  * After install completes (exit 0), the lock file must NOT remain.
  */
 test('T-09-S2: install.lock acquired during pipeline, released after success (finally block)', async (t) => {
-  const freshDir = fs.mkdtempSync(path.join(os.tmpdir(), 'soma-t09-lock-'));
-  try {
-    const r = spawnSync('node', [INSTALL_CJS, freshDir, '--tool=claude'], {
-      encoding: 'utf8',
-      timeout: 30000,
-    });
+  withFakeHome('t09s2-home-', (fakeHome) => {
+    const freshDir = fs.mkdtempSync(path.join(os.tmpdir(), 'soma-t09-lock-'));
+    try {
+      const r = spawnSync('node', [INSTALL_CJS, freshDir, '--tool=claude'], {
+        encoding: 'utf8',
+        timeout: 30000,
+        env: fakeHomeEnv(fakeHome),
+      });
 
-    // Exit 0: pipeline success
-    assert.equal(r.status, 0,
-      `T-09-S2: install must exit 0 for greenfield. Got ${r.status}. stderr: ${r.stderr}`);
+      // Exit 0: pipeline success
+      assert.equal(r.status, 0,
+        `T-09-S2: install must exit 0 for greenfield. Got ${r.status}. stderr: ${r.stderr}`);
 
-    const lockFile = path.join(freshDir, '.soma', 'install.lock');
-    assert.ok(
-      !fs.existsSync(lockFile),
-      `T-09-S2: [RED — T-09] install.lock must NOT exist after successful install (must be released in finally). ` +
-      `Found: ${lockFile}`
-    );
-  } finally {
-    try { fs.rmSync(freshDir, { recursive: true, force: true }); } catch (_) {}
-  }
+      const lockFile = path.join(freshDir, '.soma', 'install.lock');
+      assert.ok(
+        !fs.existsSync(lockFile),
+        `T-09-S2: [RED — T-09] install.lock must NOT exist after successful install (must be released in finally). ` +
+        `Found: ${lockFile}`
+      );
+    } finally {
+      try { fs.rmSync(freshDir, { recursive: true, force: true }); } catch (_) {}
+    }
+  });
 });
 
 /**
@@ -331,51 +353,54 @@ test('T-09-S2: install.lock acquired during pipeline, released after success (fi
  * Pre-creates a lock with timestamp 90 minutes ago.
  */
 test('T-09-S3: stale lockfile (>60min) auto-cleans with WARNING + install proceeds (exit 0)', async (t) => {
-  const freshDir = fs.mkdtempSync(path.join(os.tmpdir(), 'soma-t09-stale-'));
-  try {
-    // Pre-create .soma/install.lock with 90-min-old timestamp
-    const somaDir = path.join(freshDir, '.soma');
-    fs.mkdirSync(somaDir, { recursive: true });
-    const staleLock = {
-      pid: 12345,
-      timestamp: new Date(Date.now() - 90 * 60 * 1000).toISOString(),
-      hostname: os.hostname(),
-    };
-    fs.writeFileSync(
-      path.join(somaDir, 'install.lock'),
-      JSON.stringify(staleLock),
-      { mode: 0o644 }
-    );
+  withFakeHome('t09s3-home-', (fakeHome) => {
+    const freshDir = fs.mkdtempSync(path.join(os.tmpdir(), 'soma-t09-stale-'));
+    try {
+      // Pre-create .soma/install.lock with 90-min-old timestamp
+      const somaDir = path.join(freshDir, '.soma');
+      fs.mkdirSync(somaDir, { recursive: true });
+      const staleLock = {
+        pid: 12345,
+        timestamp: new Date(Date.now() - 90 * 60 * 1000).toISOString(),
+        hostname: os.hostname(),
+      };
+      fs.writeFileSync(
+        path.join(somaDir, 'install.lock'),
+        JSON.stringify(staleLock),
+        { mode: 0o644 }
+      );
 
-    const r = spawnSync('node', [INSTALL_CJS, freshDir, '--tool=claude'], {
-      encoding: 'utf8',
-      timeout: 30000,
-    });
+      const r = spawnSync('node', [INSTALL_CJS, freshDir, '--tool=claude'], {
+        encoding: 'utf8',
+        timeout: 30000,
+        env: fakeHomeEnv(fakeHome),
+      });
 
-    // Must NOT exit 2 (stale lock should be auto-cleaned, not block)
-    assert.notEqual(r.status, 2,
-      `T-09-S3: [RED — T-09] Stale lock must be auto-cleaned (NOT contention exit 2). Got exit ${r.status}. stderr: ${r.stderr}`);
+      // Must NOT exit 2 (stale lock should be auto-cleaned, not block)
+      assert.notEqual(r.status, 2,
+        `T-09-S3: [RED — T-09] Stale lock must be auto-cleaned (NOT contention exit 2). Got exit ${r.status}. stderr: ${r.stderr}`);
 
-    // Must exit 0 (install proceeds after stale cleanup)
-    assert.equal(r.status, 0,
-      `T-09-S3: [RED — T-09] Stale lock auto-clean: install must proceed and exit 0. Got ${r.status}. stderr: ${r.stderr}`);
+      // Must exit 0 (install proceeds after stale cleanup)
+      assert.equal(r.status, 0,
+        `T-09-S3: [RED — T-09] Stale lock auto-clean: install must proceed and exit 0. Got ${r.status}. stderr: ${r.stderr}`);
 
-    // Must emit WARNING or stale message to stderr
-    const combined = r.stdout + r.stderr;
-    assert.ok(
-      combined.toLowerCase().includes('stale') || combined.toLowerCase().includes('warn'),
-      `T-09-S3: [RED — T-09] Output must contain "stale" or "warn" message for stale lock auto-clean. Got: ${combined}`
-    );
+      // Must emit WARNING or stale message to stderr
+      const combined = r.stdout + r.stderr;
+      assert.ok(
+        combined.toLowerCase().includes('stale') || combined.toLowerCase().includes('warn'),
+        `T-09-S3: [RED — T-09] Output must contain "stale" or "warn" message for stale lock auto-clean. Got: ${combined}`
+      );
 
-    // install-state.json should be written normally (install succeeded)
-    const stateFile = path.join(freshDir, '.soma', 'install-state.json');
-    assert.ok(
-      fs.existsSync(stateFile),
-      `T-09-S3: [RED — T-09] install-state.json must be written after stale-lock auto-clean + successful install. Not found at ${stateFile}`
-    );
-  } finally {
-    try { fs.rmSync(freshDir, { recursive: true, force: true }); } catch (_) {}
-  }
+      // install-state.json should be written normally (install succeeded)
+      const stateFile = path.join(freshDir, '.soma', 'install-state.json');
+      assert.ok(
+        fs.existsSync(stateFile),
+        `T-09-S3: [RED — T-09] install-state.json must be written after stale-lock auto-clean + successful install. Not found at ${stateFile}`
+      );
+    } finally {
+      try { fs.rmSync(freshDir, { recursive: true, force: true }); } catch (_) {}
+    }
+  });
 });
 
 /**
@@ -439,51 +464,54 @@ test('T-09-S4: fresh lockfile (<60min) blocks install with exit 2', async (t) =>
  * T-08bis REVERTS that weakening: the project CLAUDE.md MUST contain the anchor.
  */
 test('T-08-S1: AC-01 greenfield install creates .soma/ + .soma/manifest.json + project CLAUDE.md anchor', async (t) => {
-  const freshDir = fs.mkdtempSync(path.join(os.tmpdir(), 'soma-test-fresh-'));
-  try {
-    const r = spawnSync('node', [INSTALL_CJS, freshDir, '--tool=claude'], {
-      encoding: 'utf8',
-      timeout: 30000,
-    });
+  withFakeHome('t08s1-home-', (fakeHome) => {
+    const freshDir = fs.mkdtempSync(path.join(os.tmpdir(), 'soma-test-fresh-'));
+    try {
+      const r = spawnSync('node', [INSTALL_CJS, freshDir, '--tool=claude'], {
+        encoding: 'utf8',
+        timeout: 30000,
+        env: fakeHomeEnv(fakeHome),
+      });
 
-    // Exit 0: pipeline must succeed
-    assert.equal(r.status, 0,
-      `Greenfield install must exit 0. Got ${r.status}. stderr: ${r.stderr} stdout: ${r.stdout}`);
+      // Exit 0: pipeline must succeed
+      assert.equal(r.status, 0,
+        `Greenfield install must exit 0. Got ${r.status}. stderr: ${r.stderr} stdout: ${r.stdout}`);
 
-    // .soma/ directory created (init.cjs step)
-    assert.ok(
-      fs.existsSync(path.join(freshDir, '.soma')),
-      `.soma/ directory must be created by init.cjs step. Not found at ${path.join(freshDir, '.soma')}`
-    );
+      // .soma/ directory created (init.cjs step)
+      assert.ok(
+        fs.existsSync(path.join(freshDir, '.soma')),
+        `.soma/ directory must be created by init.cjs step. Not found at ${path.join(freshDir, '.soma')}`
+      );
 
-    // .soma/manifest.json created (init.cjs creates project manifest)
-    assert.ok(
-      fs.existsSync(path.join(freshDir, '.soma', 'manifest.json')),
-      `.soma/manifest.json must be created by init.cjs. Not found at ${path.join(freshDir, '.soma', 'manifest.json')}`
-    );
+      // .soma/manifest.json created (init.cjs creates project manifest)
+      assert.ok(
+        fs.existsSync(path.join(freshDir, '.soma', 'manifest.json')),
+        `.soma/manifest.json must be created by init.cjs. Not found at ${path.join(freshDir, '.soma', 'manifest.json')}`
+      );
 
-    // [T-08bis REVERTED] CLAUDE.md must be created in project dir with soma-v2 anchor
-    // AC-01 literal: grep -c '<!-- soma-v2:start' <freshDir>/CLAUDE.md → must return 1
-    const claudeMdPath = path.join(freshDir, 'CLAUDE.md');
-    assert.ok(
-      fs.existsSync(claudeMdPath),
-      `[RED — T-08bis] CLAUDE.md must be created by sync.cjs project-level targets. Not found at ${claudeMdPath}`
-    );
+      // [T-08bis REVERTED] CLAUDE.md must be created in project dir with soma-v2 anchor
+      // AC-01 literal: grep -c '<!-- soma-v2:start' <freshDir>/CLAUDE.md → must return 1
+      const claudeMdPath = path.join(freshDir, 'CLAUDE.md');
+      assert.ok(
+        fs.existsSync(claudeMdPath),
+        `[RED — T-08bis] CLAUDE.md must be created by sync.cjs project-level targets. Not found at ${claudeMdPath}`
+      );
 
-    const claudeMdContent = fs.readFileSync(claudeMdPath, 'utf8');
-    const anchorCount = (claudeMdContent.match(/<!-- soma-v2:start/g) || []).length;
-    assert.equal(anchorCount, 1,
-      `[RED — T-08bis] AC-01 literal: grep -c '<!-- soma-v2:start' CLAUDE.md must return 1. Got ${anchorCount}.\nContent: ${claudeMdContent.slice(0, 500)}`
-    );
+      const claudeMdContent = fs.readFileSync(claudeMdPath, 'utf8');
+      const anchorCount = (claudeMdContent.match(/<!-- soma-v2:start/g) || []).length;
+      assert.equal(anchorCount, 1,
+        `[RED — T-08bis] AC-01 literal: grep -c '<!-- soma-v2:start' CLAUDE.md must return 1. Got ${anchorCount}.\nContent: ${claudeMdContent.slice(0, 500)}`
+      );
 
-    // The anchor must be for block.claude.CLAUDE_md.project-bootloader
-    assert.ok(
-      claudeMdContent.includes('id=block.claude.CLAUDE_md.project-bootloader'),
-      `[RED — T-08bis] CLAUDE.md anchor must have id=block.claude.CLAUDE_md.project-bootloader.\nContent: ${claudeMdContent.slice(0, 500)}`
-    );
-  } finally {
-    try { fs.rmSync(freshDir, { recursive: true, force: true }); } catch (_) {}
-  }
+      // The anchor must be for block.claude.CLAUDE_md.project-bootloader
+      assert.ok(
+        claudeMdContent.includes('id=block.claude.CLAUDE_md.project-bootloader'),
+        `[RED — T-08bis] CLAUDE.md anchor must have id=block.claude.CLAUDE_md.project-bootloader.\nContent: ${claudeMdContent.slice(0, 500)}`
+      );
+    } finally {
+      try { fs.rmSync(freshDir, { recursive: true, force: true }); } catch (_) {}
+    }
+  });
 });
 
 /**
@@ -495,75 +523,78 @@ test('T-08-S1: AC-01 greenfield install creates .soma/ + .soma/manifest.json + p
  * @task T-08bis
  */
 test('T-08bis-S1: AC-01b project-bootloader block contains all required literal substrings in CLAUDE.md', async (t) => {
-  const freshDir = fs.mkdtempSync(path.join(os.tmpdir(), 'soma-t08bis-s1-'));
-  try {
-    const r = spawnSync('node', [INSTALL_CJS, freshDir, '--tool=claude'], {
-      encoding: 'utf8',
-      timeout: 30000,
-    });
+  withFakeHome('t08bis-s1-home-', (fakeHome) => {
+    const freshDir = fs.mkdtempSync(path.join(os.tmpdir(), 'soma-t08bis-s1-'));
+    try {
+      const r = spawnSync('node', [INSTALL_CJS, freshDir, '--tool=claude'], {
+        encoding: 'utf8',
+        timeout: 30000,
+        env: fakeHomeEnv(fakeHome),
+      });
 
-    assert.equal(r.status, 0,
-      `T-08bis-S1: install must exit 0. Got ${r.status}. stderr: ${r.stderr}`);
+      assert.equal(r.status, 0,
+        `T-08bis-S1: install must exit 0. Got ${r.status}. stderr: ${r.stderr}`);
 
-    const claudeMdPath = path.join(freshDir, 'CLAUDE.md');
-    assert.ok(
-      fs.existsSync(claudeMdPath),
-      `[RED — T-08bis] CLAUDE.md must exist at ${claudeMdPath}`
-    );
-
-    const content = fs.readFileSync(claudeMdPath, 'utf8');
-
-    // AC-01b literal substrings (all must be present)
-    const requiredSubstrings = [
-      '## SOMA install',
-      '## Project artifacts',
-      '## Workflow',
-    ];
-
-    for (const substr of requiredSubstrings) {
+      const claudeMdPath = path.join(freshDir, 'CLAUDE.md');
       assert.ok(
-        content.includes(substr),
-        `[RED — T-08bis] AC-01b: CLAUDE.md must contain literal "${substr}". Content (first 600): ${content.slice(0, 600)}`
+        fs.existsSync(claudeMdPath),
+        `[RED — T-08bis] CLAUDE.md must exist at ${claudeMdPath}`
       );
+
+      const content = fs.readFileSync(claudeMdPath, 'utf8');
+
+      // AC-01b literal substrings (all must be present)
+      const requiredSubstrings = [
+        '## SOMA install',
+        '## Project artifacts',
+        '## Workflow',
+      ];
+
+      for (const substr of requiredSubstrings) {
+        assert.ok(
+          content.includes(substr),
+          `[RED — T-08bis] AC-01b: CLAUDE.md must contain literal "${substr}". Content (first 600): ${content.slice(0, 600)}`
+        );
+      }
+
+      // {{version}} must be resolved (no unresolved placeholders)
+      assert.ok(
+        !content.includes('{{version}}'),
+        `[RED — T-08bis] AC-01b: {{version}} must be resolved in CLAUDE.md. Content: ${content.slice(0, 600)}`
+      );
+      const repoPkgVersion = JSON.parse(
+        fs.readFileSync(path.join(SCRIPTS_DIR, '..', '..', 'package.json'), 'utf8')
+      ).version;
+      assert.ok(
+        content.includes(repoPkgVersion),
+        `[RED — T-08bis] AC-01b: repo version ${repoPkgVersion} must appear in CLAUDE.md. Content: ${content.slice(0, 600)}`
+      );
+
+      // {{harness}} must be resolved to 'claude'
+      assert.ok(
+        !content.includes('{{harness}}'),
+        `[RED — T-08bis] AC-01b: {{harness}} must be resolved in CLAUDE.md. Content: ${content.slice(0, 600)}`
+      );
+      assert.ok(
+        content.includes('claude'),
+        `[RED — T-08bis] AC-01b: harness value 'claude' must appear in CLAUDE.md. Content: ${content.slice(0, 600)}`
+      );
+
+      // {{install_timestamp}} must be resolved (no unresolved placeholder)
+      assert.ok(
+        !content.includes('{{install_timestamp}}'),
+        `[RED — T-08bis] AC-01b: {{install_timestamp}} must be resolved. Content: ${content.slice(0, 600)}`
+      );
+
+      // {{soma_home}} must be resolved to a non-empty path
+      assert.ok(
+        !content.includes('{{soma_home}}'),
+        `[RED — T-08bis] AC-01b: {{soma_home}} must be resolved. Content: ${content.slice(0, 600)}`
+      );
+    } finally {
+      try { fs.rmSync(freshDir, { recursive: true, force: true }); } catch (_) {}
     }
-
-    // {{version}} must be resolved (no unresolved placeholders)
-    assert.ok(
-      !content.includes('{{version}}'),
-      `[RED — T-08bis] AC-01b: {{version}} must be resolved in CLAUDE.md. Content: ${content.slice(0, 600)}`
-    );
-    const repoPkgVersion = JSON.parse(
-      fs.readFileSync(path.join(SCRIPTS_DIR, '..', '..', 'package.json'), 'utf8')
-    ).version;
-    assert.ok(
-      content.includes(repoPkgVersion),
-      `[RED — T-08bis] AC-01b: repo version ${repoPkgVersion} must appear in CLAUDE.md. Content: ${content.slice(0, 600)}`
-    );
-
-    // {{harness}} must be resolved to 'claude'
-    assert.ok(
-      !content.includes('{{harness}}'),
-      `[RED — T-08bis] AC-01b: {{harness}} must be resolved in CLAUDE.md. Content: ${content.slice(0, 600)}`
-    );
-    assert.ok(
-      content.includes('claude'),
-      `[RED — T-08bis] AC-01b: harness value 'claude' must appear in CLAUDE.md. Content: ${content.slice(0, 600)}`
-    );
-
-    // {{install_timestamp}} must be resolved (no unresolved placeholder)
-    assert.ok(
-      !content.includes('{{install_timestamp}}'),
-      `[RED — T-08bis] AC-01b: {{install_timestamp}} must be resolved. Content: ${content.slice(0, 600)}`
-    );
-
-    // {{soma_home}} must be resolved to a non-empty path
-    assert.ok(
-      !content.includes('{{soma_home}}'),
-      `[RED — T-08bis] AC-01b: {{soma_home}} must be resolved. Content: ${content.slice(0, 600)}`
-    );
-  } finally {
-    try { fs.rmSync(freshDir, { recursive: true, force: true }); } catch (_) {}
-  }
+  });
 });
 
 /**
@@ -632,45 +663,54 @@ test('T-08bis-S2: sync.cjs --targets-file= resolves relative target_path against
  * @task T-08bis
  */
 test('T-08bis-S3: user-globals invariant — ~/.claude/CLAUDE.md content unchanged by project install', async (t) => {
-  const CRYPTO = require('node:crypto');
-  const userClaudeMd = path.join(os.homedir(), '.claude', 'CLAUDE.md');
-  const freshDir = fs.mkdtempSync(path.join(os.tmpdir(), 'soma-t08bis-s3-'));
+  withFakeHome('t08bis-s3-home-', (fakeHome) => {
+    const CRYPTO = require('node:crypto');
+    // Use fakeHome directly rather than os.homedir(): the install.cjs
+    // subprocess below is pointed at fakeHome via the explicit env option
+    // (not ambient inheritance), so this computation should match that —
+    // not rely on process.env.HOME still being mutated when this line runs.
+    const userClaudeMd = path.join(fakeHome, '.claude', 'CLAUDE.md');
+    const freshDir = fs.mkdtempSync(path.join(os.tmpdir(), 'soma-t08bis-s3-'));
 
-  // Snapshot pre-run sha256 (if file exists)
-  let preSha256 = null;
-  if (fs.existsSync(userClaudeMd)) {
-    const preBuf = fs.readFileSync(userClaudeMd);
-    preSha256 = CRYPTO.createHash('sha256').update(preBuf).digest('hex');
-  }
-
-  try {
-    const r = spawnSync('node', [INSTALL_CJS, freshDir, '--tool=claude'], {
-      encoding: 'utf8',
-      timeout: 30000,
-    });
-
-    assert.equal(r.status, 0,
-      `T-08bis-S3: install must exit 0. Got ${r.status}. stderr: ${r.stderr}`);
-
-    if (preSha256 !== null) {
-      // File existed pre-run — content must be byte-identical after install
-      const postBuf = fs.readFileSync(userClaudeMd);
-      const postSha256 = CRYPTO.createHash('sha256').update(postBuf).digest('hex');
-      assert.equal(postSha256, preSha256,
-        `[T-08bis] user-globals invariant: ~/.claude/CLAUDE.md content must be unchanged after project install.\n` +
-        `pre sha256:  ${preSha256}\n` +
-        `post sha256: ${postSha256}`
-      );
-    } else {
-      // File did not exist pre-run — must still not exist (project install must not create user global)
-      // Note: user-globals sync (step 3 in orchestrate) DOES write user globals when they drift.
-      // T-08bis-S3 is specifically about content invariance, not file creation.
-      // Skip the assertion if file didn't exist (new machine scenario).
-      t.skip('~/.claude/CLAUDE.md did not exist pre-run — skipping content-unchanged check (new machine)');
+    // Snapshot pre-run sha256 (if file exists)
+    let preSha256 = null;
+    if (fs.existsSync(userClaudeMd)) {
+      const preBuf = fs.readFileSync(userClaudeMd);
+      preSha256 = CRYPTO.createHash('sha256').update(preBuf).digest('hex');
     }
-  } finally {
-    try { fs.rmSync(freshDir, { recursive: true, force: true }); } catch (_) {}
-  }
+
+    try {
+      const r = spawnSync('node', [INSTALL_CJS, freshDir, '--tool=claude'], {
+        encoding: 'utf8',
+        timeout: 30000,
+        env: fakeHomeEnv(fakeHome),
+      });
+
+      assert.equal(r.status, 0,
+        `T-08bis-S3: install must exit 0. Got ${r.status}. stderr: ${r.stderr}`);
+
+      if (preSha256 !== null) {
+        // File existed pre-run — content must be byte-identical after install
+        const postBuf = fs.readFileSync(userClaudeMd);
+        const postSha256 = CRYPTO.createHash('sha256').update(postBuf).digest('hex');
+        assert.equal(postSha256, preSha256,
+          `[T-08bis] user-globals invariant: ~/.claude/CLAUDE.md content must be unchanged after project install.\n` +
+          `pre sha256:  ${preSha256}\n` +
+          `post sha256: ${postSha256}`
+        );
+      } else {
+        // File did not exist pre-run — fakeHome/.claude is always a fresh
+        // sandbox (withFakeHome seeds .soma-v2, not .claude), so this
+        // branch is the ONLY branch this isolated test can ever take now.
+        // That's the test author's own designed "new machine scenario" —
+        // Bucket G isolation didn't repurpose this skip, it just made the
+        // fresh-machine case the one that always applies here.
+        t.skip('~/.claude/CLAUDE.md did not exist pre-run — skipping content-unchanged check (new machine)');
+      }
+    } finally {
+      try { fs.rmSync(freshDir, { recursive: true, force: true }); } catch (_) {}
+    }
+  });
 });
 
 /**
@@ -722,23 +762,26 @@ test('T-08-S2: --dry-run on greenfield → exit 0 + does NOT create .soma/', asy
  * So T-08-S3 verifies: pre-existing .soma/ + init redirect → install continues → exit 0.
  */
 test('T-08-S3: pre-existing .soma/ causes init redirect → install resumes pipeline (exit 0)', async (t) => {
-  const freshDir = fs.mkdtempSync(path.join(os.tmpdir(), 'soma-test-init-resume-'));
-  try {
-    // Pre-create .soma/ to trigger init.cjs "already initialized" (exit 1 redirect)
-    fs.mkdirSync(path.join(freshDir, '.soma'), { recursive: true });
+  withFakeHome('t08s3-home-', (fakeHome) => {
+    const freshDir = fs.mkdtempSync(path.join(os.tmpdir(), 'soma-test-init-resume-'));
+    try {
+      // Pre-create .soma/ to trigger init.cjs "already initialized" (exit 1 redirect)
+      fs.mkdirSync(path.join(freshDir, '.soma'), { recursive: true });
 
-    const r = spawnSync('node', [INSTALL_CJS, freshDir, '--tool=claude'], {
-      encoding: 'utf8',
-      timeout: 30000,
-    });
+      const r = spawnSync('node', [INSTALL_CJS, freshDir, '--tool=claude'], {
+        encoding: 'utf8',
+        timeout: 30000,
+        env: fakeHomeEnv(fakeHome),
+      });
 
-    // T-08: init exit 1 (redirect) → skip init, continue with manifest+sync → exit 0.
-    // T-12 will later add proper state-matching detection for true idempotent re-run.
-    assert.equal(r.status, 0,
-      `init redirect (exit 1) must not abort install — pipeline resumes. Got ${r.status}. stderr: ${r.stderr} stdout: ${r.stdout}`);
-  } finally {
-    try { fs.rmSync(freshDir, { recursive: true, force: true }); } catch (_) {}
-  }
+      // T-08: init exit 1 (redirect) → skip init, continue with manifest+sync → exit 0.
+      // T-12 will later add proper state-matching detection for true idempotent re-run.
+      assert.equal(r.status, 0,
+        `init redirect (exit 1) must not abort install — pipeline resumes. Got ${r.status}. stderr: ${r.stderr} stdout: ${r.stdout}`);
+    } finally {
+      try { fs.rmSync(freshDir, { recursive: true, force: true }); } catch (_) {}
+    }
+  });
 });
 
 // ── T-12 tests: partial state recovery (AC-04) ───────────────────────────────
@@ -768,89 +811,93 @@ test('T-08-S3: pre-existing .soma/ causes init redirect → install resumes pipe
  *   - .soma/ directory still intact (not deleted between runs — that's the contract)
  */
 test('T-12-S1: AC-04 partial state recovery — block stripped from CLAUDE.md, .soma/ intact → block re-injected + init skipped', async (t) => {
-  const freshDir = fs.mkdtempSync(path.join(os.tmpdir(), 'soma-t12-s1-'));
-  try {
-    // ── 1st run: greenfield install ──────────────────────────────────────────
-    const r1 = spawnSync('node', [INSTALL_CJS, freshDir, '--tool=claude'], {
-      encoding: 'utf8',
-      timeout: 30000,
-    });
+  withFakeHome('t12s1-home-', (fakeHome) => {
+    const freshDir = fs.mkdtempSync(path.join(os.tmpdir(), 'soma-t12-s1-'));
+    try {
+      // ── 1st run: greenfield install ──────────────────────────────────────────
+      const r1 = spawnSync('node', [INSTALL_CJS, freshDir, '--tool=claude'], {
+        encoding: 'utf8',
+        timeout: 30000,
+        env: fakeHomeEnv(fakeHome),
+      });
 
-    assert.equal(r1.status, 0,
-      `T-12-S1: 1st install must exit 0. Got ${r1.status}. stderr: ${r1.stderr} stdout: ${r1.stdout}`);
+      assert.equal(r1.status, 0,
+        `T-12-S1: 1st install must exit 0. Got ${r1.status}. stderr: ${r1.stderr} stdout: ${r1.stdout}`);
 
-    // Verify 1st run created CLAUDE.md with anchor
-    const claudeMdPath = path.join(freshDir, 'CLAUDE.md');
-    assert.ok(
-      fs.existsSync(claudeMdPath),
-      `T-12-S1: CLAUDE.md must exist after 1st install. Not found at ${claudeMdPath}`
-    );
+      // Verify 1st run created CLAUDE.md with anchor
+      const claudeMdPath = path.join(freshDir, 'CLAUDE.md');
+      assert.ok(
+        fs.existsSync(claudeMdPath),
+        `T-12-S1: CLAUDE.md must exist after 1st install. Not found at ${claudeMdPath}`
+      );
 
-    const afterFirst = fs.readFileSync(claudeMdPath, 'utf8');
-    const countAfterFirst = (afterFirst.match(/<!-- soma-v2:start/g) || []).length;
-    assert.equal(countAfterFirst, 1,
-      `T-12-S1: CLAUDE.md must have exactly 1 anchor after 1st install. Got ${countAfterFirst}`
-    );
+      const afterFirst = fs.readFileSync(claudeMdPath, 'utf8');
+      const countAfterFirst = (afterFirst.match(/<!-- soma-v2:start/g) || []).length;
+      assert.equal(countAfterFirst, 1,
+        `T-12-S1: CLAUDE.md must have exactly 1 anchor after 1st install. Got ${countAfterFirst}`
+      );
 
-    // Verify .soma/ exists (precondition for partial-state scenario)
-    const somaDir = path.join(freshDir, '.soma');
-    assert.ok(
-      fs.existsSync(somaDir),
-      `T-12-S1: .soma/ must exist after 1st install. Not found at ${somaDir}`
-    );
+      // Verify .soma/ exists (precondition for partial-state scenario)
+      const somaDir = path.join(freshDir, '.soma');
+      assert.ok(
+        fs.existsSync(somaDir),
+        `T-12-S1: .soma/ must exist after 1st install. Not found at ${somaDir}`
+      );
 
-    // ── Mutation: strip the anchored block from CLAUDE.md ────────────────────
-    // Remove the <!-- soma-v2:start ... --> ... <!-- soma-v2:end ... --> block entirely.
-    // This simulates: user manually edited CLAUDE.md and stripped the block.
-    const stripped = afterFirst.replace(
-      /<!-- soma-v2:start[^>]*-->([\s\S]*?)<!-- soma-v2:end[^>]*-->\n?/g,
-      ''
-    ).trim();
-    fs.writeFileSync(claudeMdPath, stripped + '\n', 'utf8');
+      // ── Mutation: strip the anchored block from CLAUDE.md ────────────────────
+      // Remove the <!-- soma-v2:start ... --> ... <!-- soma-v2:end ... --> block entirely.
+      // This simulates: user manually edited CLAUDE.md and stripped the block.
+      const stripped = afterFirst.replace(
+        /<!-- soma-v2:start[^>]*-->([\s\S]*?)<!-- soma-v2:end[^>]*-->\n?/g,
+        ''
+      ).trim();
+      fs.writeFileSync(claudeMdPath, stripped + '\n', 'utf8');
 
-    // Verify strip worked
-    const afterStrip = fs.readFileSync(claudeMdPath, 'utf8');
-    const countAfterStrip = (afterStrip.match(/<!-- soma-v2:start/g) || []).length;
-    assert.equal(countAfterStrip, 0,
-      `T-12-S1: setup: CLAUDE.md must have 0 anchors after strip. Got ${countAfterStrip}`
-    );
+      // Verify strip worked
+      const afterStrip = fs.readFileSync(claudeMdPath, 'utf8');
+      const countAfterStrip = (afterStrip.match(/<!-- soma-v2:start/g) || []).length;
+      assert.equal(countAfterStrip, 0,
+        `T-12-S1: setup: CLAUDE.md must have 0 anchors after strip. Got ${countAfterStrip}`
+      );
 
-    // .soma/ MUST still exist (do NOT delete it — T-12 contract requires it)
-    assert.ok(
-      fs.existsSync(somaDir),
-      `T-12-S1: .soma/ must still exist after strip mutation. It was unexpectedly removed.`
-    );
+      // .soma/ MUST still exist (do NOT delete it — T-12 contract requires it)
+      assert.ok(
+        fs.existsSync(somaDir),
+        `T-12-S1: .soma/ must still exist after strip mutation. It was unexpectedly removed.`
+      );
 
-    // ── 2nd run: partial state recovery ──────────────────────────────────────
-    const r2 = spawnSync('node', [INSTALL_CJS, freshDir, '--tool=claude'], {
-      encoding: 'utf8',
-      timeout: 30000,
-    });
+      // ── 2nd run: partial state recovery ──────────────────────────────────────
+      const r2 = spawnSync('node', [INSTALL_CJS, freshDir, '--tool=claude'], {
+        encoding: 'utf8',
+        timeout: 30000,
+        env: fakeHomeEnv(fakeHome),
+      });
 
-    // AC-04 assertion 1: exit code 0
-    assert.equal(r2.status, 0,
-      `[RED — T-12] AC-04: 2nd install (partial state recovery) must exit 0. Got ${r2.status}.\n` +
-      `stderr: ${r2.stderr}\nstdout: ${r2.stdout}`
-    );
+      // AC-04 assertion 1: exit code 0
+      assert.equal(r2.status, 0,
+        `[RED — T-12] AC-04: 2nd install (partial state recovery) must exit 0. Got ${r2.status}.\n` +
+        `stderr: ${r2.stderr}\nstdout: ${r2.stdout}`
+      );
 
-    // AC-04 assertion 2: anchored block re-injected (exactly 1 anchor)
-    const afterSecond = fs.readFileSync(claudeMdPath, 'utf8');
-    const countAfterSecond = (afterSecond.match(/<!-- soma-v2:start/g) || []).length;
-    assert.equal(countAfterSecond, 1,
-      `[RED — T-12] AC-04: grep -c '<!-- soma-v2:start' CLAUDE.md must return 1 after recovery. Got ${countAfterSecond}.\n` +
-      `Content: ${afterSecond.slice(0, 500)}`
-    );
+      // AC-04 assertion 2: anchored block re-injected (exactly 1 anchor)
+      const afterSecond = fs.readFileSync(claudeMdPath, 'utf8');
+      const countAfterSecond = (afterSecond.match(/<!-- soma-v2:start/g) || []).length;
+      assert.equal(countAfterSecond, 1,
+        `[RED — T-12] AC-04: grep -c '<!-- soma-v2:start' CLAUDE.md must return 1 after recovery. Got ${countAfterSecond}.\n` +
+        `Content: ${afterSecond.slice(0, 500)}`
+      );
 
-    // AC-04 assertion 3: init step was SKIPPED (log marker present)
-    const combined2 = r2.stdout + r2.stderr;
-    assert.ok(
-      combined2.toLowerCase().includes('init skipped') || combined2.toLowerCase().includes('init: skip'),
-      `[RED — T-12] AC-04: output must contain "init skipped" or "init: skip" marker when .soma/ exists + block missing.\n` +
-      `stdout: ${r2.stdout}\nstderr: ${r2.stderr}`
-    );
-  } finally {
-    try { fs.rmSync(freshDir, { recursive: true, force: true }); } catch (_) {}
-  }
+      // AC-04 assertion 3: init step was SKIPPED (log marker present)
+      const combined2 = r2.stdout + r2.stderr;
+      assert.ok(
+        combined2.toLowerCase().includes('init skipped') || combined2.toLowerCase().includes('init: skip'),
+        `[RED — T-12] AC-04: output must contain "init skipped" or "init: skip" marker when .soma/ exists + block missing.\n` +
+        `stdout: ${r2.stdout}\nstderr: ${r2.stderr}`
+      );
+    } finally {
+      try { fs.rmSync(freshDir, { recursive: true, force: true }); } catch (_) {}
+    }
+  });
 });
 
 /**
@@ -865,63 +912,67 @@ test('T-12-S1: AC-04 partial state recovery — block stripped from CLAUDE.md, .
  *   - init step skipped (log marker)
  */
 test('T-12-S2: AC-04 partial state recovery — CLAUDE.md deleted, .soma/ intact → CLAUDE.md recreated + init skipped', async (t) => {
-  const freshDir = fs.mkdtempSync(path.join(os.tmpdir(), 'soma-t12-s2-'));
-  try {
-    // ── 1st run: greenfield install ──────────────────────────────────────────
-    const r1 = spawnSync('node', [INSTALL_CJS, freshDir, '--tool=claude'], {
-      encoding: 'utf8',
-      timeout: 30000,
-    });
+  withFakeHome('t12s2-home-', (fakeHome) => {
+    const freshDir = fs.mkdtempSync(path.join(os.tmpdir(), 'soma-t12-s2-'));
+    try {
+      // ── 1st run: greenfield install ──────────────────────────────────────────
+      const r1 = spawnSync('node', [INSTALL_CJS, freshDir, '--tool=claude'], {
+        encoding: 'utf8',
+        timeout: 30000,
+        env: fakeHomeEnv(fakeHome),
+      });
 
-    assert.equal(r1.status, 0,
-      `T-12-S2: 1st install must exit 0. Got ${r1.status}. stderr: ${r1.stderr}`);
+      assert.equal(r1.status, 0,
+        `T-12-S2: 1st install must exit 0. Got ${r1.status}. stderr: ${r1.stderr}`);
 
-    const claudeMdPath = path.join(freshDir, 'CLAUDE.md');
-    const somaDir = path.join(freshDir, '.soma');
+      const claudeMdPath = path.join(freshDir, 'CLAUDE.md');
+      const somaDir = path.join(freshDir, '.soma');
 
-    assert.ok(fs.existsSync(claudeMdPath), `T-12-S2: CLAUDE.md must exist after 1st install`);
-    assert.ok(fs.existsSync(somaDir), `T-12-S2: .soma/ must exist after 1st install`);
+      assert.ok(fs.existsSync(claudeMdPath), `T-12-S2: CLAUDE.md must exist after 1st install`);
+      assert.ok(fs.existsSync(somaDir), `T-12-S2: .soma/ must exist after 1st install`);
 
-    // ── Mutation: delete CLAUDE.md entirely ──────────────────────────────────
-    fs.rmSync(claudeMdPath, { force: true });
+      // ── Mutation: delete CLAUDE.md entirely ──────────────────────────────────
+      fs.rmSync(claudeMdPath, { force: true });
 
-    assert.ok(!fs.existsSync(claudeMdPath), `T-12-S2: setup: CLAUDE.md must not exist after deletion`);
-    // .soma/ MUST still exist (do NOT delete — T-12 contract)
-    assert.ok(fs.existsSync(somaDir), `T-12-S2: .soma/ must still exist after CLAUDE.md deletion`);
+      assert.ok(!fs.existsSync(claudeMdPath), `T-12-S2: setup: CLAUDE.md must not exist after deletion`);
+      // .soma/ MUST still exist (do NOT delete — T-12 contract)
+      assert.ok(fs.existsSync(somaDir), `T-12-S2: .soma/ must still exist after CLAUDE.md deletion`);
 
-    // ── 2nd run: partial state recovery ──────────────────────────────────────
-    const r2 = spawnSync('node', [INSTALL_CJS, freshDir, '--tool=claude'], {
-      encoding: 'utf8',
-      timeout: 30000,
-    });
+      // ── 2nd run: partial state recovery ──────────────────────────────────────
+      const r2 = spawnSync('node', [INSTALL_CJS, freshDir, '--tool=claude'], {
+        encoding: 'utf8',
+        timeout: 30000,
+        env: fakeHomeEnv(fakeHome),
+      });
 
-    // AC-04 assertion 1: exit code 0
-    assert.equal(r2.status, 0,
-      `[RED — T-12] AC-04 (deleted CLAUDE.md): 2nd install must exit 0. Got ${r2.status}.\n` +
-      `stderr: ${r2.stderr}\nstdout: ${r2.stdout}`
-    );
+      // AC-04 assertion 1: exit code 0
+      assert.equal(r2.status, 0,
+        `[RED — T-12] AC-04 (deleted CLAUDE.md): 2nd install must exit 0. Got ${r2.status}.\n` +
+        `stderr: ${r2.stderr}\nstdout: ${r2.stdout}`
+      );
 
-    // AC-04 assertion 2: CLAUDE.md re-created with exactly 1 anchor
-    assert.ok(
-      fs.existsSync(claudeMdPath),
-      `[RED — T-12] AC-04: CLAUDE.md must be re-created after recovery. Not found at ${claudeMdPath}`
-    );
-    const afterRecovery = fs.readFileSync(claudeMdPath, 'utf8');
-    const countAfterRecovery = (afterRecovery.match(/<!-- soma-v2:start/g) || []).length;
-    assert.equal(countAfterRecovery, 1,
-      `[RED — T-12] AC-04: grep -c '<!-- soma-v2:start' CLAUDE.md must return 1 after recovery from deletion. Got ${countAfterRecovery}`
-    );
+      // AC-04 assertion 2: CLAUDE.md re-created with exactly 1 anchor
+      assert.ok(
+        fs.existsSync(claudeMdPath),
+        `[RED — T-12] AC-04: CLAUDE.md must be re-created after recovery. Not found at ${claudeMdPath}`
+      );
+      const afterRecovery = fs.readFileSync(claudeMdPath, 'utf8');
+      const countAfterRecovery = (afterRecovery.match(/<!-- soma-v2:start/g) || []).length;
+      assert.equal(countAfterRecovery, 1,
+        `[RED — T-12] AC-04: grep -c '<!-- soma-v2:start' CLAUDE.md must return 1 after recovery from deletion. Got ${countAfterRecovery}`
+      );
 
-    // AC-04 assertion 3: init step was SKIPPED
-    const combined2 = r2.stdout + r2.stderr;
-    assert.ok(
-      combined2.toLowerCase().includes('init skipped') || combined2.toLowerCase().includes('init: skip'),
-      `[RED — T-12] AC-04 (deleted CLAUDE.md): output must contain "init skipped" or "init: skip" marker.\n` +
-      `stdout: ${r2.stdout}\nstderr: ${r2.stderr}`
-    );
-  } finally {
-    try { fs.rmSync(freshDir, { recursive: true, force: true }); } catch (_) {}
-  }
+      // AC-04 assertion 3: init step was SKIPPED
+      const combined2 = r2.stdout + r2.stderr;
+      assert.ok(
+        combined2.toLowerCase().includes('init skipped') || combined2.toLowerCase().includes('init: skip'),
+        `[RED — T-12] AC-04 (deleted CLAUDE.md): output must contain "init skipped" or "init: skip" marker.\n` +
+        `stdout: ${r2.stdout}\nstderr: ${r2.stderr}`
+      );
+    } finally {
+      try { fs.rmSync(freshDir, { recursive: true, force: true }); } catch (_) {}
+    }
+  });
 });
 
 // ── T-10 tests: idempotent re-run clean (AC-02) ───────────────────────────────
@@ -945,75 +996,79 @@ test('T-12-S2: AC-04 partial state recovery — CLAUDE.md deleted, .soma/ intact
  * @task T-10
  */
 test('T-10-S1: AC-02 idempotent re-run clean — 2nd install run exits 0 + no duplicate block + "no changes"', async (t) => {
-  const freshDir = fs.mkdtempSync(path.join(os.tmpdir(), 'soma-t10-s1-'));
-  try {
-    // ── 1st run: greenfield install ──────────────────────────────────────────
-    const r1 = spawnSync('node', [INSTALL_CJS, freshDir, '--tool=claude'], {
-      encoding: 'utf8',
-      timeout: 30000,
-    });
+  withFakeHome('t10s1-home-', (fakeHome) => {
+    const freshDir = fs.mkdtempSync(path.join(os.tmpdir(), 'soma-t10-s1-'));
+    try {
+      // ── 1st run: greenfield install ──────────────────────────────────────────
+      const r1 = spawnSync('node', [INSTALL_CJS, freshDir, '--tool=claude'], {
+        encoding: 'utf8',
+        timeout: 30000,
+        env: fakeHomeEnv(fakeHome),
+      });
 
-    assert.equal(r1.status, 0,
-      `T-10-S1: 1st install must exit 0. Got ${r1.status}. stderr: ${r1.stderr} stdout: ${r1.stdout}`);
+      assert.equal(r1.status, 0,
+        `T-10-S1: 1st install must exit 0. Got ${r1.status}. stderr: ${r1.stderr} stdout: ${r1.stdout}`);
 
-    // Verify 1st run created CLAUDE.md with exactly 1 anchor
-    const claudeMdPath = path.join(freshDir, 'CLAUDE.md');
-    assert.ok(
-      fs.existsSync(claudeMdPath),
-      `T-10-S1: CLAUDE.md must exist after 1st install. Not found at ${claudeMdPath}`
-    );
-    const afterFirst = fs.readFileSync(claudeMdPath, 'utf8');
-    const countAfterFirst = (afterFirst.match(/<!-- soma-v2:start/g) || []).length;
-    assert.equal(countAfterFirst, 1,
-      `T-10-S1: CLAUDE.md must have exactly 1 anchor after 1st install. Got ${countAfterFirst}`
-    );
+      // Verify 1st run created CLAUDE.md with exactly 1 anchor
+      const claudeMdPath = path.join(freshDir, 'CLAUDE.md');
+      assert.ok(
+        fs.existsSync(claudeMdPath),
+        `T-10-S1: CLAUDE.md must exist after 1st install. Not found at ${claudeMdPath}`
+      );
+      const afterFirst = fs.readFileSync(claudeMdPath, 'utf8');
+      const countAfterFirst = (afterFirst.match(/<!-- soma-v2:start/g) || []).length;
+      assert.equal(countAfterFirst, 1,
+        `T-10-S1: CLAUDE.md must have exactly 1 anchor after 1st install. Got ${countAfterFirst}`
+      );
 
-    // Capture install-state.json after 1st run
-    const stateFilePath = path.join(freshDir, '.soma', 'install-state.json');
-    assert.ok(
-      fs.existsSync(stateFilePath),
-      `T-10-S1: install-state.json must exist after 1st install. Not found at ${stateFilePath}`
-    );
-    const stateAfterFirst = JSON.parse(fs.readFileSync(stateFilePath, 'utf8'));
-    assert.equal(stateAfterFirst.status, 'complete',
-      `T-10-S1: install-state.json must have status=complete after 1st install. Got: ${stateAfterFirst.status}`
-    );
+      // Capture install-state.json after 1st run
+      const stateFilePath = path.join(freshDir, '.soma', 'install-state.json');
+      assert.ok(
+        fs.existsSync(stateFilePath),
+        `T-10-S1: install-state.json must exist after 1st install. Not found at ${stateFilePath}`
+      );
+      const stateAfterFirst = JSON.parse(fs.readFileSync(stateFilePath, 'utf8'));
+      assert.equal(stateAfterFirst.status, 'complete',
+        `T-10-S1: install-state.json must have status=complete after 1st install. Got: ${stateAfterFirst.status}`
+      );
 
-    // ── 2nd run: re-install on already-complete project ──────────────────────
-    const r2 = spawnSync('node', [INSTALL_CJS, freshDir, '--tool=claude'], {
-      encoding: 'utf8',
-      timeout: 30000,
-    });
+      // ── 2nd run: re-install on already-complete project ──────────────────────
+      const r2 = spawnSync('node', [INSTALL_CJS, freshDir, '--tool=claude'], {
+        encoding: 'utf8',
+        timeout: 30000,
+        env: fakeHomeEnv(fakeHome),
+      });
 
-    // AC-02 contract assertions:
+      // AC-02 contract assertions:
 
-    // 1. exit code must be 0
-    assert.equal(r2.status, 0,
-      `[RED — T-10] AC-02: 2nd install must exit 0. Got ${r2.status}. stderr: ${r2.stderr} stdout: ${r2.stdout}`
-    );
+      // 1. exit code must be 0
+      assert.equal(r2.status, 0,
+        `[RED — T-10] AC-02: 2nd install must exit 0. Got ${r2.status}. stderr: ${r2.stderr} stdout: ${r2.stdout}`
+      );
 
-    // 2. grep -c '<!-- soma-v2:start' CLAUDE.md must return exactly 1 (no duplicate)
-    const afterSecond = fs.readFileSync(claudeMdPath, 'utf8');
-    const countAfterSecond = (afterSecond.match(/<!-- soma-v2:start/g) || []).length;
-    assert.equal(countAfterSecond, 1,
-      `[RED — T-10] AC-02: grep -c '<!-- soma-v2:start' CLAUDE.md must return 1 after 2nd install. Got ${countAfterSecond}.\n` +
-      `Content: ${afterSecond.slice(0, 400)}`
-    );
+      // 2. grep -c '<!-- soma-v2:start' CLAUDE.md must return exactly 1 (no duplicate)
+      const afterSecond = fs.readFileSync(claudeMdPath, 'utf8');
+      const countAfterSecond = (afterSecond.match(/<!-- soma-v2:start/g) || []).length;
+      assert.equal(countAfterSecond, 1,
+        `[RED — T-10] AC-02: grep -c '<!-- soma-v2:start' CLAUDE.md must return 1 after 2nd install. Got ${countAfterSecond}.\n` +
+        `Content: ${afterSecond.slice(0, 400)}`
+      );
 
-    // 3. stdout must contain literal "no changes"
-    assert.ok(
-      r2.stdout.includes('no changes'),
-      `[RED — T-10] AC-02: 2nd install stdout must contain "no changes". Got stdout: ${r2.stdout}`
-    );
+      // 3. stdout must contain literal "no changes"
+      assert.ok(
+        r2.stdout.includes('no changes'),
+        `[RED — T-10] AC-02: 2nd install stdout must contain "no changes". Got stdout: ${r2.stdout}`
+      );
 
-    // 4. install-state.json status still "complete" (unchanged)
-    const stateAfterSecond = JSON.parse(fs.readFileSync(stateFilePath, 'utf8'));
-    assert.equal(stateAfterSecond.status, 'complete',
-      `[RED — T-10] AC-02: install-state.json must still have status=complete after 2nd install. Got: ${stateAfterSecond.status}`
-    );
-  } finally {
-    try { fs.rmSync(freshDir, { recursive: true, force: true }); } catch (_) {}
-  }
+      // 4. install-state.json status still "complete" (unchanged)
+      const stateAfterSecond = JSON.parse(fs.readFileSync(stateFilePath, 'utf8'));
+      assert.equal(stateAfterSecond.status, 'complete',
+        `[RED — T-10] AC-02: install-state.json must still have status=complete after 2nd install. Got: ${stateAfterSecond.status}`
+      );
+    } finally {
+      try { fs.rmSync(freshDir, { recursive: true, force: true }); } catch (_) {}
+    }
+  });
 });
 
 // ── T-13 tests: mid-pipeline failure rollback (AC-05) ────────────────────────
@@ -1143,6 +1198,7 @@ test('T-13-S1: AC-05 mid-pipeline failure rollback (EACCES/MANIFEST_MISSING) —
  * @task T-11
  */
 test('T-11-S1: AC-03 drift detection abort — user edit inside anchor, no bypass flag → exit 2 + drift-detected state + user text preserved', async (t) => {
+  withFakeHome('t11s1-home-', (fakeHome) => {
   const freshDir = fs.mkdtempSync(path.join(os.tmpdir(), 'soma-t11-s1-'));
   const USER_EDIT_MARKER = '# USER ADDED TEXT INSIDE ANCHOR — T-11-S1 drift marker';
   try {
@@ -1150,6 +1206,7 @@ test('T-11-S1: AC-03 drift detection abort — user edit inside anchor, no bypas
     const r1 = spawnSync('node', [INSTALL_CJS, freshDir, '--tool=claude'], {
       encoding: 'utf8',
       timeout: 30000,
+      env: fakeHomeEnv(fakeHome),
     });
 
     assert.equal(r1.status, 0,
@@ -1205,6 +1262,7 @@ test('T-11-S1: AC-03 drift detection abort — user edit inside anchor, no bypas
     const r2 = spawnSync('node', [INSTALL_CJS, freshDir, '--tool=claude'], {
       encoding: 'utf8',
       timeout: 30000,
+      env: fakeHomeEnv(fakeHome),
     });
 
     // AC-03 assertion 1: exit code must be 2 (drift abort, distinct from exit 1 USAGE error)
@@ -1253,6 +1311,7 @@ test('T-11-S1: AC-03 drift detection abort — user edit inside anchor, no bypas
   } finally {
     try { fs.rmSync(freshDir, { recursive: true, force: true }); } catch (_) {}
   }
+  });
 });
 
 // ── T-14 + T-15 + T-16 tests: CLAUDE.md custom handling (AC-07, AC-08, AC-09) ──
@@ -1286,6 +1345,7 @@ const HYDRA_FIXTURE = path.join(__dirname, 'fixtures', 'hydra-like-claude.md');
  * @task T-14
  */
 test('T-14-S1: AC-07 --merge-claude-md preserves free-text + appends anchored block (no deletions)', async (t) => {
+  withFakeHome('t14s1-home-', (fakeHome) => {
   const freshDir = fs.mkdtempSync(path.join(os.tmpdir(), 'soma-t14-s1-'));
   const claudeMdPath = path.join(freshDir, 'CLAUDE.md');
   try {
@@ -1296,6 +1356,7 @@ test('T-14-S1: AC-07 --merge-claude-md preserves free-text + appends anchored bl
     const r = spawnSync('node', [INSTALL_CJS, freshDir, '--tool=claude', '--merge-claude-md'], {
       encoding: 'utf8',
       timeout: 30000,
+      env: fakeHomeEnv(fakeHome),
     });
 
     // Assertion 1: exit code 0
@@ -1339,6 +1400,7 @@ test('T-14-S1: AC-07 --merge-claude-md preserves free-text + appends anchored bl
   } finally {
     try { fs.rmSync(freshDir, { recursive: true, force: true }); } catch (_) {}
   }
+  });
 });
 
 /**
@@ -1362,6 +1424,7 @@ test('T-14-S1: AC-07 --merge-claude-md preserves free-text + appends anchored bl
  * @task T-15
  */
 test('T-15-S1: AC-08 --replace-claude-md snapshots original + CLAUDE.md = anchor only + snapshot path in stdout', async (t) => {
+  withFakeHome('t15s1-home-', (fakeHome) => {
   const crypto = require('node:crypto');
   const freshDir = fs.mkdtempSync(path.join(os.tmpdir(), 'soma-t15-s1-'));
   const claudeMdPath = path.join(freshDir, 'CLAUDE.md');
@@ -1375,6 +1438,7 @@ test('T-15-S1: AC-08 --replace-claude-md snapshots original + CLAUDE.md = anchor
     const r = spawnSync('node', [INSTALL_CJS, freshDir, '--tool=claude', '--replace-claude-md'], {
       encoding: 'utf8',
       timeout: 30000,
+      env: fakeHomeEnv(fakeHome),
     });
 
     // Assertion 1: exit code 0
@@ -1423,7 +1487,11 @@ test('T-15-S1: AC-08 --replace-claude-md snapshots original + CLAUDE.md = anchor
     );
 
     // Assertion 4: snapshot file exists with matching sha256
-    const snapshotsBase = path.join(os.homedir(), '.soma-v2', '.snapshots');
+    // fakeHome, not os.homedir(): the subprocess above was pointed at
+    // fakeHome via explicit env, so that's the ground truth for where its
+    // snapshot landed — independent of whether process.env.HOME is still
+    // mutated when this line runs.
+    const snapshotsBase = path.join(fakeHome, '.soma-v2', '.snapshots');
 
     // Try to extract snapshot path from stdout
     // Match absolute paths (/Users/.../.soma-v2/.snapshots/<ts>/) or relative (.soma-v2/.snapshots/<ts>/)
@@ -1431,9 +1499,9 @@ test('T-15-S1: AC-08 --replace-claude-md snapshots original + CLAUDE.md = anchor
     let snapshotOriginalFile = null;
 
     if (snapshotPathMatch) {
-      const rawPath = snapshotPathMatch[0].replace(/^~/, os.homedir());
+      const rawPath = snapshotPathMatch[0].replace(/^~/, fakeHome);
       // Resolve: if starts with '/', it's already absolute; otherwise resolve from home
-      const resolved = rawPath.startsWith('/') ? rawPath : path.join(os.homedir(), rawPath);
+      const resolved = rawPath.startsWith('/') ? rawPath : path.join(fakeHome, rawPath);
       const snapDir = fs.existsSync(resolved) && fs.statSync(resolved).isDirectory()
         ? resolved
         : path.dirname(resolved);
@@ -1500,6 +1568,7 @@ test('T-15-S1: AC-08 --replace-claude-md snapshots original + CLAUDE.md = anchor
       try { fs.rmSync(snapshotDirCreated, { recursive: true, force: true }); } catch (_) {}
     }
   }
+  });
 });
 
 /**
@@ -1632,12 +1701,16 @@ test('T-Fix04-S1: Step 0 skip on codex — free-text CLAUDE.md with --tool=codex
 // NOT the source-tree path.
 
 test('T-Fix05-S1: templateVars.soma_home is installed location, not source tree [RED until Fix-05 GREEN]', () => {
+  withFakeHome('tfix05s1-home-', (fakeHome) => {
   const freshDir = fs.mkdtempSync(path.join(os.tmpdir(), 'soma-fix05-'));
-  const INSTALLED_SOMA_HOME = path.join(os.homedir(), '.soma-v2');
+  // fakeHome, not os.homedir(): matches the explicit env passed to the
+  // subprocess below, independent of process.env.HOME's current state.
+  const INSTALLED_SOMA_HOME = path.join(fakeHome, '.soma-v2');
   try {
     const r = spawnSync('node', [INSTALL_CJS, freshDir, '--tool=claude'], {
       encoding: 'utf8',
       timeout: 30000,
+      env: fakeHomeEnv(fakeHome),
     });
 
     // Must exit 0 (greenfield install)
@@ -1675,6 +1748,7 @@ test('T-Fix05-S1: templateVars.soma_home is installed location, not source tree 
   } finally {
     try { fs.rmSync(freshDir, { recursive: true, force: true }); } catch (_) {}
   }
+  });
 });
 
 // ── T-Fix02: AC-08 snapshot path must be under SOMA_HOME (no parent traversal) ──
@@ -1762,11 +1836,13 @@ test('T-Fix02-S1: AC-08 snapshot path starts with SOMA_HOME (no parent traversal
  * @spec [SPEC:AC-01b] [T-08bis] [015-soma-v2.2.1 Bucket A]
  */
 test('T-Fix-A: install-state.json blockIds contains real block_id (underscore-form CLAUDE_md), not placeholder [RED until Bucket A GREEN]', async (t) => {
+  withFakeHome('tfixa-home-', (fakeHome) => {
   const freshDir = fs.mkdtempSync(path.join(os.tmpdir(), 'soma-fix-a-'));
   try {
     const r = spawnSync('node', [INSTALL_CJS, freshDir, '--tool=claude'], {
       encoding: 'utf8',
       timeout: 30000,
+      env: fakeHomeEnv(fakeHome),
     });
 
     assert.equal(r.status, 0,
@@ -1801,6 +1877,7 @@ test('T-Fix-A: install-state.json blockIds contains real block_id (underscore-fo
   } finally {
     try { fs.rmSync(freshDir, { recursive: true, force: true }); } catch (_) {}
   }
+  });
 });
 
 /**

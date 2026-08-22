@@ -37,19 +37,31 @@ const INSTALL_CJS = path.join(SCRIPTS_DIR, 'install.cjs');
 /** Require install.cjs module for unit-level parseArgs testing. */
 const installModule = require(INSTALL_CJS);
 
-/**
- * Run install.cjs as a subprocess with given argv array.
- * @param {string[]} args
- * @param {object} [opts] spawnSync options override
- * @returns spawnSync result (encoding utf8)
- */
-function runInstall(args = [], opts = {}) {
-  return spawnSync('node', [INSTALL_CJS, ...args], {
-    encoding: 'utf8',
-    timeout: 10000,
-    ...opts,
-  });
-}
+// Bucket G (Spec 018): the original comment here claimed only CC-05 and
+// CC-08b reached install.cjs's real pipeline far enough to touch
+// ~/.claude — WRONG, per the orchestrator's own measurement: 11 tests
+// (CC-02a/b/c/d, CC-03a/b, CC-04a/c/d, CC-06, CC-07) call runInstall()
+// bare and DO write there — they just don't FAIL, so the original
+// "which tests fail" scoping missed them entirely. A test that writes
+// to the real ~/.claude successfully is exactly as dangerous as one that
+// fails there; "does it fail" and "does it write" are different sets.
+//
+// runInstall() itself now lives in helpers/cli-run-install.cjs (not
+// inline here) so install-home-isolation-guard.test.cjs can import and
+// exercise this file's REAL, production runInstall() directly — not a
+// hand-rolled stand-in — instead of require()'ing this whole test file
+// (which would re-register every test() below inside the guard's own
+// run). Isolation itself is injected inside that shared function, once,
+// for every call site in this file: each call without its own explicit
+// `opts.env` gets a FRESH, disposable, seeded HOME (never shared with
+// any other call — a shared fake HOME was measured elsewhere in this
+// bucket to poison later calls' project-scoped ledger expectations:
+// 34 -> 58 fails). A call site that already isolates itself explicitly
+// (e.g. CC-05's `{ env: fakeHomeEnv(fakeHome) }`) is left alone — the
+// default never overrides an explicit env. See helpers/fake-home.cjs for
+// why a plain fake HOME isn't enough on its own.
+const { withFakeHome, fakeHomeEnv } = require('./helpers/fake-home.cjs');
+const { runInstall } = require('./helpers/cli-run-install.cjs');
 
 // ── CC-01: argv parser exposes all 7 fields from the contract schema ──────────
 // Contract: project-path (positional) + 6 named flags.
@@ -238,26 +250,28 @@ test('CC-04d: --merge-claude-md alone is valid (exit 0)', () => {
 // produce the expected stdout format. We test for that verifiable side-effect.
 
 test('CC-05: greenfield install (fresh tmpdir) → exit 0 + creates .soma/ dir', () => {
-  // Create an empty directory simulating a fresh project
-  const freshDir = fs.mkdtempSync(path.join(os.tmpdir(), 'soma-cc05-'));
-  try {
-    const r = runInstall([freshDir, '--tool=claude']);
+  withFakeHome('cc05-home-', (fakeHome) => {
+    // Create an empty directory simulating a fresh project
+    const freshDir = fs.mkdtempSync(path.join(os.tmpdir(), 'soma-cc05-'));
+    try {
+      const r = runInstall([freshDir, '--tool=claude'], { env: fakeHomeEnv(fakeHome) });
 
-    // Exit code MUST be 0 (either stub or real impl)
-    assert.equal(r.status, 0,
-      `Greenfield install must exit 0. Got ${r.status}. stderr: ${r.stderr}`);
+      // Exit code MUST be 0 (either stub or real impl)
+      assert.equal(r.status, 0,
+        `Greenfield install must exit 0. Got ${r.status}. stderr: ${r.stderr}`);
 
-    // RED-phase assertion: .soma/ directory MUST be created by real implementation.
-    // This FAILS until T-08 implements the pipeline.
-    const somaDir = path.join(freshDir, '.soma');
-    assert.ok(
-      fs.existsSync(somaDir),
-      `[RED — depends T-08] Greenfield install must create .soma/ in target. ` +
-      `${somaDir} not found. This FAILS until T-08 implements the pipeline.`
-    );
-  } finally {
-    try { fs.rmSync(freshDir, { recursive: true, force: true }); } catch (_) {}
-  }
+      // RED-phase assertion: .soma/ directory MUST be created by real implementation.
+      // This FAILS until T-08 implements the pipeline.
+      const somaDir = path.join(freshDir, '.soma');
+      assert.ok(
+        fs.existsSync(somaDir),
+        `[RED — depends T-08] Greenfield install must create .soma/ in target. ` +
+        `${somaDir} not found. This FAILS until T-08 implements the pipeline.`
+      );
+    } finally {
+      try { fs.rmSync(freshDir, { recursive: true, force: true }); } catch (_) {}
+    }
+  });
 });
 
 // ── CC-06: lockfile contention → exit 2 ──────────────────────────────────────
@@ -386,24 +400,27 @@ test('CC-08: CLAUDE.md has free-text content, no handling flag, piped (non-inter
 });
 
 test('CC-08b: CLAUDE.md has free-text + --merge-claude-md flag → NOT exit 2 (flag resolves ambiguity)', () => {
-  const customDir = fs.mkdtempSync(path.join(os.tmpdir(), 'soma-cc08b-'));
-  try {
-    const claudeMd = path.join(customDir, 'CLAUDE.md');
-    fs.writeFileSync(claudeMd, '# Custom rules\nNo anchor markers.\n', 'utf8');
+  withFakeHome('cc08b-home-', (fakeHome) => {
+    const customDir = fs.mkdtempSync(path.join(os.tmpdir(), 'soma-cc08b-'));
+    try {
+      const claudeMd = path.join(customDir, 'CLAUDE.md');
+      fs.writeFileSync(claudeMd, '# Custom rules\nNo anchor markers.\n', 'utf8');
 
-    const r = spawnSync('node', [INSTALL_CJS, customDir, '--tool=claude', '--merge-claude-md'], {
-      encoding: 'utf8',
-      timeout: 10000,
-      stdio: ['pipe', 'pipe', 'pipe'], // non-interactive
-    });
+      const r = spawnSync('node', [INSTALL_CJS, customDir, '--tool=claude', '--merge-claude-md'], {
+        encoding: 'utf8',
+        timeout: 10000,
+        stdio: ['pipe', 'pipe', 'pipe'], // non-interactive
+        env: fakeHomeEnv(fakeHome),
+      });
 
-    // Must NOT exit 2 for the "no flag" reason — the user provided a resolution flag.
-    // RED-phase: in stub this exits 0 (flag accepted). Real impl must also not exit 2 here.
-    assert.notEqual(r.status, 2,
-      `[RED — depends T-08+T-14] --merge-claude-md must resolve the free-text ambiguity (not exit 2). ` +
-      `Got ${r.status}. stderr: ${r.stderr} stdout: ${r.stdout}`
-    );
-  } finally {
-    try { fs.rmSync(customDir, { recursive: true, force: true }); } catch (_) {}
-  }
+      // Must NOT exit 2 for the "no flag" reason — the user provided a resolution flag.
+      // RED-phase: in stub this exits 0 (flag accepted). Real impl must also not exit 2 here.
+      assert.notEqual(r.status, 2,
+        `[RED — depends T-08+T-14] --merge-claude-md must resolve the free-text ambiguity (not exit 2). ` +
+        `Got ${r.status}. stderr: ${r.stderr} stdout: ${r.stdout}`
+      );
+    } finally {
+      try { fs.rmSync(customDir, { recursive: true, force: true }); } catch (_) {}
+    }
+  });
 });

@@ -14,7 +14,7 @@
  *
  * This file's [SPEC:AC-10] slice is ONLY "report ilegível" (corrupt JSON —
  * case 5 below). The other AC-10 slice ("check externo não executa") is
- * T-15's (hooks/spec-test-traceability.cjs) and is not touched here.
+ * T-15's (core/hooks/spec-test-traceability.cjs) and is not touched here.
  *
  * Also covers: routing through `--validate` — every failure path (missing
  * metadata for the task, missing --validator flag) must satisfy the same

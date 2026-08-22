@@ -42,6 +42,12 @@ const os = require('node:os');
 const crypto = require('node:crypto');
 const { spawnSync } = require('node:child_process');
 
+// Spec 018 (T-05): readLedger() is the single source of truth for the
+// `installedFiles` shape (CONTRACT-FILES-LEDGER-02). install.cjs depends on
+// files.cjs, never the reverse (contract §"writeLedger não valida a
+// whitelist — quem valida é a T-05").
+const filesModule = require('./install/files.cjs');
+
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 /**
@@ -73,6 +79,11 @@ const SEMVER_RE = /^\d+\.\d+\.\d+/;
 /** Allowed top-level fields per CONTRACT-02 (additionalProperties: false). */
 const ALLOWED_STATE_FIELDS = new Set([
   '$schema', 'status', 'timestamp', 'snapshotId', 'harness', 'installedVersion', 'lastError', 'blockIds',
+  // Spec 018 (T-05): CONTRACT-FILES-LEDGER-02 §Whitelist (AC-07). Extending
+  // this set must not loosen the additionalProperties:false check below —
+  // an unrelated unknown field must still be rejected (contract's "os dois
+  // lados da whitelist").
+  'installedFiles',
 ]);
 
 // ── CLAUDE.md detection helpers (T-14, T-15, T-16) ──────────────────────────
@@ -386,6 +397,18 @@ function validateInstallState(state) {
     throw new Error(`install-state: installedVersion must match semver N.N.N prefix. Got: "${state.installedVersion}"`);
   }
 
+  // installedFiles shape (CONTRACT-FILES-LEDGER-02, AC-07): optional field,
+  // but when present must be the ledger's container shape — a plain object
+  // keyed by target_path, never an array or null. Per-entry {sha256,
+  // installedAt} shape is files.cjs's own concern (buildLedgerEntry); this
+  // only guards the top-level container so a malformed value fails loud
+  // here instead of surfacing later as a confusing files.cjs read error.
+  if ('installedFiles' in state) {
+    if (typeof state.installedFiles !== 'object' || state.installedFiles === null || Array.isArray(state.installedFiles)) {
+      throw new Error(`install-state: installedFiles must be a plain object keyed by target_path. Got: ${JSON.stringify(state.installedFiles)}`);
+    }
+  }
+
   // status=complete → non-empty blockIds (CONTRACT-02 §Invariants)
   if (state.status === 'complete') {
     if (!Array.isArray(state.blockIds) || state.blockIds.length === 0) {
@@ -407,15 +430,45 @@ function validateInstallState(state) {
  * Uses write-to-temp + rename for atomic semantics (CONTRACT-02 §Invariants).
  * File mode: 0644.
  *
+ * Spec 018 (T-05) — installedFiles preservation (AC-06): this function
+ * replaces the whole state object rather than merging, unlike files.cjs's
+ * own writeLedger (which merges installedFiles into whatever state already
+ * exists, on purpose, because it does not own the rest of the schema). The
+ * two functions write the SAME file (CONTRACT-FILES-LEDGER-02 §"ONDE o
+ * ledger mora"). Without preservation here, any writeInstallState call
+ * later in the SAME pipeline run (e.g. the final status=complete write in
+ * orchestrate()) would silently clobber whatever installedFiles ledger the
+ * kind:"file" pipeline already wrote earlier in that same run — exactly
+ * the AC-06 violation this task exists to prevent. Preservation is
+ * skipped when the caller explicitly supplies its own `installedFiles`
+ * (that value wins, never merged/overridden), and is best-effort: an
+ * unreadable/corrupt existing state file must never block a state write
+ * that is otherwise valid — losing ledger provenance is recoverable
+ * (worst case: a future run re-diverges and re-installs), refusing to
+ * record a real install outcome is not.
+ *
  * @param {string} projectPathAbs  Absolute project path
  * @param {object} state           State object — must pass validateInstallState
  * @returns {string}               Absolute path to written state file
- * @spec [CONTRACT:02] [SPEC:AC-16]
- * @task T-09
+ * @spec [CONTRACT:02] [SPEC:AC-16] [SPEC:AC-06]
+ * @task T-09 T-05
  */
 function writeInstallState(projectPathAbs, state) {
+  let effectiveState = state;
+  if (state && typeof state === 'object' && !('installedFiles' in state)) {
+    try {
+      const { installed, installedFiles } = filesModule.readLedger(projectPathAbs);
+      if (installed && installedFiles && Object.keys(installedFiles).length > 0) {
+        effectiveState = { ...state, installedFiles };
+      }
+    } catch (_) {
+      // Existing install-state.json unreadable/corrupt — proceed without
+      // preservation rather than blocking this (otherwise valid) write.
+    }
+  }
+
   // Validate schema first (throws on violation)
-  validateInstallState(state);
+  validateInstallState(effectiveState);
 
   const somaDir = path.join(projectPathAbs, '.soma');
   fs.mkdirSync(somaDir, { recursive: true });
@@ -426,7 +479,7 @@ function writeInstallState(projectPathAbs, state) {
   const tmpSuffix = Math.random().toString(36).slice(2, 10);
   const tmpPath = path.join(somaDir, `install-state.json.tmp.${tmpSuffix}`);
 
-  const content = JSON.stringify(state, null, 2) + '\n';
+  const content = JSON.stringify(effectiveState, null, 2) + '\n';
   fs.writeFileSync(tmpPath, content, { mode: 0o644 });
 
   // Atomic rename (POSIX guarantees atomicity for same-filesystem rename)
@@ -1224,4 +1277,10 @@ if (require.main === module) {
 
 // ── Module exports (for testability) ─────────────────────────────────────────
 
-module.exports = { main, parseArgs, resolveProjectPath, acquireLock, releaseLock, writeInstallState };
+module.exports = {
+  main, parseArgs, resolveProjectPath, acquireLock, releaseLock, writeInstallState,
+  // Spec 018 (T-05): exported for CONTRACT-FILES-LEDGER-02 case 2 (the "dois
+  // lados da whitelist" test lives in files.cjs's own contract test file and
+  // needs to exercise install.cjs's actual validator, not a re-derived copy).
+  validateInstallState,
+};

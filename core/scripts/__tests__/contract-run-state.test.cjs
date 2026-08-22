@@ -34,7 +34,7 @@ const os = require('node:os');
 
 const REPO_ROOT = path.resolve(__dirname, '..', '..', '..');
 const RUN_CLI = path.resolve(__dirname, '..', 'run.cjs');
-const HOOK = path.resolve(REPO_ROOT, 'hooks', 'spec-completeness-gate.cjs');
+const HOOK = path.resolve(REPO_ROOT, 'core', 'hooks', 'spec-completeness-gate.cjs');
 const { resolveSomaPaths } = require(path.resolve(__dirname, '..', 'run', 'paths.cjs'));
 
 // ── Helpers ──────────────────────────────────────────────────────────────
@@ -373,7 +373,7 @@ test('T-03-05: project without .soma/ runs in legacy mode with a warning, never 
 test('T-03-06: REGRESSION — spec-completeness-gate must keep blocking after state migrates from /tmp to .soma/', () => {
   const dir = makeLabProject({ withSomaDir: true });
   // sessionId comes from env (CK_SESSION_ID / CLAUDE_SESSION_ID), never stdin —
-  // see hooks/spec-completeness-gate.cjs getSessionId(). Getting this wrong
+  // see core/hooks/spec-completeness-gate.cjs getSessionId(). Getting this wrong
   // makes the test pass without testing anything (has happened 2x already,
   // per the spec's discovery notes).
   const sessionId = `contract-t03-${process.pid}-${Date.now()}`;

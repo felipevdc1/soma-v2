@@ -13,6 +13,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const REPO_ROOT = path.resolve(__dirname, '../../..');
+const { isFileEntry } = require(path.join(REPO_ROOT, 'core', 'scripts', 'install', 'files.cjs'));
 const CLAUDE_INSTALL_TARGETS = path.join(REPO_ROOT, 'core/adapters/claude/install-targets.json');
 const CODEX_INSTALL_TARGETS = path.join(REPO_ROOT, 'core/adapters/codex/install-targets.json');
 const MCP_SOURCE_DOC = path.join(REPO_ROOT, 'core/docs/codebase-memory-mcp.md');
@@ -21,7 +22,12 @@ test('AC-01: claude install-targets has no cbm entry', () => {
   const targets = JSON.parse(fs.readFileSync(CLAUDE_INSTALL_TARGETS, 'utf8'));
   const cbmEntry = targets.entries.find(e => e.block_id === 'block.claude.CLAUDE_md.cbm');
   assert.equal(cbmEntry, undefined, 'cbm legacy entry should be dropped');
-  assert.equal(targets.entries.length, 3, 'claude install-targets should have 3 entries (was 4)');
+  // Count BLOCK entries only — Spec 018 added kind:"file" entries to this
+  // same array (19 hooks + 12 commands) that this pre-018 assumption never
+  // anticipated. The "3" is about the block world (this test's actual
+  // subject); it was never a claim about the whole array's size.
+  const blockEntries = targets.entries.filter((e) => !isFileEntry(e));
+  assert.equal(blockEntries.length, 3, 'claude install-targets should have 3 BLOCK entries (was 4)');
 });
 
 test('AC-06: codex codebase-memory-mcp source_doc is correct', () => {

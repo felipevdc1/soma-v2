@@ -135,7 +135,7 @@ The 12 gates checked:
 | 9 | Output-style file | `~/.claude/output-styles/soma-voxel.md` exists |
 | 10 | Plugin manifest valid | `plugin.json` parses without error |
 | 11 | Constitution ratified | `core/docs/constitution.md` contains `v1.0.0` and no `DRAFT` |
-| 12 | No coupling leak | Zero hardcoded machine-specific paths in `core/`, `hooks/`, `commands/` |
+| 12 | No coupling leak | Zero hardcoded machine-specific paths in `core/`, `commands/` |
 
 Gates 2–4 require a live Claude Code session. In CI mode (`--mode=ci`), those gates are skipped automatically.
 

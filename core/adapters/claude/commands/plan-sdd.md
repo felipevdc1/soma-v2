@@ -44,7 +44,7 @@ test -f "$SPEC_PATH" || echo "ABORT: spec.md não encontrada em $SPEC_PATH"
 # Medido em 2026-08-15: o grep ingênuo dava falso-positivo em 13 das 15 specs do repo e abortava
 # o /plan-sdd numa spec já aprovada no Gate 1.
 #
-# A AUTORIDADE desta regra é `hooks/spec-completeness-gate.cjs`. Se este snippet divergir dele,
+# A AUTORIDADE desta regra é `core/hooks/spec-completeness-gate.cjs`. Se este snippet divergir dele,
 # o hook vence e este bloco está errado — conserte aqui, não lá.
 node -e '
   const fs = require("fs");

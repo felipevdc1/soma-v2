@@ -28,8 +28,17 @@ const os = require('node:os');
 const crypto = require('node:crypto');
 
 const { extractBlock, computeBlockSha256, parseAnchorAttrs, escapeRegex } = require('./lib/anchored-blocks.cjs');
-const { loadManifest, loadInstallTargets, listAdapters } = require('./lib/manifest.cjs');
+const { loadManifest, listAdapters } = require('./lib/manifest.cjs');
 const { createSnapshot } = require('./lib/snapshot.cjs');
+// Spec 018 (T-07): pure planning/ledger logic for kind:"file" entries lives
+// in install/files.cjs (T-01) — sync.cjs only wires it in, never re-derives
+// the clean-vs-diverged decision itself (CONTRACT-FILES-LEDGER-02).
+const filesModule = require('./install/files.cjs');
+// D-018-06 (supersedes D-018-05): the default-mode loader below composes
+// with manifest.cjs's frozen validateInstallTargetsSchema instead of
+// patching it — manifest.cjs stays byte-identical. See
+// core/scripts/install/targets.cjs's own header for why.
+const { loadInstallTargetsWithKinds } = require('./install/targets.cjs');
 
 // ---- Tool-level injection defaults (BF-01/BF-02 per AC-03) ----
 // Defines wrapper_section and position_before defaults for each tool.
@@ -682,6 +691,200 @@ function buildSummary(findings, totalEntries) {
   return { total_entries: totalEntries, by_action: byAction };
 }
 
+// ---- File entries (Spec 018, T-07) ----
+//
+// Wiring only: all clean-vs-diverged / needsWrite decision logic lives in
+// install/files.cjs (T-01, CONTRACT-FILES-LEDGER-02). This section adds
+// exactly two things sync.cjs itself is responsible for:
+//   1. the symlink guard on the real write (NFR — no earlier task performs
+//      a write, so this NFR had no owner until T-07; see D-018 tasks.md
+//      "A T-07 e' dona do guarda de symlink"),
+//   2. wiring that keeps file-entry processing FULLY SEPARATE from the
+//      existing block-entry code path (computeEntryAction/runApplyMode are
+//      never touched) — the deliberate, conservative reading of AC-02: the
+//      safest way to guarantee block behavior stays byte-identical is to
+//      never let file-entry state influence a single line of the block
+//      code, not to prove it stays identical after interleaving them.
+//
+// "Project root" for the file ledger (`{projeto}/.soma/install-state.json`,
+// CONTRACT-FILES-LEDGER-02) is `process.cwd()`, NOT `somaHome`.
+//
+// FIXED 2026-08-21 — T-07 reopened. The first version of this comment
+// argued for `somaHome` "by analogy with .snapshots" and flagged it as an
+// open judgment call in the final report. That call was wrong, and
+// leaving the rationale here uncorrected would have been the exact
+// failure the fix corrects: a stale justification outliving the code it
+// justified. install.cjs ALWAYS invokes sync.cjs with `cwd:
+// projectPathAbs` and `--soma-home=SOURCE_CORE` (the repo dir) — two
+// DIFFERENT directories in every real invocation (verified by T-05,
+// install.cjs:841). Using `somaHome` here silently split the ledger:
+// install.cjs's writeInstallState and sync.cjs's runFileApplyMode were
+// writing to two different install-state.json files instead of one,
+// caught only because T-05 hit the exact two lines with a live fixture
+// (install-files-ledger.test.cjs, skipped case "T-05-06").
+//
+// `somaHome` keeps meaning exactly what it always meant elsewhere in this
+// file: where adapters/ and source_doc/source_path resolve from. Only the
+// ledger's root changed — `process.cwd()` is what `install.cjs` already
+// uses as `projectPathAbs`, and it's what every OTHER project-scoped path
+// in this file already resolves relative to (see the `--targets-file`
+// branch above: lines 1302, 1309, 1357, 1366, all "the project dir").
+
+/**
+ * planFileInstall() wrapper that folds in the symlink guard. files.cjs is
+ * pure content-identity logic — it has no concept of a write operation, so
+ * it never checks whether an existing target is a symlink. A target that
+ * already exists as a symlink is treated as diverged even when its content
+ * happens to sha256-match the ledger: relying solely on "no ledger entry ->
+ * diverged" would miss the case where a symlink's pointed-to content
+ * happens to match a stale ledger entry byte-for-byte. Spec NFR: "a
+ * escrita nunca segue symlink para fora do target_path declarado."
+ *
+ * @param {object[]} entries  raw kind:"file" entries
+ * @param {string} somaHome
+ * @param {object} ledger     installedFiles map, keyed by verbatim target_path
+ * @returns {{ ok: boolean, diverged: string[], plan: object[] }}
+ */
+function planFileInstallSafe(entries, somaHome, ledger) {
+  const result = filesModule.planFileInstall(entries, { repoRoot: somaHome, ledger });
+  const symlinked = [];
+  for (const item of result.plan) {
+    if (fs.existsSync(item.targetPathAbs)) {
+      let st = null;
+      try { st = fs.lstatSync(item.targetPathAbs); } catch (_) { st = null; }
+      if (st && st.isSymbolicLink()) symlinked.push(item.target_path);
+    }
+  }
+  if (symlinked.length === 0) return result;
+  const divergedSet = new Set([...result.diverged, ...symlinked]);
+  return {
+    ok: false,
+    diverged: Array.from(divergedSet),
+    plan: result.plan.map((item) =>
+      symlinked.includes(item.target_path) ? { ...item, state: 'diverged', needsWrite: false } : item
+    ),
+  };
+}
+
+/**
+ * Turn planFileInstallSafe()'s plan[] into sync.cjs finding objects, using
+ * the SAME action vocabulary block findings already use — CONTRACT-FILE-
+ * ENTRY-01 §"Coexistência": "Entries de arquivo aparecem no output com o
+ * mesmo vocabulário de action." buildSummary() above already counts any
+ * finding whose `action` is one of insert/replace/skip/drift, so these
+ * slot into the existing by_action tally for free.
+ *
+ * @param {object[]} entries  raw kind:"file" entries
+ * @param {string} somaHome
+ * @param {object} ledger
+ * @returns {object[]} finding objects (kind:"file")
+ */
+function computeFileFindings(entries, somaHome, ledger) {
+  const { plan } = planFileInstallSafe(entries, somaHome, ledger);
+  return plan.map((item) => {
+    const targetExists = fs.existsSync(item.targetPathAbs);
+    let action;
+    let message;
+    if (item.state === 'diverged') {
+      action = 'drift';
+      message = 'File diverged from what SOMA last installed (manual edit, foreign file, or symlink at target) — would abort install';
+    } else if (item.needsWrite) {
+      action = targetExists ? 'replace' : 'insert';
+      message = targetExists
+        ? 'File content differs from source; would overwrite'
+        : `Would install file (target does not exist: ${path.basename(item.target_path)})`;
+    } else {
+      action = 'skip';
+      message = 'Already installed and unchanged';
+    }
+    return {
+      action,
+      kind: 'file',
+      target_path: item.target_path, // verbatim (may be ~-prefixed) — never expanded on a finding
+      source_path: item.source_path,
+      target_anchor_id: null,
+      source_doc: null,
+      expected_sha256: item.sourceSha256,
+      actual_sha256: null,
+      source_block_content: null,
+      message,
+    };
+  });
+}
+
+/**
+ * Copy one plan[] item's source to its target, byte-for-byte (AC-01),
+ * after the symlink guard has already excluded it from `ok` if unsafe —
+ * this function assumes the caller only invokes it on approved, non-
+ * symlinked targets (planFileInstallSafe already proved that before any
+ * write is attempted).
+ *
+ * @param {object} item  one planFileInstallSafe() plan[] entry
+ */
+function writeFileEntry(item) {
+  fs.mkdirSync(path.dirname(item.targetPathAbs), { recursive: true });
+  const content = fs.readFileSync(item.sourcePathAbs);
+  fs.writeFileSync(item.targetPathAbs, content);
+}
+
+/**
+ * Apply kind:"file" entries: two-pass (AC-04) — evaluate every declared
+ * file entry against the ledger first, write nothing; only if NONE
+ * diverged does a second pass write everything that needsWrite. Runs
+ * BEFORE runApplyMode() is even called (see main()) and never touches
+ * `allFindings`/`runApplyMode` — architectural separation is the proof
+ * that block behavior stays byte-identical (AC-02), not a shared branch
+ * inside the existing write loop.
+ *
+ * @param {object[]} entries  raw kind:"file" entries across all adapters in this run
+ * @param {string} somaHome
+ * @param {boolean} useJson
+ * @returns {{ aborted: boolean, written?: number }}
+ */
+function runFileApplyMode(entries, somaHome, useJson) {
+  if (entries.length === 0) return { aborted: false, written: 0 };
+
+  // Ledger root is process.cwd() (the project), never somaHome — see the
+  // "File entries" section comment above for why this changed.
+  const projectRootAbs = process.cwd();
+  const { installedFiles: ledger } = filesModule.readLedger(projectRootAbs);
+  const { ok, diverged, plan } = planFileInstallSafe(entries, somaHome, ledger);
+
+  if (!ok) {
+    const msg = `File(s) diverged from what SOMA last installed — aborting before any file write: ${diverged.join(', ')}`;
+    if (useJson) {
+      process.exitCode = 2;
+      process.stdout.write(JSON.stringify({
+        schema: 'soma-sync-apply/v1', mode: 'apply', snapshot: null, summary: null,
+        error: { code: 'FILE_CONFLICT', message: msg, details: { diverged } }
+      }, null, 2) + '\n');
+    } else {
+      process.stderr.write(`FILE_CONFLICT: file(s) diverged from what SOMA last installed.\n\n`);
+      for (const p of diverged) process.stderr.write(`  ${p}\n`);
+      process.stderr.write(`\nNo file was written. Reconcile by hand, then re-run.\n`);
+      process.exit(2);
+    }
+    return { aborted: true };
+  }
+
+  const toWrite = plan.filter((p) => p.needsWrite);
+  const newLedgerEntries = {};
+  for (const item of toWrite) {
+    writeFileEntry(item);
+    newLedgerEntries[item.target_path] = filesModule.buildLedgerEntry(item.sourceSha256);
+  }
+  if (Object.keys(newLedgerEntries).length > 0) {
+    filesModule.writeLedger(projectRootAbs, { ...ledger, ...newLedgerEntries });
+  }
+
+  if (!useJson) {
+    for (const item of toWrite) {
+      process.stdout.write(`  Writing file ${item.target_path}\n`);
+    }
+  }
+  return { aborted: false, written: toWrite.length };
+}
+
 // ---- Apply mode ----
 
 // SANDBOX_VIOLATION safe-path prefix (Article III enforcement — SOMA_SAFE_PATHS_ONLY=1)
@@ -1102,6 +1305,10 @@ function main() {
   }
 
   const allFindings = [];
+  // kind:"file" entries, collected separately from allFindings on purpose
+  // (Spec 018 T-07 — see "File entries" section above): allFindings feeds
+  // runApplyMode() unchanged, so file entries must never land in it.
+  const fileEntries = [];
   let totalEntries = 0;
 
   // ---- --targets-file= mode: load adapter from explicit path, resolve relative target_path vs cwd ----
@@ -1139,6 +1346,27 @@ function main() {
     totalEntries += targetsData.entries.length;
 
     for (const entry of targetsData.entries) {
+      // Spec 018 (T-07): kind:"file" entries are out of scope for
+      // --targets-file mode — it is not part of the fixed CLI surface
+      // (plan.md "Superfície fixada" only names `soma sync --tool claude
+      // --dry-run/--apply`). Skip rather than feed a file entry into
+      // computeEntryAction, which assumes target_anchor_id exists. See
+      // final report "Lacunas do documento".
+      //
+      // The skip itself is unchanged — this only makes it AUDIBLE.
+      // AC-10's own point applies at small scale here too: "silêncio de
+      // check que não rodou é indistinguível de silêncio de check limpo"
+      // — a mute `continue` reads, from the terminal, identically to "no
+      // file entries were present at all." Always stderr, never stdout,
+      // so --json callers (install.cjs parses this stdout) keep getting
+      // parseable JSON regardless of how many file entries got skipped.
+      if (filesModule.isFileEntry(entry)) {
+        process.stderr.write(
+          `WARNING [FILE_ENTRY_UNSUPPORTED_IN_TARGETS_FILE_MODE]: kind:"file" entry skipped (not supported via --targets-file): ${entry.target_path}\n`
+        );
+        continue;
+      }
+
       // Resolve relative target_path against cwd (critical contract for project-level sync).
       // Absolute paths and ~ paths use existing expansion logic (expandHome).
       // Relative paths (e.g. "CLAUDE.md") are resolved against process.cwd().
@@ -1166,7 +1394,9 @@ function main() {
     for (const adapter of adapters) {
       let targetsData;
       try {
-        targetsData = loadInstallTargets(somaHome, adapter);
+        // D-018-06: understands both entry kinds; block entries validated
+        // via manifest.cjs's own (unmodified) validateInstallTargetsSchema.
+        targetsData = loadInstallTargetsWithKinds(somaHome, adapter);
       } catch (err) {
         continue;
       }
@@ -1174,6 +1404,15 @@ function main() {
       totalEntries += targetsData.entries.length;
 
       for (const entry of targetsData.entries) {
+        // Spec 018 (T-07): kind:"file" entries are not block entries —
+        // computeEntryAction assumes target_anchor_id/source_doc, both of
+        // which CONTRACT-FILE-ENTRY-01 forbids on a file entry. Route them
+        // to the separate file pipeline instead (AC-02: block findings for
+        // the OTHER entries in this same array stay untouched by this).
+        if (filesModule.isFileEntry(entry)) {
+          fileEntries.push(entry);
+          continue;
+        }
         const finding = computeEntryAction(entry, somaHome);
         finding.adapter = adapter;
         // BF-01/BF-02: propagate per-entry injection options (optional fields in install-targets entries)
@@ -1205,13 +1444,44 @@ function main() {
 
   // ---- APPLY mode ----
   if (flags.apply) {
+    // Spec 018 (T-07): file entries are applied by a fully separate
+    // function, BEFORE runApplyMode is even called, and runApplyMode's
+    // arguments (allFindings, totalEntries, adapters) are exactly what
+    // they were before this task touched sync.cjs — architectural
+    // separation, not a shared branch, is what makes AC-02's "block
+    // findings/behavior identical" provable rather than merely hoped for.
+    if (fileEntries.length > 0) {
+      const fileResult = runFileApplyMode(fileEntries, somaHome, useJson);
+      if (fileResult.aborted) return;
+    }
     runApplyMode(flags, somaHome, allFindings, totalEntries, adapters, useJson);
     return;
   }
 
   // ---- DRY-RUN mode (Phase 2 preserved — AC-01) ----
-  const summary = buildSummary(allFindings, totalEntries);
-  const actionableFindings = allFindings.filter(f => f.action !== 'skip');
+  // Spec 018 (T-07): file findings are computed into their OWN array and
+  // merged only into the local display/summary variables below —
+  // allFindings itself (which apply mode passes untouched to
+  // runApplyMode) never receives them. Ledger read is safe here even
+  // when fileEntries is empty (readLedger tolerates a missing ledger —
+  // AC-10) and costs one extra fs.existsSync when there is nothing to do.
+  const fileFindings = fileEntries.length > 0
+    ? (() => {
+        // Ledger root is process.cwd(), matching runFileApplyMode() and
+        // install.cjs — see the "File entries" section comment above.
+        const { installedFiles: ledger } = filesModule.readLedger(process.cwd());
+        return computeFileFindings(fileEntries, somaHome, ledger).map((f) => ({
+          ...f,
+          adapter: adapters[0] || 'unknown',
+          wrapper_section: null,
+          position_before: null,
+        }));
+      })()
+    : [];
+  const combinedFindings = allFindings.concat(fileFindings);
+
+  const summary = buildSummary(combinedFindings, totalEntries);
+  const actionableFindings = combinedFindings.filter(f => f.action !== 'skip');
   const hasActions = actionableFindings.length > 0;
 
   process.exitCode = hasActions ? 1 : 0;
@@ -1222,18 +1492,18 @@ function main() {
       soma_home: somaHome,
       adapters_scanned: adapters,
       summary,
-      findings: allFindings
+      findings: combinedFindings
     };
     process.stdout.write(JSON.stringify(output, null, 2) + '\n');
   } else {
     process.stdout.write(`SOMA sync --dry-run — previewing edits per anchored block\n\n`);
 
-    const displayFindings = flags.verbose ? allFindings : actionableFindings;
+    const displayFindings = flags.verbose ? combinedFindings : actionableFindings;
 
     if (!hasActions) {
       process.stdout.write('OK: All entries in sync. No actions needed.\n');
     } else {
-      const skipCount = allFindings.length - actionableFindings.length;
+      const skipCount = combinedFindings.length - actionableFindings.length;
       process.stdout.write(`ACTIONS: ${actionableFindings.length} finding(s)`);
       if (!flags.verbose && skipCount > 0) {
         process.stdout.write(` (${skipCount} skip suppressed; --verbose to show all)`);
@@ -1243,7 +1513,11 @@ function main() {
       for (const f of displayFindings) {
         const label = humanActionLabel(f.action);
         const shortTarget = f.target_path.replace(os.homedir(), '~');
-        process.stdout.write(`  ${label}    ${shortTarget} ← ${f.target_anchor_id} (source: ${f.source_doc})\n`);
+        if (f.kind === 'file') {
+          process.stdout.write(`  ${label}    ${shortTarget} ← (file) (source: ${f.source_path})\n`);
+        } else {
+          process.stdout.write(`  ${label}    ${shortTarget} ← ${f.target_anchor_id} (source: ${f.source_doc})\n`);
+        }
       }
       process.stdout.write('\nRun with --apply to write changes.\n');
     }

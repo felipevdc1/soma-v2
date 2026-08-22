@@ -59,6 +59,60 @@ A última linha importa: arquivo que existe mas que o SOMA nunca registrou **nã
 
 ---
 
+## A chave do ledger é o `target_path` VERBATIM — não expandido
+
+Fixado em 2026-08-21 depois da T-01, porque T-05 e T-07 escrevem e leem este mesmo ledger e **têm de usar a mesma string**.
+
+A chave é o `target_path` **exatamente como a entry o declara** — `~/.claude/hooks/framework-guard.cjs`, com o `~` intacto. A forma expandida (`/Users/<user>/.claude/...`) é usada **apenas** para tocar o filesystem, **nunca** como chave.
+
+⚠️ **O modo de falhar é silencioso, e é por isso que está escrito aqui.** Se um consumidor gravar com a chave expandida e outro procurar com a verbatim, o lookup do AC-04 devolve `undefined` → o arquivo é classificado como *"presente sem entrada no ledger"* → **divergido** → a instalação aborta com uma acusação falsa. Nenhum teste de unidade dos dois lados pegaria isso; só o encontro entre eles.
+
+---
+
+## `needsWrite` — campo composto, e o que ele NÃO é
+
+Fixado em 2026-08-21 depois da T-01. Não estava no contrato original; a T-01 precisou dele para tornar a idempotência (stub #9) decidível no módulo puro, em vez de cada consumidor recomputar sha e comparar por conta própria — que é como três cópias divergentes nasceriam.
+
+`planFileInstall` devolve, por item do `plan[]`: `source_path`, `target_path`, `sourcePathAbs`, `targetPathAbs`, `state`, `sourceSha256`, `needsWrite`.
+
+- **`state`** é fiel à tabela literal acima (`clean` | `diverged`) e **não muda**.
+- **`needsWrite`** é derivado: `state === 'clean'` **e** (alvo ausente do disco **ou** sem entrada no ledger **ou** sha do ledger ≠ sha da fonte).
+
+⚠️ **A cláusula "alvo ausente do disco" não é redundante.** `state` devolve `clean` tanto para *"ausente, primeira instalação"* quanto para *"presente e idêntico ao registrado"* — são situações opostas quanto a precisar de escrita. Sem essa cláusula, um arquivo **apagado pelo usuário** com o ledger ainda em dia produz `needsWrite: false`, e o `soma install` vira no-op silencioso com exit 0: o hook nunca volta. Isso contradiz o AC-01 diretamente. Medido e reproduzido com controle em 2026-08-21, contra a primeira implementação da T-01.
+
+**Consumidor escreve quando `needsWrite` é `true`.** Não recompute a decisão — se ela precisar mudar, muda aqui e no módulo, não no consumidor.
+
+---
+
+## `writeLedger` não valida a whitelist — quem valida é a T-05
+
+Fixado em 2026-08-21 depois da T-01. O módulo `core/scripts/install/files.cjs` **não** requer `install.cjs`: a dependência corre `install.cjs → files.cjs`, nunca o inverso, para não fechar ciclo. Consequência prática: `writeLedger` faz merge do campo `installedFiles` preservando o resto do state, e **não** roda `ALLOWED_STATE_FIELDS` nem `validateInstallState`.
+
+Portanto o stub #2 deste contrato — *"os dois lados da whitelist"* — é responsabilidade da **T-05**, que é dona do `install.cjs`. Os testes da T-01 provam apenas o merge e o round-trip. **T-05: a validação não está feita; ela é sua.**
+
+---
+
+## 🔴 ONDE o ledger mora — resolvido em 2026-08-21, depois da T-07
+
+**Este é o mesmo defeito da chave verbatim, um nível acima: dois consumidores, duas réguas, e a falha aparece só no encontro.** A T-07 o nomeou antes de eu ver.
+
+Medido:
+
+| Quem escreve | Caminho que usa hoje | No caminho real do `soma install` isso é |
+|---|---|---|
+| `sync.cjs` (T-07) | `<somaHome>/.soma/install-state.json` | `<repo>/core/.soma/install-state.json` — porque `install.cjs:837` passa `--soma-home=${SOURCE_CORE}` |
+| `install.cjs` (T-05) | `<projectPathAbs>/.soma/install-state.json` | o diretório do projeto |
+
+**São dois arquivos diferentes.** Se ficar assim, o `install` grava num, o `sync` lê do outro, todo arquivo aparece como *"presente sem entrada no ledger"* → **divergido** → e a instalação aborta acusando arquivos perfeitos. Exit code de conflito, causa inexistente, e o usuário perseguindo um fantasma.
+
+**A regra, e ela é normativa para T-05 e T-09**: o ledger de arquivos vive em **`<projectPathAbs>/.soma/install-state.json`** — o mesmo arquivo, na mesma localização, que o `install.cjs` já usa para `blockIds` e os outros 7 campos de `ALLOWED_STATE_FIELDS`. Não existe segundo ledger.
+
+**Consequência para o `sync.cjs`**: ele não tem noção de "projeto" na CLI — só `--soma-home`. Portanto, quando o `sync` precisar do ledger, o `projectPathAbs` chega até ele por `process.cwd()`, que é o que o `install.cjs` já define ao invocá-lo (`runStep(..., { cwd: projectPathAbs })`, `install.cjs:841`). **T-05 e T-09 conferem essa igualdade explicitamente**: um teste que roda os dois verbos e prova que escreveram e leram **o mesmo arquivo**, não dois.
+
+⚠️ **Como este defeito falharia sem o teste**: silenciosamente e com sintoma trocado. Nenhum teste de unidade de qualquer um dos lados o pega — cada um está certo sozinho.
+
+---
+
 ## Abort total (AC-04)
 
 **Duas passadas, e a fronteira entre elas é o contrato.**
@@ -72,6 +126,35 @@ A última linha importa: arquivo que existe mas que o SOMA nunca registrou **nã
 **Precedente que fixa esta semântica**: é o que o `sync --apply` já faz para bloco. O teste `AC-13: sync --apply aborts with BLOCK_CONFLICT` mostra que conflito aborta a aplicação inteira. Estado final sempre previsível: ou tudo mudou, ou nada.
 
 **Exit code sinaliza abort, nunca sucesso.** E abort **não é** o status `partial-failed` que já existe em `VALID_STATUSES` — nada foi aplicado parcialmente; a instalação recusou-se a começar.
+
+---
+
+## Vocabulário e código de erro — fixados em 2026-08-21, depois da T-07
+
+Inventados pela T-07 por analogia, porque nenhum documento os definia. Ficam aqui para que T-05, T-06 e T-09 usem os mesmos e não criem sinônimos.
+
+- **`action` de arquivo divergido é `'drift'`.** `insert` / `replace` / `skip` mapeiam 1:1 do mundo de bloco; `'diverged'` não é valor do vocabulário existente, e `'drift'` é o rótulo que bloco já usa para "edição manual detectada". O `CONTRACT-FILE-ENTRY-01` pede *"mesmo vocabulário de `action`"* — esta é a leitura que o cumpre sem inventar termo novo.
+- **`FILE_CONFLICT`**, paralelo ao `BLOCK_CONFLICT`, com **exit 2**. Shape: `{ code: 'FILE_CONFLICT', message, details: { diverged: [<target_path verbatim>] } }`. O `diverged` nomeia **todos**, nunca só o primeiro — §"Abort total" abaixo.
+- **`FILE_CONFLICT` não é `partial-failed`.** Nada foi aplicado parcialmente; a instalação recusou-se a começar. Mesma distinção que o §"Abort total" já faz.
+
+---
+
+## Três decisões do `doctor` fixadas em 2026-08-21, depois da T-06
+
+Nenhuma estava no contrato; as três foram decididas pela executora, reportadas em vez de enterradas no código, e ficam aqui para que T-08 e T-09 não as re-decidam.
+
+**1. O `doctor` compara disco × REPO. O instalador compara disco × LEDGER.** São perguntas diferentes:
+
+| Quem | Compara | Responde |
+|---|---|---|
+| `doctor` (AC-08) | arquivo instalado × **fonte no repo** | *"a fonte mudou e a instalação ficou para trás?"* |
+| `classifyFileState` / `planFileInstall` | arquivo instalado × **sha do ledger** | *"é seguro sobrescrever, ou o usuário editou?"* |
+
+O `doctor` **ignora** o `sha256` do ledger de propósito. É o que corresponde à narrativa causal do bug que originou a spec — 6 hooks defasados em relação ao repo por 3 meses — e à letra do AC-08 (*"comparar cada arquivo declarado contra a fonte do repo"*).
+
+**2. Zero entries `kind:"file"` declaradas + `install-state` ausente → nenhum finding, e não o aviso do AC-10.** Sem essa guarda, **toda** chamada existente do `doctor` ganharia ruído grátis — medido em 2026-08-21: nem o repo nem o `~/.soma-v2` declaram uma única entry de arquivo hoje. O aviso do AC-10 existe para dizer *"há N arquivos declarados que nunca foram instalados"*; com N=0 não há o que avisar, e avisar seria o oposto do AC-09.
+
+**3. Declarado e instalado, mas ausente do disco** (o usuário apagou) → `severity: 'missing'`, em paralelo ao mundo de bloco. O contrato só cobria os 3 estados da tabela abaixo; este é o quarto.
 
 ---
 

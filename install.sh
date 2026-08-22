@@ -112,14 +112,35 @@ fi
 
 # ── Phase 1.5: Hook collision detection ─────────────────────────────────────
 echo "[SOMA] Phase 1.5: Hook collision detection..."
+# T08C_COLLISION_DETECT_BEGIN — sentinel comments bracket this block so
+# core/scripts/__tests__/detect-collisions-fail-loud.test.cjs (T-08c pt.2)
+# can extract and execute these exact lines in an isolated sandbox,
+# proving the real behavior of this script without ever running the
+# whole install.sh or touching a real $HOME. Self-contained on purpose
+# (HOOKS_TARGET included) — no line outside these markers may be a
+# dependency of anything inside them.
 HOOKS_TARGET="${HOME}/.claude/hooks"
 if [[ -d "${HOOKS_TARGET}" ]]; then
+  # --soma-dir gives detect-collisions.cjs a real sha reference (T-08c) —
+  # without it, EVERY SOMA-listed hook already present in the user's real
+  # ~/.claude/hooks/ was reported as a collision (measured: 18 false
+  # positives vs 2 real ones), and FORCE_OVERWRITE=1 would rename 16
+  # byte-identical files to .bak for nothing.
+  #
+  # No `2>/dev/null` and no `|| echo ""` here (T-08c pt.2) — those
+  # swallowed BOTH the detector's stderr and its exit code, so ANY
+  # detector failure (bad args, corrupt JSON, exception) silently became
+  # COLLISIONS="" and install.sh proceeded as if the hooks dir were
+  # clean. Under `set -euo pipefail` (top of this file), a real failure
+  # here now aborts install.sh, with the detector's own stderr visible.
   COLLISIONS=$(node "${REPO_ROOT}/install/detect-collisions.cjs" \
     --target="${HOOKS_TARGET}" \
-    --soma-list="${REPO_ROOT}/install/soma-hooks-map.json" 2>/dev/null || echo "")
+    --soma-list="${REPO_ROOT}/install/soma-hooks-map.json" \
+    --soma-dir="${REPO_ROOT}/core/hooks")
 else
   COLLISIONS=""
 fi
+# T08C_COLLISION_DETECT_END
 
 if [[ -n "${COLLISIONS}" && "${FORCE_OVERWRITE}" != "1" && -t 0 ]]; then
   echo "[COLLISION] Custom-modified hooks found in ${HOOKS_TARGET}/:"
@@ -165,8 +186,13 @@ fi
 # ── Phases 3–5: Hooks, commands, templates, output-styles ───────────────────
 echo "[SOMA] Phase 3-5: Copy hooks / commands / templates / output-styles..."
 run "mkdir -p \"${HOME}/.claude/hooks/lib\" \"${HOME}/.claude/commands\" \"${HOME}/.claude/templates\" \"${HOME}/.claude/output-styles\""
-run "rsync -a \"${REPO_ROOT}/hooks/\" \"${HOME}/.claude/hooks/\""
-run "rsync -a \"${REPO_ROOT}/commands/\" \"${HOME}/.claude/commands/\""
+run "rsync -a \"${REPO_ROOT}/core/hooks/\" \"${HOME}/.claude/hooks/\""
+# --exclude=soma-run.md mirrors AC-12 (Spec 018): core/adapters/claude/
+# install-targets.json's top-level "excluded" field is the single source
+# of truth for this — install-sh-rsync-origins.test.cjs cross-checks the
+# two and goes red if they ever diverge. Do not add a second name here
+# without updating that JSON (or vice versa).
+run "rsync -a --exclude=soma-run.md \"${REPO_ROOT}/core/adapters/claude/commands/\" \"${HOME}/.claude/commands/\""
 run "rsync -a \"${REPO_ROOT}/templates/\" \"${HOME}/.claude/templates/\""
 run "rsync -a \"${REPO_ROOT}/output-styles/\" \"${HOME}/.claude/output-styles/\""
 

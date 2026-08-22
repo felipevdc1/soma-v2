@@ -27,12 +27,17 @@ Comando `Bash` cuja linha invoca `git commit`.
 ## Paths protegidos (default)
 
 ```
-hooks/**
+core/hooks/**
 core/scripts/**
 **/constitution*
 **/constitution*/**
 install/**
 ```
+
+> **Atualizado 2026-08-21 (T-08a / spec 018, D-018-07)**: era `hooks/**` até o
+> `git mv hooks core/hooks`. Um padrão de prefixo literal não tem `**/`
+> líder, então não casa o caminho novo sozinho — o `PROTECTED_PATTERNS` do
+> hook e este doc mudaram juntos para não ficar um mentindo pro outro.
 
 > **Correção de 2026-08-17 — `constitution*` cru não protegia a constituição.** O padrão original era `constitution*`, sozinho, entre três padrões que todos carregam prefixo de caminho. A executora da T-12 leu como glob de **um segmento** (`^constitution[^/]*$`), o que é a leitura correta do que estava escrito — e **sinalizou que era decisão dela, não verificação**, porque nenhum teste cobria um `constitution` aninhado.
 >
@@ -92,7 +97,7 @@ Nenhum. O hook é read-only: lê o index do git e o filesystem, escreve só em s
 // @contract CONTRACT-FRAMEWORK-GUARD-04
 
 describe('CONTRACT-FRAMEWORK-GUARD-04', () => {
-  it('staged em hooks/** sem marker → exit 2 listando o path', () => {
+  it('staged em core/hooks/** sem marker → exit 2 listando o path', () => {
     // repo git REAL em tmpdir (Article III), git add real, sem mock
   });
 

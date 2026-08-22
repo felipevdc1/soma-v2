@@ -3,7 +3,7 @@
 **Feature ID:** 018-install-whole-files
 **Branch:** `feature/018-install-whole-files`
 **Created:** 2026-08-17
-**Status:** DRAFT
+**Status:** APPROVED — Gate #1 do Felipe em 2026-08-17, reafirmado em 2026-08-21 ("bora executar a spec 018"). Provenance: registrado em `~/.claude/plans/handoff-forge.md`; nenhum gate no código lê este campo (verificado: `grep -rn APPROVED core/scripts hooks` sem match), então ele é declaração para leitor humano.
 
 ---
 
@@ -44,7 +44,8 @@ Article XII / Failure Mode #9. Tudo abaixo foi **rodado**, não estimado. Fonte 
 
 **NO-GOS** — o que esta feature explicitamente NÃO faz:
 
-- **Não reescreve `install.cjs`/`sync.cjs`/`doctor.cjs`.** Entries de bloco continuam funcionando byte a byte como hoje; as 8 existentes não mudam de comportamento.
+- **Não reescreve `install.cjs`/`sync.cjs`/`doctor.cjs`.** Entries de bloco continuam funcionando byte a byte como hoje; as entries existentes (3 no `claude`, 5 no `codex`) não mudam de comportamento.
+  ⚠️ **Emendado em 2026-08-21 (D-018-05)**: esta linha continua verdadeira para os três, mas era **insuficiente como descrição do escopo**. O porteiro do `install-targets.json` é um **quarto** arquivo que a Discovery não leu — `core/scripts/lib/manifest.cjs` — e ele valida entry de arquivo como se fosse bloco, derrubando o adapter inteiro em silêncio. Ele **é** corrigido por esta spec, na fonte, por decisão do Felipe. Ver `plan.md` §D-018-05.
 - **Não muda o modelo de bloco ancorado** nem o `BLOCK_CONFLICT`.
 - **Não instala o `soma-run.md`.** Decisão do usuário em 2026-08-17: ele quer rodar um laboratório à mão com a versão de 296 linhas antes de ela virar default. A que ele roda hoje tem 474 linhas, **0** `Gate:`, **0** `Report:` e state ainda em `/tmp` — trocar isso sem ele ver é mudança de fluxo de trabalho, não refresh de arquivo.
 - **Não espelha diretório e não apaga arquivo que o SOMA não declarou.** Os 17 hooks do usuário são intocáveis.
@@ -145,6 +146,12 @@ As duas questões que esta spec abriu foram fechadas em 2026-08-17, antes do `/p
 **Q1 — o conjunto de hooks são todos os 19 do repo, ou um subconjunto?** → **Todos os 19.** Resolvida por **medição**, não por preferência: dos 19 hooks do repo, **16 já estão vivos em `~/.claude/hooks/` e byte-idênticos**, o que prova empiricamente que pertencem à instalação de usuário. Os 3 restantes são precisamente o que o instalador precisa entregar — `framework-guard.cjs` **não instalado** (é o da Fase 2), e `spec-completeness-gate.cjs` + `spec-test-traceability.cjs` **divergidos com o repo à frente** (o primeiro migrado pelo K2 da 016 para achar state em `.soma/`, o segundo consertado pela T-15).
 
 **Q2 — abort total ou aplicação parcial quando 1 de N divergiu?** → **Abort total**, ver AC-04. Segue o precedente do `sync --apply` com `BLOCK_CONFLICT`.
+
+**Q3 — o `framework-guard.cjs` entra no conjunto declarado, apesar de bloquear `git commit`?** → **Sim, entra.** Decisão do Felipe em 2026-08-21, tomada depois de o conflito ser levantado explicitamente: o handoff `~/.claude/plans/handoff-forge.md` registrava, de 2026-08-17, *"framework-guard fica só no repo por enquanto — não sincronizar pro `~/.claude/hooks/` sem ele na frente do terminal"*, o que contradizia a Q1 ("todos os 19") e a User Story 4.
+
+A contradição se resolve porque **declarar não é instalar**. A T-08 escreve a entry; o smoke da T-09 roda em `$HOME` temporário; e o `soma install` contra o `~/.claude` real continua sendo comando que o Felipe roda, com o AC-04 abortando enquanto os 2 hooks divergidos não forem reconciliados à mão.
+
+⚠️ **Consequência aceita, e registrada aqui para não ser redescoberta como surpresa**: quando ele reconciliar os 2 divergidos e rodar o install de verdade, o `framework-guard` passa a bloquear `git commit` **em qualquer repositório** cujo staged toque `hooks/`, `core/scripts/`, `install/` ou arquivos de constituição — os padrões são relativos ao repo, então o efeito não fica contido no `soma-v2`. O bypass é por marker de sessão. Ele sabe disso e escolheu assim.
 
 **Consequência imediata e conhecida**: com o estado atual, o primeiro `soma install` **vai abortar** — porque `spec-completeness-gate.cjs` e `spec-test-traceability.cjs` estão divergidos. Isso é o AC-04 funcionando, não um bug. A reconciliação desses dois é ação manual do usuário, informada pelo abort. A alternativa — instalar parcialmente — esconderia o fato.
 
