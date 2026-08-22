@@ -33,7 +33,7 @@ O abort total do AC-04 exige **duas passadas**: a primeira avalia todos os alvos
 ```
 
 - **`kind`** — `"file"` ou `"block"`. **Ausente significa `"block"`.** É o que preserva as 8 entries existentes sem editá-las (AC-02).
-- **`source_path`** — relativo à raiz do repositório SOMA.
+- **`source_path`** — relativo ao **`somaHome`**, não à raiz do repositório. Corrigido em 2026-08-22 ao fechar a spec: a §0 ainda carregava a redação anterior à **D-018-07** (`plan.md` §"D-018-07", FECHADA em 2026-08-21), que resolveu a raiz em favor do que o código sempre fez e moveu os hooks para `core/hooks/`. Medido: `sync.cjs:749` passa `{ repoRoot: somaHome }`, `install/targets.cjs:124` faz `opts.repoRoot || somaHome`, `doctor.cjs:397` faz `path.resolve(somaHome, entry.source_path)`. Na instalação canônica `somaHome` é `~/.soma-v2`; no laboratório do repo é `<repo>/core`. Por isso `"hooks/framework-guard.cjs"` resolve em `<repo>/core/hooks/framework-guard.cjs`, e **não** em `<repo>/hooks/`, que não existe mais.
 - **`target_path`** — absoluto ou com `~`, mesma convenção do `target_path` das entries de bloco.
 - **Sem `target_anchor_id`.** Arquivo não tem âncora — é a diferença que motiva a spec inteira.
 - **Sem `file_id`.** Considerado e **rejeitado**: o `target_path` já é único por entry e é a chave natural do ledger. Um id paralelo seria um segundo nome pra mesma coisa, e o `block_id` só existe porque é derivado da âncora.
@@ -167,6 +167,8 @@ Hoje é inofensivo porque **zero** entries `kind:"file"` existem em produção �
 ## ✅ D-018-07 — a raiz do `source_path` em tempo de execução (**FECHADA em 2026-08-21**, ratificada pelo Felipe)
 
 Levantada em 2026-08-21 ao verificar o bloqueio da T-07. **Dono: T-08.** Não decidir aqui seria defer-and-forget; decidir aqui, sem o conjunto real na mão, seria decidir sem evidência.
+
+> ⏳ **Leia o resto desta seção como diagnóstico datado, no presente de 2026-08-21 — ANTES do `git mv`.** Toda frase abaixo do tipo *"`core/hooks/` não existe"* / *"os 19 hooks moram em `<repo>/hooks/`"* descreve o layout **anterior**. A T-08a executou o `git mv hooks core/hooks` em **`30032fc`**, e desde então os 19 hooks moram em **`<repo>/core/hooks/`** — que é exatamente o que esta decisão mandou fazer. O registro fica com proveniência em vez de reescrito: apagar o diagnóstico apagaria o motivo da decisão. *(Marcador acrescentado em 2026-08-22 ao fechar a spec, junto com a correção da §0 e do contrato, que tinham ficado com a redação pré-D-018-07.)*
 
 Os dois verbos leem o `install-targets.json` de **lugares diferentes**, e isso nunca foi dito:
 

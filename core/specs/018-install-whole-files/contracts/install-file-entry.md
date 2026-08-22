@@ -28,7 +28,7 @@
 | Campo | Tipo | Obrigatório | Restrições |
 |---|---|---|---|
 | `kind` | string | não | `"file"` ou `"block"`. **Ausente = `"block"`** — é o que preserva intactas as entries existentes (3 no `claude` + 5 no `codex`) |
-| `source_path` | string | sim (se `kind: "file"`) | Relativo à raiz do repo SOMA. Não-vazio. Sem `..`. Tem que existir no repo |
+| `source_path` | string | sim (se `kind: "file"`) | Relativo ao `somaHome` (ver D-018-07 — **não** à raiz do repo). Não-vazio. Sem `..`. Tem que existir sob o `somaHome` |
 | `target_path` | string | sim | Absoluto ou iniciado por `~`. Sem `..`. Mesma convenção do `target_path` das entries de bloco |
 | `target_anchor_id` | — | **proibido** quando `kind: "file"` | Arquivo não tem âncora. Presença é erro de validação, não campo ignorado |
 | `source_doc` | — | **proibido** quando `kind: "file"` | É o campo equivalente do mundo de bloco. Usar `source_path` |
