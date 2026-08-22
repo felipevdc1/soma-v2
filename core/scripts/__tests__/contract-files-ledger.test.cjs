@@ -47,6 +47,15 @@ const REPO_ROOT = path.resolve(__dirname, '../../..');
 const files = require(path.join(REPO_ROOT, 'core', 'scripts', 'install', 'files.cjs'));
 const INSTALL_CJS = path.join(REPO_ROOT, 'core', 'scripts', 'install.cjs');
 
+// Bucket G (Spec 018): unlike this file's own withFakeHome below (which
+// only needs os.homedir() to resolve somewhere writable for in-process
+// files.expandHome calls), caso 8b spawns install.cjs as a full subprocess
+// — its Step 1 (init.cjs, no --soma-home flag) needs a real
+// <HOME>/.soma-v2/templates tree to get past TEMPLATE_MISSING. The shared
+// helper seeds that; see helpers/fake-home.cjs for the full rationale.
+// Aliased to avoid colliding with this file's own withFakeHome (unseeded).
+const { withFakeHome: withSeededFakeHome } = require('./helpers/fake-home.cjs');
+
 function mkTmp(prefix) {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 }
@@ -369,31 +378,33 @@ test('CONTRACT-FILES-LEDGER-02 caso 8a: planFileInstall (aborted ou nao) nunca c
 // guarantee by construction. This is inference by construction, not a
 // direct FILE_CONFLICT exercise — see final report "Lacunas do documento".
 test('CONTRACT-FILES-LEDGER-02 caso 8b: o status gravado apos abort nunca e "partial-failed"', () => {
-  withTmp('contract-ledger-8b-', (d) => {
-    // First install: clean, must succeed (status=complete).
-    const first = spawnSync('node', [INSTALL_CJS, d, '--tool=claude'], { cwd: d, encoding: 'utf8', timeout: 60000 });
-    assert.equal(first.status, 0, `first install must succeed. stderr: ${first.stderr}`);
+  withSeededFakeHome('contract-ledger-8b-home-', () => {
+    withTmp('contract-ledger-8b-', (d) => {
+      // First install: clean, must succeed (status=complete).
+      const first = spawnSync('node', [INSTALL_CJS, d, '--tool=claude'], { cwd: d, encoding: 'utf8', timeout: 60000 });
+      assert.equal(first.status, 0, `first install must succeed. stderr: ${first.stderr}`);
 
-    // Mutate inside the anchored block to force a sha256 mismatch (BF-06) —
-    // same abort family as FILE_CONFLICT: sync.cjs exits 2, install.cjs
-    // Step 3 maps any exit-2 sync failure to a non-partial-failed status.
-    const claudeMdPath = path.join(d, 'CLAUDE.md');
-    const original = fs.readFileSync(claudeMdPath, 'utf8');
-    const mutated = original.replace(
-      /(<!-- soma-v2:start[^\n]*\n)/,
-      '$1\n# CASE_8B_DRIFT_MARKER\n'
-    );
-    assert.notEqual(mutated, original, 'mutation must actually change CLAUDE.md content');
-    fs.writeFileSync(claudeMdPath, mutated);
+      // Mutate inside the anchored block to force a sha256 mismatch (BF-06) —
+      // same abort family as FILE_CONFLICT: sync.cjs exits 2, install.cjs
+      // Step 3 maps any exit-2 sync failure to a non-partial-failed status.
+      const claudeMdPath = path.join(d, 'CLAUDE.md');
+      const original = fs.readFileSync(claudeMdPath, 'utf8');
+      const mutated = original.replace(
+        /(<!-- soma-v2:start[^\n]*\n)/,
+        '$1\n# CASE_8B_DRIFT_MARKER\n'
+      );
+      assert.notEqual(mutated, original, 'mutation must actually change CLAUDE.md content');
+      fs.writeFileSync(claudeMdPath, mutated);
 
-    const second = spawnSync('node', [INSTALL_CJS, d, '--tool=claude'], { cwd: d, encoding: 'utf8', timeout: 60000 });
-    assert.equal(second.status, 2, `abort must exit 2. stdout: ${second.stdout}\nstderr: ${second.stderr}`);
+      const second = spawnSync('node', [INSTALL_CJS, d, '--tool=claude'], { cwd: d, encoding: 'utf8', timeout: 60000 });
+      assert.equal(second.status, 2, `abort must exit 2. stdout: ${second.stdout}\nstderr: ${second.stderr}`);
 
-    const stateFile = path.join(d, '.soma', 'install-state.json');
-    assert.ok(fs.existsSync(stateFile), 'install-state.json must exist after abort');
-    const state = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
-    assert.notEqual(state.status, 'partial-failed', 'abort must never produce status=partial-failed — nothing was applied partially');
-    assert.equal(state.status, 'drift-detected', `expected drift-detected, got "${state.status}"`);
+      const stateFile = path.join(d, '.soma', 'install-state.json');
+      assert.ok(fs.existsSync(stateFile), 'install-state.json must exist after abort');
+      const state = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
+      assert.notEqual(state.status, 'partial-failed', 'abort must never produce status=partial-failed — nothing was applied partially');
+      assert.equal(state.status, 'drift-detected', `expected drift-detected, got "${state.status}"`);
+    });
   });
 });
 

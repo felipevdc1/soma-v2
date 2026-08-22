@@ -37,6 +37,14 @@ const { spawnSync } = require('node:child_process');
 const SCRIPTS_DIR = path.resolve(__dirname, '..');
 const INSTALL_CJS = path.join(SCRIPTS_DIR, 'install.cjs');
 
+// Bucket G (Spec 018): LC-05b is the one test in this file that spawns the
+// FULL install.cjs pipeline (the rest exercise acquireLock/releaseLock
+// in-process, or check exit codes before the pipeline reaches anything
+// HOME-dependent). See helpers/fake-home.cjs for why a plain fake HOME
+// isn't enough (install.cjs's init.cjs step needs a real
+// <HOME>/.soma-v2/templates tree).
+const { withFakeHome, fakeHomeEnv } = require('./helpers/fake-home.cjs');
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 /**
@@ -308,30 +316,32 @@ test('LC-05: acquireLock auto-removes stale lock (>60min) and logs WARNING to st
 // LC-05 subprocess variant: full install with stale lock → exit 0 + WARNING on stderr
 
 test('LC-05b: install with stale lock exits 0 and emits WARNING keyword on stderr', () => {
-  const projectDir = makeTmpProject('lc05b');
-  _cleanup.push(projectDir);
+  withFakeHome('lc05b-home-', (fakeHome) => {
+    const projectDir = makeTmpProject('lc05b');
+    _cleanup.push(projectDir);
 
-  writeSyntheticLock(projectDir, {
-    pid: 55555,
-    timestamp: isoOffset(-90 * 60 * 1000),
-    hostname: os.hostname(),
+    writeSyntheticLock(projectDir, {
+      pid: 55555,
+      timestamp: isoOffset(-90 * 60 * 1000),
+      hostname: os.hostname(),
+    });
+
+    const r = runInstall([projectDir], { env: fakeHomeEnv(fakeHome) });
+
+    // Must NOT exit 2 (contention) — stale lock is cleaned, install proceeds
+    assert.notEqual(
+      r.status,
+      2,
+      `Expected exit != 2 for stale lock (should auto-clean). Got exit 2. stderr: ${r.stderr}`
+    );
+
+    const combined = r.stdout + r.stderr;
+    // Must emit some WARNING / stale indication to stderr
+    assert.ok(
+      combined.toLowerCase().includes('stale') || combined.toLowerCase().includes('warn'),
+      `Expected WARNING or "stale" mention in output. Got: ${combined}`
+    );
   });
-
-  const r = runInstall([projectDir]);
-
-  // Must NOT exit 2 (contention) — stale lock is cleaned, install proceeds
-  assert.notEqual(
-    r.status,
-    2,
-    `Expected exit != 2 for stale lock (should auto-clean). Got exit 2. stderr: ${r.stderr}`
-  );
-
-  const combined = r.stdout + r.stderr;
-  // Must emit some WARNING / stale indication to stderr
-  assert.ok(
-    combined.toLowerCase().includes('stale') || combined.toLowerCase().includes('warn'),
-    `Expected WARNING or "stale" mention in output. Got: ${combined}`
-  );
 });
 
 // ── LC-06: Lock JSON schema validation ────────────────────────────────────────
