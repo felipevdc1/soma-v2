@@ -37,27 +37,31 @@ const INSTALL_CJS = path.join(SCRIPTS_DIR, 'install.cjs');
 /** Require install.cjs module for unit-level parseArgs testing. */
 const installModule = require(INSTALL_CJS);
 
-// Bucket G (Spec 018): CC-05 and CC-08b are the two tests in this file that
-// reach install.cjs's real pipeline (init.cjs -> manifest.cjs -> sync.cjs)
-// far enough to touch ~/.claude and ~/.soma-v2. CC-01..04/06 stop before
-// that (argv-only or lockfile-only), and CC-07/CC-08 fail for reasons
-// unrelated to HOME (out of Bucket G's scope — left untouched). See
-// helpers/fake-home.cjs for why a plain fake HOME isn't enough.
+// Bucket G (Spec 018): the original comment here claimed only CC-05 and
+// CC-08b reached install.cjs's real pipeline far enough to touch
+// ~/.claude — WRONG, per the orchestrator's own measurement: 11 tests
+// (CC-02a/b/c/d, CC-03a/b, CC-04a/c/d, CC-06, CC-07) call runInstall()
+// bare and DO write there — they just don't FAIL, so the original
+// "which tests fail" scoping missed them entirely. A test that writes
+// to the real ~/.claude successfully is exactly as dangerous as one that
+// fails there; "does it fail" and "does it write" are different sets.
+//
+// runInstall() itself now lives in helpers/cli-run-install.cjs (not
+// inline here) so install-home-isolation-guard.test.cjs can import and
+// exercise this file's REAL, production runInstall() directly — not a
+// hand-rolled stand-in — instead of require()'ing this whole test file
+// (which would re-register every test() below inside the guard's own
+// run). Isolation itself is injected inside that shared function, once,
+// for every call site in this file: each call without its own explicit
+// `opts.env` gets a FRESH, disposable, seeded HOME (never shared with
+// any other call — a shared fake HOME was measured elsewhere in this
+// bucket to poison later calls' project-scoped ledger expectations:
+// 34 -> 58 fails). A call site that already isolates itself explicitly
+// (e.g. CC-05's `{ env: fakeHomeEnv(fakeHome) }`) is left alone — the
+// default never overrides an explicit env. See helpers/fake-home.cjs for
+// why a plain fake HOME isn't enough on its own.
 const { withFakeHome, fakeHomeEnv } = require('./helpers/fake-home.cjs');
-
-/**
- * Run install.cjs as a subprocess with given argv array.
- * @param {string[]} args
- * @param {object} [opts] spawnSync options override
- * @returns spawnSync result (encoding utf8)
- */
-function runInstall(args = [], opts = {}) {
-  return spawnSync('node', [INSTALL_CJS, ...args], {
-    encoding: 'utf8',
-    timeout: 10000,
-    ...opts,
-  });
-}
+const { runInstall } = require('./helpers/cli-run-install.cjs');
 
 // ── CC-01: argv parser exposes all 7 fields from the contract schema ──────────
 // Contract: project-path (positional) + 6 named flags.
