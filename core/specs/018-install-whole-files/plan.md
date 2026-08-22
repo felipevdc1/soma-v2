@@ -256,6 +256,27 @@ Nenhum gate violado. **Complexity Tracking:** vazio, de propósito.
 >
 > ⚠️ **31 é o número modal, não uma garantia** — medido em 4 rodadas seguidas: 31, 31, 31, **32**. A 32ª vez pegou `phase3-regression.test.cjs` ("regression: hooks pass with zero failures after Phase 3 implementation") — outro teste agregado, irmão do `phase4a-regression`, que rereexecuta um subconjunto e às vezes flagra o mesmo acoplamento de `$HOME` real que os 26 já nomeados. `node --test` roda arquivos em paralelo por padrão; vários desses testes tocam o `~/.claude` real ao mesmo tempo, e a corrida entre eles é o motivo mais provável da variação. Não é regressão nova — é o mesmo buraco da Categoria B aparecendo por mais um caminho. Confira por **nomes**; se aparecer um agregado a mais na lista (ou a menos), é esperado.
 
+### 🔴 Pendência CARREGADA para o Bucket G — `install_targets_count`, dois produtores e duas réguas
+
+**Não fechada pela 018, de propósito.** Registrada aqui porque até 2026-08-22 ela existia **só em prosa de handoff**, e prosa de handoff expira.
+
+Medido em 2026-08-22 no tip `913a084`, **mesmo `somaHome`** (`<repo>/core`):
+
+```
+node core/scripts/doctor.cjs    --json →  checks.install_targets_count = 8
+node core/scripts/bootstrap.cjs --json →  claude = 34 · codex = 5   (39)
+node core/scripts/sync.cjs --dry-run   →  34 findings
+```
+
+`doctor.cjs:846` filtra com `.filter((e) => !isFileEntry(e))` — conta **só bloco**. `bootstrap.cjs:331` faz `data.entries.length` — conta **os dois `kind`**. `git log -S'!isFileEntry(e)' -- core/scripts/doctor.cjs` devolve **um único commit** (`f179ba0`, a T-06), nada depois. **31 entries são invisíveis ao campo do `doctor`.**
+
+**Por que não foi consertado aqui, e por que "volte para `data.entries.length`" não é uma linha:**
+
+1. `doctor-migration.contract.test.cjs:417` **crava `assert.equal(json.checks.install_targets_count, 8)`**, e o fixture dele faz `cp -R $SOMA_HOME/.` — lê o **`~/.soma-v2` vivo**, que hoje carrega o adapter de 34 entries. Trocar o count hoje troca um número errado por um teste que passa (ou falha) por acidente de ambiente. É o mesmo acoplamento do Bucket G, no mesmo arquivo.
+2. O `8` **não é número solto**: é o **AC-20 da spec 011** (`011-phase5-codex-claude-install/spec.md:131` e `:79`) e está congelado no contrato `011/contracts/doctor-migration-check.md:56,80,194`. Mudar o campo sem tocar naquela spec deixa a 011 mentindo — exatamente o defeito que a §0 desta spec acabou de levar.
+
+**Ordem obrigatória quando o Bucket G pegar isto**: (a) desacoplar o fixture do `~/.soma-v2` vivo **primeiro**; (b) só então decidir a semântica do campo — e a decisão é do usuário, porque ela **reabre um AC de outra spec**; (c) se o campo passar a contar os dois `kind`, a 011 muda **junto, no mesmo commit**, nunca depois.
+
 **Achado colateral, registrado para quem editar este arquivo no futuro**: `core/adapters/claude/install-targets.json` tem **4 leitores** no código, e só **3** fazem strip de comentário `//`/`/* */` antes do `JSON.parse` (`lib/manifest.cjs` `loadInstallTargets`, `install/targets.cjs` `readRawInstallTargets`, `bootstrap.cjs`). O quarto, `install.cjs:655` `readBlockIdsFromTargetsFile`, faz `JSON.parse(raw)` puro dentro de um `try/catch` que devolve `[]` em qualquer erro — um comentário `//` ali quebraria a extração de `block_id` **em silêncio** (cai no catch, ninguém percebe). É por isso que a razão da exclusão do AC-12 foi registrada como campo JSON top-level `"excluded"` no `install-targets.json`, nunca como comentário. Quatro leitores do mesmo arquivo com regras de parsing diferentes é uma mina para a próxima pessoa que decidir "só adicionar um comentário ali".
 
 ---
