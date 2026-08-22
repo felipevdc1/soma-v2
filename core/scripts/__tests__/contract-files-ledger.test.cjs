@@ -54,7 +54,7 @@ const INSTALL_CJS = path.join(REPO_ROOT, 'core', 'scripts', 'install.cjs');
 // <HOME>/.soma-v2/templates tree to get past TEMPLATE_MISSING. The shared
 // helper seeds that; see helpers/fake-home.cjs for the full rationale.
 // Aliased to avoid colliding with this file's own withFakeHome (unseeded).
-const { withFakeHome: withSeededFakeHome } = require('./helpers/fake-home.cjs');
+const { withFakeHome: withSeededFakeHome, fakeHomeEnv } = require('./helpers/fake-home.cjs');
 
 function mkTmp(prefix) {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -378,10 +378,10 @@ test('CONTRACT-FILES-LEDGER-02 caso 8a: planFileInstall (aborted ou nao) nunca c
 // guarantee by construction. This is inference by construction, not a
 // direct FILE_CONFLICT exercise — see final report "Lacunas do documento".
 test('CONTRACT-FILES-LEDGER-02 caso 8b: o status gravado apos abort nunca e "partial-failed"', () => {
-  withSeededFakeHome('contract-ledger-8b-home-', () => {
+  withSeededFakeHome('contract-ledger-8b-home-', (fakeHome) => {
     withTmp('contract-ledger-8b-', (d) => {
       // First install: clean, must succeed (status=complete).
-      const first = spawnSync('node', [INSTALL_CJS, d, '--tool=claude'], { cwd: d, encoding: 'utf8', timeout: 60000 });
+      const first = spawnSync('node', [INSTALL_CJS, d, '--tool=claude'], { cwd: d, encoding: 'utf8', timeout: 60000, env: fakeHomeEnv(fakeHome) });
       assert.equal(first.status, 0, `first install must succeed. stderr: ${first.stderr}`);
 
       // Mutate inside the anchored block to force a sha256 mismatch (BF-06) —
@@ -396,7 +396,7 @@ test('CONTRACT-FILES-LEDGER-02 caso 8b: o status gravado apos abort nunca e "par
       assert.notEqual(mutated, original, 'mutation must actually change CLAUDE.md content');
       fs.writeFileSync(claudeMdPath, mutated);
 
-      const second = spawnSync('node', [INSTALL_CJS, d, '--tool=claude'], { cwd: d, encoding: 'utf8', timeout: 60000 });
+      const second = spawnSync('node', [INSTALL_CJS, d, '--tool=claude'], { cwd: d, encoding: 'utf8', timeout: 60000, env: fakeHomeEnv(fakeHome) });
       assert.equal(second.status, 2, `abort must exit 2. stdout: ${second.stdout}\nstderr: ${second.stderr}`);
 
       const stateFile = path.join(d, '.soma', 'install-state.json');

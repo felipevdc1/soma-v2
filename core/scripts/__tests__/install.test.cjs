@@ -665,10 +665,11 @@ test('T-08bis-S2: sync.cjs --targets-file= resolves relative target_path against
 test('T-08bis-S3: user-globals invariant — ~/.claude/CLAUDE.md content unchanged by project install', async (t) => {
   withFakeHome('t08bis-s3-home-', (fakeHome) => {
     const CRYPTO = require('node:crypto');
-    // os.homedir() reads process.env.HOME on every call — withFakeHome
-    // already pointed it at fakeHome, so this resolves inside the sandbox,
-    // never the real ~/.claude.
-    const userClaudeMd = path.join(os.homedir(), '.claude', 'CLAUDE.md');
+    // Use fakeHome directly rather than os.homedir(): the install.cjs
+    // subprocess below is pointed at fakeHome via the explicit env option
+    // (not ambient inheritance), so this computation should match that —
+    // not rely on process.env.HOME still being mutated when this line runs.
+    const userClaudeMd = path.join(fakeHome, '.claude', 'CLAUDE.md');
     const freshDir = fs.mkdtempSync(path.join(os.tmpdir(), 'soma-t08bis-s3-'));
 
     // Snapshot pre-run sha256 (if file exists)
@@ -1486,7 +1487,11 @@ test('T-15-S1: AC-08 --replace-claude-md snapshots original + CLAUDE.md = anchor
     );
 
     // Assertion 4: snapshot file exists with matching sha256
-    const snapshotsBase = path.join(os.homedir(), '.soma-v2', '.snapshots');
+    // fakeHome, not os.homedir(): the subprocess above was pointed at
+    // fakeHome via explicit env, so that's the ground truth for where its
+    // snapshot landed — independent of whether process.env.HOME is still
+    // mutated when this line runs.
+    const snapshotsBase = path.join(fakeHome, '.soma-v2', '.snapshots');
 
     // Try to extract snapshot path from stdout
     // Match absolute paths (/Users/.../.soma-v2/.snapshots/<ts>/) or relative (.soma-v2/.snapshots/<ts>/)
@@ -1494,9 +1499,9 @@ test('T-15-S1: AC-08 --replace-claude-md snapshots original + CLAUDE.md = anchor
     let snapshotOriginalFile = null;
 
     if (snapshotPathMatch) {
-      const rawPath = snapshotPathMatch[0].replace(/^~/, os.homedir());
+      const rawPath = snapshotPathMatch[0].replace(/^~/, fakeHome);
       // Resolve: if starts with '/', it's already absolute; otherwise resolve from home
-      const resolved = rawPath.startsWith('/') ? rawPath : path.join(os.homedir(), rawPath);
+      const resolved = rawPath.startsWith('/') ? rawPath : path.join(fakeHome, rawPath);
       const snapDir = fs.existsSync(resolved) && fs.statSync(resolved).isDirectory()
         ? resolved
         : path.dirname(resolved);
@@ -1698,7 +1703,9 @@ test('T-Fix04-S1: Step 0 skip on codex — free-text CLAUDE.md with --tool=codex
 test('T-Fix05-S1: templateVars.soma_home is installed location, not source tree [RED until Fix-05 GREEN]', () => {
   withFakeHome('tfix05s1-home-', (fakeHome) => {
   const freshDir = fs.mkdtempSync(path.join(os.tmpdir(), 'soma-fix05-'));
-  const INSTALLED_SOMA_HOME = path.join(os.homedir(), '.soma-v2');
+  // fakeHome, not os.homedir(): matches the explicit env passed to the
+  // subprocess below, independent of process.env.HOME's current state.
+  const INSTALLED_SOMA_HOME = path.join(fakeHome, '.soma-v2');
   try {
     const r = spawnSync('node', [INSTALL_CJS, freshDir, '--tool=claude'], {
       encoding: 'utf8',
