@@ -55,6 +55,29 @@
  * test run would mutate core/manifest.json in the actual git working tree.
  * A throwaway copy is the only safe seed.
  *
+ * withFakeHome also seeds `<fakeHome>/.codex/` (2026-08-22, review round
+ * 3): install.cjs:1156-1163 requires ~/.codex/ to exist for
+ * --tool=codex|both (CONTRACT-01), checked with a plain fs.existsSync —
+ * no content requirements. CC-02b/CC-02c in install-cli.contract.test.cjs
+ * assert "--tool=codex/--tool=both is a VALID enum value (exit 0)" — that
+ * is a question about the FLAG, not about whether Codex CLI happens to be
+ * installed on whoever's machine runs the suite. Without this seed, a
+ * hermetic HOME makes those two tests fail for a reason unrelated to what
+ * they're named to test (and they only ever "passed" before Bucket G
+ * because the developer's own machine happens to have ~/.codex/). Seeding
+ * the precondition CONTRACT-01 itself declares is fixture setup, exactly
+ * like seeding .soma-v2 above — it doesn't relax any assertion.
+ *
+ * KNOWN GAP, left open on purpose (2026-08-22): seeding ~/.codex/ into
+ * every isolated HOME means NOTHING in this suite exercises "Codex CLI
+ * NOT installed -> soma install aborts with the CONTRACT-01 message" —
+ * that path existed untested before this change (nobody's fake HOME had
+ * ~/.codex either way, but nobody built a fixture that reflected the
+ * ABSENT case on purpose) and remains untested after it. See
+ * install-cli.contract.test.cjs's CC-02b/CC-02c for where that coverage
+ * would need to be added (a variant of runInstall that explicitly does
+ * NOT seed .codex/, asserting exit 2 + the CONTRACT-01 stderr text).
+ *
  * This module is a TEST HELPER, not a test file — it must never be picked
  * up by `npm test`'s glob (`core/scripts/__tests__/*.test.cjs`, which is
  * NOT recursive). That's also why it's safe here one level deeper, in
@@ -95,6 +118,20 @@ function seedSomaHome(fakeHomeDir) {
 }
 
 /**
+ * Seed `<fakeHomeDir>/.codex/` — install.cjs's --tool=codex|both sanity
+ * check (CONTRACT-01) only ever does `fs.existsSync(path.join(os.homedir(),
+ * '.codex'))`, no content check, so an empty directory satisfies it. See
+ * module doc above for why this exists and the coverage gap it leaves.
+ * @param {string} fakeHomeDir
+ * @returns {string} `<fakeHomeDir>/.codex`
+ */
+function seedCodexHome(fakeHomeDir) {
+  const dest = path.join(fakeHomeDir, '.codex');
+  fs.mkdirSync(dest, { recursive: true });
+  return dest;
+}
+
+/**
  * Points os.homedir() (via process.env.HOME) at a fresh, seeded, throwaway
  * directory for the duration of `fn(fakeHomeDir)`. Restores the ORIGINAL
  * process.env.HOME in `finally`, even if `fn` throws, and removes the
@@ -108,6 +145,7 @@ function seedSomaHome(fakeHomeDir) {
 function withFakeHome(prefix, fn) {
   const dir = mkTmp(prefix);
   seedSomaHome(dir);
+  seedCodexHome(dir);
   const originalHome = process.env.HOME;
   process.env.HOME = dir;
   try {
@@ -131,4 +169,4 @@ function fakeHomeEnv(fakeHomeDir, extra = {}) {
   return Object.assign({}, process.env, { HOME: fakeHomeDir }, extra);
 }
 
-module.exports = { mkTmp, seedSomaHome, withFakeHome, fakeHomeEnv, REPO_ROOT, CORE_DIR };
+module.exports = { mkTmp, seedSomaHome, seedCodexHome, withFakeHome, fakeHomeEnv, REPO_ROOT, CORE_DIR };
