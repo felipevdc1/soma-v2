@@ -42,9 +42,12 @@ function captureCanonicalShas() {
 }
 
 /**
- * Run hooks tests using a wrapper script approach to avoid "node:test recursive" detection.
- * Node.js v22 detects when `node --test` is called from within a test file and blocks it.
- * Workaround: use a standalone runner script that requires the test runner programmatically.
+ * Run hooks tests by spawning `node --test` directly, with NODE_TEST_CONTEXT
+ * stripped from the child's env to avoid Node.js v22+'s "recursive node:test"
+ * detection. No wrapper script is generated — see no-nested-test-spawn.test.cjs
+ * for why: a wrapper that itself spawns a "neto" process orphans that neto
+ * whenever the outer spawnSync's timeout kills the wrapper before the neto
+ * finishes (the neto is reparented to PID 1 and keeps running, unbounded).
  */
 function runHooksTests() {
   spawnSync('bash', ['-c', 'rm -f /tmp/soma-state-trap* 2>/dev/null'], { encoding: 'utf8' });
@@ -53,12 +56,6 @@ function runHooksTests() {
   if (hookTestFiles.length === 0) {
     return { tests: 0, pass: 0, fail: 0, raw: '' };
   }
-
-  // Write a temporary wrapper script that runs the hooks tests
-  // This bypasses the node:test recursive detection since it's a fresh node process
-  // called via 'node wrapper.cjs' (no --test flag on the process itself)
-  const wrapperPath = path.join(os.tmpdir(), `soma-hooks-runner-${Date.now()}.cjs`);
-  const outFile = path.join(os.tmpdir(), `soma-hooks-out-${Date.now()}.txt`);
 
   // Telemetry isolation: the hook test files under HOOKS_DIR exercise
   // capture-defer-gate.cjs / insight-action-coupling.cjs, which append Article
@@ -73,49 +70,21 @@ function runHooksTests() {
   // it's what makes isolation work the day the deployed copy catches up.
   const telemetryLogDir = fs.mkdtempSync(path.join(os.tmpdir(), 'soma-hooks-regression-telemetry-'));
 
-  // The wrapper calls 'node --test' via spawnSync, then writes output to the outFile.
-  // Because the wrapper is invoked as 'node wrapper.cjs' (no --test flag on the process),
-  // it is NOT a test runner context, so it can spawn 'node --test' without triggering
-  // Node.js v22 recursive test detection (which checks NODE_TEST_CONTEXT env var).
-  const wrapperCode = `
-'use strict';
-const { spawnSync } = require('node:child_process');
-const fs = require('node:fs');
-
-const files = ${JSON.stringify(hookTestFiles)};
-const outFile = ${JSON.stringify(outFile)};
-
-const result = spawnSync(${JSON.stringify(NODE_BIN)}, ['--test', ...files], {
-  encoding: 'utf8',
-  timeout: 60000,
-  env: {
-    ...process.env,
-    FORCE_COLOR: '0',
-    NODE_TEST_CONTEXT: undefined,
-    ARTICLE_XI_LOG_DIR: ${JSON.stringify(telemetryLogDir)},
-    INSIGHT_COUPLING_LOG_DIR: ${JSON.stringify(telemetryLogDir)}
-  }
-});
-
-const output = (result.stdout || '') + (result.stderr || '');
-fs.writeFileSync(outFile, output);
-process.exit(result.status || 0);
-`;
-
-  fs.writeFileSync(wrapperPath, wrapperCode);
+  const env = Object.assign({}, process.env);
+  delete env.NODE_TEST_CONTEXT;
+  env.FORCE_COLOR = '0';
+  env.ARTICLE_XI_LOG_DIR = telemetryLogDir;
+  env.INSIGHT_COUPLING_LOG_DIR = telemetryLogDir;
 
   try {
-    spawnSync(NODE_BIN, [wrapperPath], {
+    const result = spawnSync(NODE_BIN, ['--test', ...hookTestFiles], {
       encoding: 'utf8',
       timeout: 60000,
+      env,
       stdio: ['pipe', 'pipe', 'pipe']
     });
 
-    if (!fs.existsSync(outFile)) {
-      return { tests: null, pass: null, fail: null, raw: '' };
-    }
-
-    const raw = fs.readFileSync(outFile, 'utf8');
+    const raw = (result.stdout || '') + (result.stderr || '');
     const testsMatch = raw.match(/# tests (\d+)/);
     const passMatch = raw.match(/# pass (\d+)/);
     const failMatch = raw.match(/# fail (\d+)/);
@@ -127,8 +96,6 @@ process.exit(result.status || 0);
       raw
     };
   } finally {
-    try { fs.unlinkSync(wrapperPath); } catch (e) { /* cleanup */ }
-    try { fs.unlinkSync(outFile); } catch (e) { /* cleanup */ }
     try { fs.rmSync(telemetryLogDir, { recursive: true, force: true }); } catch (e) { /* cleanup */ }
   }
 }
