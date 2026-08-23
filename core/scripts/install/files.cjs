@@ -18,10 +18,15 @@
  * for why T-01 exists standalone, and the `.soma.lock` triplication in spec
  * 016 that this task is explicitly avoiding).
  *
- * Deliberately in `core/scripts/install/`, NOT `core/scripts/lib/` — see
- * D-018-03: `lib/` trips the "frozen libs invariant" guard
- * (`manifest.test.cjs`'s two `git diff main -- core/scripts/lib/` tests),
- * adding +2 fails to every worktree that touches this module.
+ * Deliberately in `core/scripts/install/`, NOT `core/scripts/lib/` — D-018-03.
+ * Historical note: the reason recorded in D-018-03 was the
+ * `git diff main -- core/scripts/lib/` tripwire (one assertion in
+ * `manifest.test.cjs`, another in `frozen-libs-invariant-014.test.cjs`),
+ * which lit +2 fails on any worktree touching `lib/`. That tripwire was
+ * REMOVED — see the commit carrying this comment change. The real 014
+ * invariant is still live in the three sha256 tests against baseline
+ * f3c2f0b, and reaches only the three frozen libs. This module's location
+ * was NOT revisited by that change.
  *
  * @contract core/specs/018-install-whole-files/contracts/install-file-entry.md (CONTRACT-FILE-ENTRY-01)
  * @contract core/specs/018-install-whole-files/contracts/installed-files-ledger.md (CONTRACT-FILES-LEDGER-02)

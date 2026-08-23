@@ -5,14 +5,13 @@
  * Verifies that the 3 frozen libs in core/scripts/lib/ are byte-identical to their
  * baseline values at main f3c2f0b (Article XII HARD constraint).
  *
- * One test per lib (fail LOUDLY with before/after sha256 on drift) + git diff sanity check.
+ * One test per lib (fail LOUDLY with before/after sha256 on drift).
  *
  * @spec [SPEC:AC-07] [T-10] [run-260508-0841-fb4dce]
  */
 
 const { test } = require('node:test');
 const assert = require('node:assert');
-const { spawnSync } = require('node:child_process');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -38,16 +37,3 @@ for (const [relPath, baseline] of Object.entries(FROZEN_BASELINES)) {
     );
   });
 }
-
-test('AC-07 [T-10] git diff main vs HEAD shows no changes in core/scripts/lib/', () => {
-  const r = spawnSync('git', ['diff', '--name-only', 'main', 'HEAD', '--', 'core/scripts/lib/'], {
-    cwd: REPO_ROOT,
-  });
-  assert.strictEqual(r.status, 0, `git diff failed: stderr=${r.stderr}`);
-  const changedFiles = r.stdout.toString().trim();
-  assert.strictEqual(
-    changedFiles,
-    '',
-    `core/scripts/lib/ files changed from main in this branch:\n${changedFiles}`
-  );
-});

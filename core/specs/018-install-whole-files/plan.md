@@ -114,6 +114,13 @@ Para registro, o que acenderia (não acende mais, ver D-018-06):
 
 Os dois rodam `git diff main -- core/scripts/lib/` e falham com diff não-vazio. **É tripwire, não proibição**: existe para que mudança em `lib/` seja visível e deliberada. Esta é deliberada e está escrita aqui.
 
+> ⚠️ **Nota de 2026-08-23 (Bucket L):** as duas asserções listadas acima **foram removidas** — eram
+> andaime da implementação da 014 (`tasks.md:72`: *"fail loudly if any frozen lib touched during 014
+> implementation"*), não invariante. O invariante real da 014 (sha256 dos 3 libs congelados contra o
+> baseline `f3c2f0b`) **continua vivo** em `frozen-libs-invariant-014.test.cjs`, e é redundantemente
+> enforçado por `bf-04-frozen-libs-invariant.test.cjs` (spec 013 AC-17) e pelo AC-17 da spec 015.
+> As linhas acima ficam como registro do que era verdade à época.
+
 🔴 **REVOGADO pela D-018-06 — o baseline segue sendo 5.** ~~Consequência na medição: enquanto a branch não for mergeada, o baseline de falhas é **7**, não 5~~ — as 5 pré-existentes **mais** esses 2, nominalmente identificáveis. Os 2 voltam ao verde no merge, sem ação. **Um executor que medir 7 e reportar "2 regressões" está lendo o tripwire como defeito.**
 
 **O que NÃO muda**: a versão do schema continua `soma-install-targets/v1`. O `kind` segue aditivo e opcional; o que estava errado era o validador, que nunca soube da existência de dois tipos de entry.
