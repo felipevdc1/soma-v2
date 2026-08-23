@@ -1,4 +1,4 @@
-# Spec: Os gates que não pegam — três gates com régua medida
+# Spec: Os gates que não pegam — dois gates com régua medida
 
 **Feature ID:** 019-gates-que-nao-pegam
 **Branch:** `feature/019-gates-que-nao-pegam`
@@ -29,7 +29,8 @@ Toda afirmação abaixo carrega como foi obtida. Medições feitas em 2026-08-22
 | forma canônica de heading de AC, no comando | `^### AC-\d+:` | `core/adapters/claude/commands/soma-run.md:51` — `sed -n '51p'` |
 | as duas formas **não** concordam entre si | fato | 8 candidatos testados; `- **AC-01:**` casa só no hook, `### AC-1:` casa nos dois |
 | near-miss de heading em `spec.md`/`plan.md`/`tasks.md`/`contracts/` | **0**, nas 19 specs | grep ancorado em `^#{1,6}` menos a forma canônica |
-| near-miss de heading em `quickstart.md` | **38**, todos convenção legítima | idem — ex.: `003/quickstart.md:25` `## AC-01 — H2 detects...` |
+| near-miss de heading em `quickstart.md` | **103**, todos convenção legítima | régua estrita `^#{1,6}\s+AC-` menos `^### AC-\d+:`, validada nos 2 sentidos, 2026-08-23 — ex.: `003/quickstart.md:25` `## AC-01 — H2 detects...` |
+| ⚠️ correção: esta linha dizia **38** | não reproduz sob nenhuma das 6 réguas testadas (103 estrita · 168 frouxa · 92 só H2 · 29 somando as duas formas citadas) | remedido em 2026-08-23 contra `91c1b27` **e** contra o HEAD: número idêntico, não é efeito de specs novas |
 | blocos de comando em `tasks.md` | **0**, nas 19 specs | grep de cerca ` ```bash `/` ```sh `/` ```console ` |
 | blocos de comando em `quickstart.md` · `plan.md` | **264** · **30** | idem |
 | etiqueta real de condição de parada RED | `RED:` em texto livre na coluna `Description` | 4 ocorrências: `016/tasks.md:33`, `017/tasks.md:34`, `017/tasks.md:35`, `018/tasks.md:40` |
@@ -122,10 +123,17 @@ nunca correspondeu a nenhum dos dois — já nascia errada.
 lacunas plantados, e ver cada gate **nomear** o seu. Hoje o linter responde `achados: 0` sobre dois deles
 e não vê o terceiro.
 
-**APPETITE** — uma sessão. Os três gates compartilham a mesma máquina (`spec-lint`, `context.cjs`,
-`registry.cjs`) e nenhum deles muda a máquina de estados. **O AC-05 (retroatividade) é o mais barato e
-vem primeiro**, porque sem ele ligar qualquer gate é aposta. Se estourar, corta o **AC-03** — é o único
-que precisa de tokenizer novo. **Não corta o AC-04**: sem corpus, os outros não têm como ser provados.
+**APPETITE** — uma sessão. ✅ **Cumprido em 2026-08-23**, e o corte previsto **disparou**: a ordem
+executada foi **AC-05 → AC-01 → AC-02**, e o **AC-03 foi cortado** para a spec 021 (`M-08`), exatamente
+como esta seção previa. O **AC-04 não foi construído** — medição mostrou que o mecanismo já existia desde
+a spec 016 (`spec-lint-selftest-corpus.test.cjs`, `@spec [SPEC:AC-10]`), e o par de fixtures de cada gate
+nasceu dentro do ciclo TDD dele.
+
+> Texto original, preservado porque a previsão se confirmou: *"Os três gates compartilham a mesma máquina
+> (`spec-lint`, `context.cjs`, `registry.cjs`) e nenhum deles muda a máquina de estados. O AC-05
+> (retroatividade) é o mais barato e vem primeiro, porque sem ele ligar qualquer gate é aposta. Se
+> estourar, corta o AC-03 — é o único que precisa de tokenizer novo. Não corta o AC-04: sem corpus, os
+> outros não têm como ser provados."*
 
 **NO-GOS**
 - Não transformar o SOMA em ferramenta de auditoria genérica: o alvo são os artefatos que ele mesmo gera —
@@ -143,7 +151,7 @@ que precisa de tokenizer novo. **Não corta o AC-04**: sem corpus, os outros nã
 ### AC-01: WHEN um heading de artefato normativo se parecer com um critério de aceite e não casar a forma canônica, the sistema SHALL emitir um achado nomeando o heading e o arquivo
 
 Given os artefatos `spec.md`, `plan.md`, `tasks.md` e `contracts/*.md` de uma spec — **`quickstart.md`
-fica de fora, e o motivo é medido**: ele tem 38 headings da forma `## AC-02 + AC-03: ...` e
+fica de fora, e o motivo é medido**: ele tem **103** headings da forma `## AC-02 + AC-03: ...` e
 `## AC-01 — ...`, que são convenção legítima de seção de walkthrough, não declaração de AC / When um
 heading casa `^\s*#{1,6}\s*-?\s*\*{0,2}AC-` mas **não** casa `^### AC-\d+:` / Then o lint emite um achado.
 
@@ -202,24 +210,6 @@ estrangeira como própria. É o mesmo defeito que a versão anterior desta spec 
    **não pode** reusar `validateRedPhase` nem herdar seu nome, sob pena de punir exatamente quem cumpre
    o Article II.
 
-### AC-03: WHEN um artefato normativo contiver bloco de comando, the sistema SHALL exigir evidência de que o comando foi exercitado, ou marcação explícita de por que não é verificável
-
-Given `quickstart.md` (264 blocos medidos) e `plan.md` (30) — **não `tasks.md`, que tem 0**: neste
-repositório os comandos nunca moram nas tasks / When o artefato é validado / Then cada bloco carrega
-verificação de forma registrada (`bash -n`, `--help`, `docker compose config`, dry-run) ou a marcação de
-não-verificável **com o motivo**.
-
-Evidência da lacuna: `core/adapters/claude/commands/plan-sdd.md` §5 (linhas 116-131) exige a tag
-`[SPEC:AC-XX]` e **nada** sobre executabilidade — a régua de cobertura é sintática. Três defeitos graves
-de comando num único `tasks.md` do hermes, **todos** detectáveis por verificação read-only barata.
-
-**Reuso obrigatório, não construção nova**: o check `cli-surface` já varre todos os `ctx.artifacts`
-(`cli-surface.cjs:383`) e já tem scanner de bloco cercado próprio (`:75-77`), com a regra D-017-01 de que
-cerca com info-string `text` é dado exibido, não invocação. Este AC estende aquele território — verifica
-*evidência de exercício*, onde o `cli-surface` verifica *conformidade de superfície*.
-
-**Caso conhecido-bom obrigatório**: um bloco com info-string `text` — dado exibido, nunca acusado.
-
 ### AC-04: The sistema SHALL manter um corpus versionado de artefatos com os defeitos desta spec plantados, e cada gate SHALL ser provado contra ele
 
 Given que o OUTCOME desta spec só é verificável contra artefatos defeituosos / When um gate novo é
@@ -277,7 +267,9 @@ pré-requisito da prova desta spec**, embora a 020 seja posterior em número.
 - Consertar os defeitos do projeto `hermes`. Já foram corrigidos lá; aqui só interessa por que passaram.
 - Reescrever o regex `AC-\d+` (spec 016 já concluiu que está correto).
 - Auditoria adversarial de código de aplicação e de suíte de testes — é a **spec 020**.
-- Unificar as duas formas canônicas de heading de AC, que hoje divergem — é a **spec 021**.
+- Unificar as duas formas canônicas de heading de AC, que hoje divergem — é a **spec 021** (`M-07`).
+- **Exigir evidência de exercício em bloco de comando** — era o `AC-03` desta spec, cortado em 2026-08-23
+  para a **spec 021** (`M-08`). Ver §Achados registrados para a medição que motivou o corte.
 - Consertar o `G-LINT` (`parallel-collision` que nunca se declara pulado) — o conserto é de classe, no
   AC-06 da spec **017**, e está no Bucket C do handoff como `E3`.
 - Os seis ACs de mecanismo indefinido (auditoria adversarial como estado, proveniência declarada, parser
@@ -333,6 +325,31 @@ três gates que já têm régua e espécime.
 
 ## Achados registrados — coisas medidas que não viram AC aqui
 
+**O AC-03 não morreu: mudou de spec, e o registro fica.** Ele exigia que todo bloco de comando em artefato
+normativo carregasse evidência de exercício ou marcação de não-verificável com motivo. Medido em
+2026-08-23, com régua de cerca validada por selftest: **294 blocos de comando** no repositório
+(`quickstart.md` **264** + `plan.md` **30**; `tasks.md` e `spec.md` **0** — as três contagens da §0 batem
+exatas), e **zero** deles carrega qualquer marcação hoje. As 21 "marcações" que uma régua frouxa encontra
+são falso-positivo dela: `last_verified: null` é campo de front-matter e `D1-D7 resolutions verified` é
+checklist de quickstart — nenhuma é marcação de bloco.
+
+**Por que isso o desqualifica para esta spec, pelo critério da própria D-019-05**: os irmãos acusam **0**
+(`heading-near-miss`) e **4** (`red-only-coverage`) das 22 specs reais; o AC-03 acusaria **294**. Ele não
+detecta um defeito raro — **impõe uma convenção de autoria que não existe**, e a spec **não define a
+sintaxe do marcador**. Isso é "onde eu inventaria alguma coisa" no nível da spec, não do executor: dois
+executores entregariam sintaxes incompatíveis. É exatamente o critério de corte declarado na origem da
+spec 021 — *fica aqui o que tem régua medida e espécime nomeado; sai o que tem incidente real e mecanismo
+indefinido*. Ligado retroativamente, reprovaria **todas** as specs, que é a classe de dano que o AC-05
+desta mesma spec existe para impedir.
+
+**Foi para a spec 021 como `M-08`**, com a medição inteira. Corte aprovado pelo Felipe em 2026-08-23.
+
+⚠️ **A numeração NÃO foi renumerada, e o buraco é deliberado.** Os ACs desta spec são **AC-01, AC-02,
+AC-04 e AC-05** — sem AC-03. Renumerar apodreceria referências vivas: `core/scripts/lib/spec-lint/context.cjs`
+carrega `@spec [SPEC:AC-02]` apontando para o AC-02 **desta** spec. Precedente no repo: a spec **020** já
+tem buraco (`AC-01, AC-03..AC-07`, sem `AC-02`), e nenhuma ferramenta exige contiguidade — medido.
+
+
 **O antigo AC-01 está morto, e o registro fica.** Ele afirmava que a precondição do `/plan-sdd` abortava
 com `grep -c "\[NEEDS CLARIFICATION"` e que *"toda spec bem preenchida falha"*. Medido em 2026-08-22
 contra o adapter canônico: **não aborta**. O snippet de hoje remove comentário HTML, remove trechos entre
@@ -362,5 +379,6 @@ documento não diz.** Os dois são necessários, e o segundo não é opcional.
 - [x] NFR com performance, estilo de teste e monitoramento, e com a exceção do teto declarada
 - [x] Out of Scope nomeia cada coisa que saiu e para onde foi
 - [x] Feature ID + Branch preenchidos
-- [x] OUTCOME/APPETITE/NO-GOS preenchidos, e o APPETITE reflete o escopo atual de 5 ACs
+- [x] OUTCOME/APPETITE/NO-GOS preenchidos, e o APPETITE reflete o escopo atual de **4 ACs** (AC-01, AC-02,
+      AC-04, AC-05 — o AC-03 saiu para a 021 em 2026-08-23; buraco na numeração é deliberado, ver §Achados)
 - [x] Toda afirmação factual tem proveniência na §0 ou citação de arquivo:linha inline

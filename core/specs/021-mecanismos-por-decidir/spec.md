@@ -3,7 +3,7 @@
 **Feature ID:** 021-mecanismos-por-decidir
 **Branch:** `feature/021-mecanismos-por-decidir`
 **Created:** 2026-08-22
-**Status:** DRAFT — **não é para executar.** Sete decisões de arquitetura em aberto, duas delas de segurança.
+**Status:** DRAFT — **não é para executar.** **Oito** decisões de arquitetura em aberto, duas delas de segurança.
 
 > **Origem:** extraída da spec 019 pela **D-019-05** em 2026-08-22. O critério do corte foi: fica na 019 o
 > que tem **régua medida e espécime nomeado**; sai para cá o que tem **incidente real e mecanismo
@@ -180,6 +180,43 @@ casa os dois (dígito único é canônico); `### AC 01:`, `### ac-01:` e `### AC
 **O que falta decidir:** qual das duas vence, e o que acontece com os artefatos escritos sob a outra. A
 spec 019 linta contra a forma do `soma-run.md` e **declara explicitamente que não unifica** — porque
 unificar muda o comportamento de um hook que hoje bloqueia commit.
+
+---
+
+### M-08 — exigir evidência de exercício em bloco de comando
+
+> **Origem:** era o `AC-03` da spec **019**, cortado em 2026-08-23 pelo mesmo critério da D-019-05 que
+> criou esta spec. **Não saiu por falta de mérito** — a lacuna é real e está medida abaixo. Saiu porque o
+> **mecanismo não está decidido**: a spec 019 exigia a marcação sem nunca definir a sintaxe dela.
+
+**A lacuna, medida em 2026-08-23** (régua de cerca validada por selftest): **294 blocos de comando** no
+repositório — `quickstart.md` **264**, `plan.md` **30**, `tasks.md` **0**, `spec.md` **0**. **Zero** deles
+carrega evidência de exercício ou marcação de não-verificável. *(As 21 "marcações" que uma régua frouxa
+acha são falso-positivo dela: `last_verified: null` é campo de front-matter, `D1-D7 resolutions verified`
+é checklist — nenhuma é marcação de bloco.)*
+
+**Por que o mecanismo não está decidido — três perguntas sem resposta no texto original:**
+
+1. **Qual é a sintaxe do marcador?** A spec 019 dizia "verificação de forma registrada (`bash -n`,
+   `--help`, `docker compose config`, dry-run) ou a marcação de não-verificável **com o motivo**" e parou
+   aí. Não existe sintaxe no repositório para nenhuma das duas. Dois executores entregariam formas
+   incompatíveis — comentário HTML, info-string estendida, linha adjacente, front-matter.
+2. **Quem verifica, e quando?** `bash -n` é análise estática barata; `docker compose config` toca a rede;
+   `--help` executa binário. Um gate que **roda** comando de artefato normativo é categoria diferente de
+   um que só lê texto, e o NFR de performance da 019 (`< 5 s` por spec) não sobrevive a isso.
+3. **O que acontece com os 294 existentes?** Ligado retroativamente, reprova **todas** as specs — a classe
+   de dano que o `AC-05` da 019 existe para impedir. Exige `scope.retroactive: false` e uma decisão sobre
+   se e como o passivo é saldado.
+
+**Contraste que motivou o corte**, medido nas 22 specs reais: `heading-near-miss` (AC-01 da 019) acusa
+**0**; `red-only-coverage` (AC-02 da 019) acusa **4**. Este acusaria **294**. Os dois primeiros detectam
+defeito raro — este **impõe uma convenção de autoria que não existe**.
+
+**O que existe e deve ser reusado, não reconstruído**: `cli-surface` já varre todos os `ctx.artifacts`
+(`cli-surface.cjs:383`) e já tem scanner de bloco cercado próprio (`:75-77`), com a regra D-017-01 de que
+cerca com info-string `text` é dado exibido, não invocação. O `fenced-lines.cjs`
+(`core/scripts/lib/spec-lint/`, criado pelo AC-01 da 019) devolve o conjunto de linhas dentro de cerca.
+**Caso conhecido-bom obrigatório**: um bloco com info-string `text` — dado exibido, nunca acusado.
 
 ---
 
