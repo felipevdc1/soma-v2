@@ -399,6 +399,47 @@ test('K1 controle: cd "<repo>" && git commit continua funcionando (cd não é mu
   }
 });
 
+// ── Bucket K (2026-08-23) — K3: casa a MENÇÃO, não o fato. O trigger antigo
+// era `/\bgit\s+commit\b/.test(command)` — casa o texto em QUALQUER
+// posição, então `echo "... git commit ..."` dispara o bloqueio mesmo sem
+// nenhum git envolvido (aconteceu ao vivo, num comando de limpeza). Par
+// positivo/negativo: o eco não pode bloquear, e um commit real depois de
+// `&&` (não só no início da linha) continua bloqueando.
+
+test('K3: echo com "git commit" no texto -> NÃO bloqueia (não é um commit de verdade)', async () => {
+  const repo = initTmpRepo();
+  const sessionId = `fw-k3-bad-${process.pid}-${Date.now()}`;
+  try {
+    stageFile(repo, 'core/hooks/foo.cjs'); // protegido, mas o comando não é commit
+    const { code, stderr } = await runHook({
+      cwd: repo,
+      sessionId,
+      command: 'echo "cleanup: no more git commit needed here"',
+    });
+    assert.equal(code, 0, `esperava exit 0 (não é git commit de verdade, é texto dentro de echo), veio ${code}. stderr: ${stderr}`);
+    assert.equal(stderr.trim(), '', `esperava silêncio, veio: ${stderr}`);
+  } finally {
+    cleanup(repo);
+  }
+});
+
+test('K3 controle: git commit real após && (não no início da linha) -> continua bloqueando', async () => {
+  const repo = initTmpRepo();
+  const sessionId = `fw-k3-good-${process.pid}-${Date.now()}`;
+  try {
+    stageFile(repo, 'core/hooks/foo.cjs');
+    const { code, stderr } = await runHook({
+      cwd: repo,
+      sessionId,
+      command: 'git status && git commit -m "x"',
+    });
+    assert.equal(code, 2, `esperava exit 2 (commit real, mesmo não estando no início da linha), veio ${code}. stderr: ${stderr}`);
+    assert.ok(stderr.includes('core/hooks/foo.cjs'), `esperava o path ofensor citado, stderr: ${stderr}`);
+  } finally {
+    cleanup(repo);
+  }
+});
+
 // ── wiring: sem entrada no soma-hooks-map.json, o hook nunca dispara ───
 
 test('CONTRACT: está registrado em install/soma-hooks-map.json com PreToolUse/Bash', () => {

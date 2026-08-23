@@ -126,11 +126,51 @@ const STAGING_MUTATOR_RES = [
   /^git\s+reset\b/,
 ];
 
-function hasStagingMutator(command) {
-  return command
+// K3 (Bucket K, 2026-08-23): the old trigger, `/\bgit\s+commit\b/.test(command)`,
+// matched the text ANYWHERE in the line — including inside a quoted string
+// that's pure data, never executed. `echo "... git commit ..."` fired the
+// guard for a command that never touches git (happened live, in a cleanup
+// command). Fix: blank out quoted content first (so string data can't look
+// like a command), split on shell command separators, and require
+// `git commit` / a staging mutator to be a COMMAND — the start of a part —
+// not a substring anywhere in the line.
+function stripQuotedContent(command) {
+  let out = '';
+  let inSingle = false;
+  let inDouble = false;
+  for (let i = 0; i < command.length; i++) {
+    const ch = command[i];
+    if (inSingle) {
+      out += ch === "'" ? ((inSingle = false), ch) : 'x';
+    } else if (inDouble) {
+      if (ch === '"') { inDouble = false; out += ch; }
+      else if (ch === '\\' && i + 1 < command.length) { out += 'xx'; i++; }
+      else { out += 'x'; }
+    } else if (ch === "'") {
+      inSingle = true; out += ch;
+    } else if (ch === '"') {
+      inDouble = true; out += ch;
+    } else {
+      out += ch;
+    }
+  }
+  return out;
+}
+
+function commandParts(command) {
+  return stripQuotedContent(command)
     .split(/&&|\|\||;|\||\n/)
-    .map((p) => p.trim().replace(/^\(+/, '').trim())
-    .some((p) => STAGING_MUTATOR_RES.some((re) => re.test(p)));
+    .map((p) => p.trim().replace(/^\(+/, '').trim());
+}
+
+const GIT_COMMIT_RE = /^git\s+commit\b/;
+
+function isRealGitCommit(command) {
+  return commandParts(command).some((p) => GIT_COMMIT_RE.test(p));
+}
+
+function hasStagingMutator(command) {
+  return commandParts(command).some((p) => STAGING_MUTATOR_RES.some((re) => re.test(p)));
 }
 
 // AC-13 override marker — same {os.tmpdir()}/claude-*-{sessionId}.marker
@@ -150,8 +190,9 @@ function main() {
     const command = (payload.tool_input || {}).command || '';
 
     // Only intercept git commit invocations — everything else passes
-    // through silently (contract's "Trigger" section).
-    if (!/\bgit\s+commit\b/.test(command)) process.exit(0);
+    // through silently (contract's "Trigger" section). Quote-aware,
+    // command-position-aware — see isRealGitCommit (K3).
+    if (!isRealGitCommit(command)) process.exit(0);
 
     // K1: the guard cannot see what a chained staging mutator would leave
     // staged, so it refuses the composite command outright — regardless of
