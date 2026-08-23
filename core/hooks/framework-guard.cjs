@@ -18,8 +18,12 @@
  *       via marker, or not inside a git repo — the one deliberate
  *       exception to "impossibility-to-check is REJECT": see the
  *       contract's note on why failing closed here would be worse)
- *   2 - Block (a staged path matches a protected pattern, no matching
- *       bypass marker for this session)
+ *   2 - Block (a staged path matches a protected pattern with no matching
+ *       bypass marker for this session; the command stages changes and
+ *       commits in the same line, so final staged state can't be seen
+ *       (K1); or an unexpected exception left the guard unable to decide
+ *       — "couldn't decide" fails CLOSED, unlike the documented
+ *       not-a-git-repo case above (Bucket K, 2026-08-23))
  */
 
 'use strict';
@@ -110,6 +114,91 @@ function isProtected(relPath) {
   return MATCHERS.some((matches) => matches(relPath));
 }
 
+// K1 (Bucket K, 2026-08-23): `git add X && git commit` in the SAME command
+// blinds this guard. PreToolUse fires BEFORE the shell command runs, so at
+// the instant this hook reads `git diff --cached`, a chained `git add`
+// hasn't executed yet — staged-right-now is empty, offenders is empty,
+// exit 0, silence. The guard cannot see the FINAL staged set of a composite
+// command, so the correct answer is to refuse the composite command, not
+// guess its outcome. `cd` is NOT a staging mutator and must keep working —
+// `cd "<repo>" && git commit ...` is this repo's standard dispatch preamble.
+const STAGING_MUTATOR_RES = [
+  /^git\s+add\b/,
+  /^git\s+rm\b/,
+  /^git\s+stage\b/,
+  /^git\s+restore\s+--staged\b/,
+  /^git\s+reset\b/,
+];
+
+// K3 (Bucket K, 2026-08-23): the old trigger, `/\bgit\s+commit\b/.test(command)`,
+// matched the text ANYWHERE in the line — including inside a quoted string
+// that's pure data, never executed. `echo "... git commit ..."` fired the
+// guard for a command that never touches git (happened live, in a cleanup
+// command). Fix: blank out quoted content first (so string data can't look
+// like a command), split on shell command separators, and require
+// `git commit` / a staging mutator to be a COMMAND — the start of a part —
+// not a substring anywhere in the line.
+function stripQuotedContent(command) {
+  let out = '';
+  let inSingle = false;
+  let inDouble = false;
+  for (let i = 0; i < command.length; i++) {
+    const ch = command[i];
+    if (inSingle) {
+      out += ch === "'" ? ((inSingle = false), ch) : 'x';
+    } else if (inDouble) {
+      if (ch === '"') { inDouble = false; out += ch; }
+      else if (ch === '\\' && i + 1 < command.length) { out += 'xx'; i++; }
+      else { out += 'x'; }
+    } else if (ch === "'") {
+      inSingle = true; out += ch;
+    } else if (ch === '"') {
+      inDouble = true; out += ch;
+    } else {
+      out += ch;
+    }
+  }
+  return out;
+}
+
+function commandParts(command) {
+  return stripQuotedContent(command)
+    .split(/&&|\|\||;|\||\n/)
+    .map((p) => p.trim().replace(/^\(+/, '').trim());
+}
+
+const GIT_COMMIT_RE = /^git\s+commit\b/;
+
+function isRealGitCommit(command) {
+  return commandParts(command).some((p) => GIT_COMMIT_RE.test(p));
+}
+
+function hasStagingMutator(command) {
+  return commandParts(command).some((p) => STAGING_MUTATOR_RES.some((re) => re.test(p)));
+}
+
+// (a) CWD resolution (Bucket K, 2026-08-23): `process.cwd()` is the cwd of
+// the PROCESS THAT SPAWNS THIS HOOK, not necessarily the cwd the upcoming
+// Bash command will run in — the two coincide by default in an interactive
+// session, but a real PreToolUse payload carries its own `cwd` field (the
+// harness fills it in), and a command that opens with `cd <path>` names an
+// even more specific cwd than that. Resolution order: `cd <path>` at the
+// START of the command wins; then `payload.cwd`; then `process.cwd()` as
+// the last resort.
+const CD_PREFIX_RE = /^\s*cd\s+(?:"([^"]*)"|'([^']*)'|(\S+))\s*(?:&&|;|\n|$)/;
+
+function resolveCwd(command, payload) {
+  const cdMatch = CD_PREFIX_RE.exec(command);
+  if (cdMatch) {
+    const cdPath = cdMatch[1] ?? cdMatch[2] ?? cdMatch[3];
+    if (cdPath) return cdPath;
+  }
+  if (payload && typeof payload.cwd === 'string' && payload.cwd.trim() !== '') {
+    return payload.cwd;
+  }
+  return process.cwd();
+}
+
 // AC-13 override marker — same {os.tmpdir()}/claude-*-{sessionId}.marker
 // shape as the repo's existing bypass markers. ⚠️ os.tmpdir() on this Mac
 // is NOT `/tmp` — never hardcode the literal, here or in a caller creating
@@ -127,18 +216,34 @@ function main() {
     const command = (payload.tool_input || {}).command || '';
 
     // Only intercept git commit invocations — everything else passes
-    // through silently (contract's "Trigger" section).
-    if (!/\bgit\s+commit\b/.test(command)) process.exit(0);
+    // through silently (contract's "Trigger" section). Quote-aware,
+    // command-position-aware — see isRealGitCommit (K3).
+    if (!isRealGitCommit(command)) process.exit(0);
+
+    // K1: the guard cannot see what a chained staging mutator would leave
+    // staged, so it refuses the composite command outright — regardless of
+    // what happens to be staged right now.
+    if (hasStagingMutator(command)) {
+      process.stderr.write(
+        `\nFRAMEWORK GUARD: commit blocked — this command stages changes and commits in the same call:\n` +
+        `  ${command}\n\n` +
+        `This guard reads \`git diff --cached\` BEFORE the command runs, so staging done on the same ` +
+        `line is invisible to it. Run the staging command and \`git commit\` as two separate Bash calls.\n`
+      );
+      process.exit(2);
+    }
 
     // Staged files, real `git diff --cached` (Article III — no fs/child_process
     // mock). A failure here (not a repo, git unavailable) fails OPEN: the one
     // deliberate exception to AC-10 in this spec set — failing closed would
     // make committing impossible in every non-git directory, for zero real
     // protection (blast-radius reasoning documented in the contract).
+    const cwd = resolveCwd(command, payload);
+
     let staged;
     try {
       const out = execFileSync('git', ['diff', '--cached', '--name-only'], {
-        cwd: process.cwd(),
+        cwd,
         encoding: 'utf-8',
       });
       staged = out.split('\n').map((line) => line.trim()).filter(Boolean);
@@ -176,7 +281,23 @@ function main() {
     );
     process.exit(2);
   } catch (_err) {
-    process.exit(0); // Fail-open on any unexpected error
+    // (d) Bucket K, 2026-08-23: an unexpected exception here means the
+    // guard could not determine whether the commit is safe — "couldn't
+    // decide" must never read as "allowed". Fail CLOSED, name the
+    // exception, and give an escape hatch. This is deliberately different
+    // from the INNER catch above (git diff --cached failing because we're
+    // not in a git repo) — that one stays fail-open, per the contract's
+    // documented AC-10 exception; this one is a genuinely unknown failure.
+    let sessionId = 'unknown';
+    try { sessionId = getSessionId(); } catch (_) { /* best effort */ }
+    const marker = markerPath(sessionId);
+    process.stderr.write(
+      `\n[framework-guard] BLOCKED — unexpected error, failing closed: ${(_err && _err.message) || _err}\n` +
+      `The guard could not determine whether this commit touches protected paths, so it refuses by default.\n` +
+      `To override once, create ${marker}\n` +
+      `If this keeps happening, remove the PreToolUse/Bash entry citing framework-guard.cjs from settings.json.\n`
+    );
+    process.exit(2);
   }
 }
 

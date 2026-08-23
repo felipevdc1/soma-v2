@@ -76,7 +76,7 @@ function writeMarker(tmpdir, sessionId) {
  * and an unscrubbed inherited value would silently make "no matching
  * marker" tests pass or fail for the wrong reason.
  */
-function runHook({ cwd, command = 'git commit -m "test"', sessionId, tmpdir, stdinSessionId } = {}) {
+function runHook({ cwd, command = 'git commit -m "test"', sessionId, tmpdir, stdinSessionId, payloadCwd, rawStdin } = {}) {
   return new Promise((resolve) => {
     const env = { ...process.env };
     delete env.CK_SESSION_ID;
@@ -84,8 +84,16 @@ function runHook({ cwd, command = 'git commit -m "test"', sessionId, tmpdir, std
     if (sessionId !== undefined) env.CK_SESSION_ID = sessionId;
     if (tmpdir !== undefined) env.TMPDIR = tmpdir;
 
-    const payload = JSON.stringify({
+    // rawStdin lets a test send stdin that isn't the normal well-formed
+    // payload at all (e.g. malformed JSON), to force an unexpected
+    // exception inside the hook — see the (d) fail-closed tests.
+    const payload = rawStdin !== undefined ? rawStdin : JSON.stringify({
       tool_input: { command },
+      // A real PreToolUse payload carries its own top-level `cwd` — the
+      // cwd the upcoming Bash command will actually run in, which is NOT
+      // necessarily process.cwd() of the process that spawned this hook.
+      // See the (a) resolveCwd tests.
+      ...(payloadCwd !== undefined ? { cwd: payloadCwd } : {}),
       // Real Claude Code PreToolUse payloads carry a top-level session_id.
       // The contract requires the hook to ignore it and use the env var
       // instead — this field exists so test #6 can prove that.
@@ -352,6 +360,163 @@ test('CONTRACT: controle negativo — core/docs/README.md staged (mesmo dir, nã
     assert.equal(stderr.trim(), '', `esperava stderr vazio (silêncio), veio: ${stderr}`);
   } finally {
     cleanup(repo);
+  }
+});
+
+// ── Bucket K (2026-08-23) — K1: `git add X && git commit` na mesma chamada
+// cega o guard. PreToolUse roda ANTES do comando: no instante em que este
+// hook lê `git diff --cached`, o `git add` encadeado ainda não rodou —
+// staged-agora é vazio, offenders vazio, exit 0, silêncio. O guard não
+// consegue ver o staging FINAL de um comando composto, então a resposta
+// correta é recusar o comando composto, não tentar adivinhar o resultado.
+// `cd` não é mutador de staging e TEM que continuar funcionando — é o
+// preamble padrão de todo dispatch pós-merge deste repo.
+
+test('K1: git add + git commit na mesma chamada -> bloqueia mesmo com staged vazio agora', async () => {
+  const repo = initTmpRepo();
+  const sessionId = `fw-k1-bad-${process.pid}-${Date.now()}`;
+  try {
+    // Nada staged ainda — é exatamente o instante em que o PreToolUse roda.
+    const { code, stderr } = await runHook({
+      repo,
+      cwd: repo,
+      sessionId,
+      command: 'git add core/hooks/whatever.cjs && git commit -m "x"',
+    });
+    assert.equal(code, 2, `esperava exit 2 (guard não pode ver o staging final), veio ${code}. stderr: ${stderr}`);
+    assert.notEqual(stderr.trim(), '', 'esperava stderr explicando por que foi bloqueado');
+  } finally {
+    cleanup(repo);
+  }
+});
+
+test('K1 controle: cd "<repo>" && git commit continua funcionando (cd não é mutador de staging)', async () => {
+  const repo = initTmpRepo();
+  const sessionId = `fw-k1-good-${process.pid}-${Date.now()}`;
+  try {
+    stageFile(repo, 'core/hooks/foo.cjs');
+    const { code, stderr } = await runHook({
+      cwd: repo,
+      sessionId,
+      command: `cd "${repo}" && git commit -m "x"`,
+    });
+    assert.equal(code, 2, `esperava exit 2 (path protegido staged, detectado via cd), veio ${code}. stderr: ${stderr}`);
+    assert.ok(stderr.includes('core/hooks/foo.cjs'), `esperava o path ofensor citado (bloqueio NORMAL, não o de K1), stderr: ${stderr}`);
+  } finally {
+    cleanup(repo);
+  }
+});
+
+// ── Bucket K (2026-08-23) — K3: casa a MENÇÃO, não o fato. O trigger antigo
+// era `/\bgit\s+commit\b/.test(command)` — casa o texto em QUALQUER
+// posição, então `echo "... git commit ..."` dispara o bloqueio mesmo sem
+// nenhum git envolvido (aconteceu ao vivo, num comando de limpeza). Par
+// positivo/negativo: o eco não pode bloquear, e um commit real depois de
+// `&&` (não só no início da linha) continua bloqueando.
+
+test('K3: echo com "git commit" no texto -> NÃO bloqueia (não é um commit de verdade)', async () => {
+  const repo = initTmpRepo();
+  const sessionId = `fw-k3-bad-${process.pid}-${Date.now()}`;
+  try {
+    stageFile(repo, 'core/hooks/foo.cjs'); // protegido, mas o comando não é commit
+    const { code, stderr } = await runHook({
+      cwd: repo,
+      sessionId,
+      command: 'echo "cleanup: no more git commit needed here"',
+    });
+    assert.equal(code, 0, `esperava exit 0 (não é git commit de verdade, é texto dentro de echo), veio ${code}. stderr: ${stderr}`);
+    assert.equal(stderr.trim(), '', `esperava silêncio, veio: ${stderr}`);
+  } finally {
+    cleanup(repo);
+  }
+});
+
+test('K3 controle: git commit real após && (não no início da linha) -> continua bloqueando', async () => {
+  const repo = initTmpRepo();
+  const sessionId = `fw-k3-good-${process.pid}-${Date.now()}`;
+  try {
+    stageFile(repo, 'core/hooks/foo.cjs');
+    const { code, stderr } = await runHook({
+      cwd: repo,
+      sessionId,
+      command: 'git status && git commit -m "x"',
+    });
+    assert.equal(code, 2, `esperava exit 2 (commit real, mesmo não estando no início da linha), veio ${code}. stderr: ${stderr}`);
+    assert.ok(stderr.includes('core/hooks/foo.cjs'), `esperava o path ofensor citado, stderr: ${stderr}`);
+  } finally {
+    cleanup(repo);
+  }
+});
+
+// ── Bucket K (2026-08-23) — (a): `process.cwd()` é o cwd do PROCESSO QUE
+// GERA o hook, não necessariamente o cwd em que o comando Bash vai rodar.
+// Um payload PreToolUse real carrega `cwd` — o harness manda o cwd real do
+// comando ali. Ordem de resolução: `cd <path>` no INÍCIO do comando (se
+// houver) -> `payload.cwd` -> `process.cwd()` como último recurso.
+
+test('(a): payload.cwd aponta pro repo, process.cwd() do processo do hook fica fora -> bloqueia (hoje passaria)', async () => {
+  const repo = initTmpRepo();
+  const nonRepo = fs.mkdtempSync(path.join(os.tmpdir(), 'fw-guard-cwd-a-'));
+  const sessionId = `fw-a-bad-${process.pid}-${Date.now()}`;
+  try {
+    stageFile(repo, 'core/hooks/foo.cjs');
+    // Spawn cwd (o que process.cwd() devolve DENTRO do hook) é nonRepo —
+    // sem o fallback pro payload.cwd, `git diff --cached` roda fora de
+    // qualquer repo git e o guard sai 0 (fail-open), silenciosamente.
+    const { code, stderr } = await runHook({ cwd: nonRepo, sessionId, payloadCwd: repo });
+    assert.equal(
+      code, 2,
+      `esperava exit 2 (payload.cwd aponta pro repo com path protegido staged), veio ${code}. stderr: ${stderr}`
+    );
+    assert.ok(stderr.includes('core/hooks/foo.cjs'), `esperava o path ofensor citado, stderr: ${stderr}`);
+  } finally {
+    cleanup(repo, nonRepo);
+  }
+});
+
+test('(a) controle: sem payload.cwd, process.cwd() fora de repo -> continua fail-open (comportamento existente preservado)', async () => {
+  const nonRepo = fs.mkdtempSync(path.join(os.tmpdir(), 'fw-guard-cwd-a-neg-'));
+  const sessionId = `fw-a-good-${process.pid}-${Date.now()}`;
+  try {
+    // Sem payload.cwd -> cai no último recurso, process.cwd() (nonRepo).
+    const { code, stderr } = await runHook({ cwd: nonRepo, sessionId });
+    assert.equal(code, 0, `esperava exit 0 (fail-open fora de repo git, sem payload.cwd), veio ${code}. stderr: ${stderr}`);
+    assert.notEqual(stderr.trim(), '', 'esperava warning na stderr (git diff --cached falhou)');
+  } finally {
+    cleanup(nonRepo);
+  }
+});
+
+// ── Bucket K (2026-08-23) — (d): o `catch` externo de main() fazia
+// `process.exit(0)` MUDO em qualquer exceção inesperada. "Não sei decidir"
+// não pode ler como "pode passar". Par: uma exceção forçada tem que
+// bloquear com mensagem nomeando a causa; e o `catch` INTERNO deliberado
+// (fora de repo git — AC's fail-open documentado no contrato) tem que
+// continuar saindo 0, senão o conserto do externo vazou pro caso errado.
+
+test('(d): exceção inesperada (JSON malformado) -> exit 2, nunca silencioso', async () => {
+  const sessionId = `fw-d-bad-${process.pid}-${Date.now()}`;
+  try {
+    const { code, stderr } = await runHook({ sessionId, rawStdin: '{not valid json' });
+    assert.equal(code, 2, `esperava exit 2 (falha fechada em exceção inesperada), veio ${code}. stderr: ${stderr}`);
+    assert.notEqual(stderr.trim(), '', 'esperava stderr nomeando a causa da falha, veio vazio');
+  } finally {
+    // sem repo/marker pra limpar — stdin malformado nunca chega a criar nada
+  }
+});
+
+test('(d) controle: fora de repo git continua exit 0 (o catch INTERNO documentado não vira fail-closed)', async () => {
+  const nonRepo = fs.mkdtempSync(path.join(os.tmpdir(), 'fw-guard-d-neg-'));
+  const sessionId = `fw-d-good-${process.pid}-${Date.now()}`;
+  try {
+    const { code, stderr } = await runHook({ cwd: nonRepo, sessionId });
+    assert.equal(
+      code, 0,
+      `esperava exit 0 (fail-open documentado pro caso "fora de repo git" — não é uma exceção inesperada), veio ${code}. stderr: ${stderr}`
+    );
+    assert.notEqual(stderr.trim(), '', 'esperava warning na stderr (git diff --cached falhou, não é um erro genérico)');
+  } finally {
+    cleanup(nonRepo);
   }
 });
 
