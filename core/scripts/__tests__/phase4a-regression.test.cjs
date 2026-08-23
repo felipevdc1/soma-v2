@@ -39,10 +39,12 @@ const PHASE4A_TEST_FILES = [
   'init-existing.e2e-smoke.test.cjs'
 ].map(f => path.join(TESTS_DIR, f));
 
+// Spawns `node --test` directly, with NODE_TEST_CONTEXT stripped from the
+// child's env to avoid Node v22+'s "recursive node:test" detection. No
+// wrapper script is generated — see no-nested-test-spawn.test.cjs for why:
+// a wrapper that itself spawns a "neto" process orphans that neto whenever
+// the outer spawnSync's timeout kills the wrapper before the neto finishes.
 function runTestsBridge(files, label) {
-  const wrapperPath = path.join(os.tmpdir(), `soma-p4a-runner-${Date.now()}.cjs`);
-  const outFile = path.join(os.tmpdir(), `soma-p4a-out-${Date.now()}.txt`);
-
   // Telemetry isolation: when `files` is the Hooks set (see the 'Hooks' call
   // site below), it exercises capture-defer-gate.cjs / insight-action-coupling.cjs,
   // which append Article XI / insight-coupling telemetry. Without an override
@@ -58,29 +60,17 @@ function runTestsBridge(files, label) {
   // it's what makes isolation work the day the deployed copy catches up.
   const telemetryLogDir = fs.mkdtempSync(path.join(os.tmpdir(), 'soma-p4a-telemetry-'));
 
-  const wrapperCode = `
-'use strict';
-const { spawnSync } = require('node:child_process');
-const fs = require('node:fs');
-const files = ${JSON.stringify(files)};
-const outFile = ${JSON.stringify(outFile)};
-const env = Object.assign({}, process.env);
-delete env.NODE_TEST_CONTEXT;
-env.FORCE_COLOR = '0';
-env.ARTICLE_XI_LOG_DIR = ${JSON.stringify(telemetryLogDir)};
-env.INSIGHT_COUPLING_LOG_DIR = ${JSON.stringify(telemetryLogDir)};
-const result = spawnSync(${JSON.stringify(NODE_BIN)}, ['--test', ...files], {
-  encoding: 'utf8', timeout: 120000, env
-});
-fs.writeFileSync(outFile, (result.stdout || '') + (result.stderr || ''));
-process.exit(result.status || 0);
-`;
-  fs.writeFileSync(wrapperPath, wrapperCode);
+  const env = Object.assign({}, process.env);
+  delete env.NODE_TEST_CONTEXT;
+  env.FORCE_COLOR = '0';
+  env.ARTICLE_XI_LOG_DIR = telemetryLogDir;
+  env.INSIGHT_COUPLING_LOG_DIR = telemetryLogDir;
 
   try {
-    spawnSync(NODE_BIN, [wrapperPath], { encoding: 'utf8', timeout: 120000 });
-    if (!fs.existsSync(outFile)) return { tests: null, pass: null, fail: null, raw: '' };
-    const raw = fs.readFileSync(outFile, 'utf8');
+    const result = spawnSync(NODE_BIN, ['--test', ...files], {
+      encoding: 'utf8', timeout: 120000, env
+    });
+    const raw = (result.stdout || '') + (result.stderr || '');
     const testsMatch = raw.match(/# tests (\d+)/);
     const passMatch = raw.match(/# pass (\d+)/);
     const failMatch = raw.match(/# fail (\d+)/);
@@ -91,8 +81,6 @@ process.exit(result.status || 0);
       raw
     };
   } finally {
-    try { fs.unlinkSync(wrapperPath); } catch (e) { /* cleanup */ }
-    try { fs.unlinkSync(outFile); } catch (e) { /* cleanup */ }
     try { fs.rmSync(telemetryLogDir, { recursive: true, force: true }); } catch (e) { /* cleanup */ }
   }
 }

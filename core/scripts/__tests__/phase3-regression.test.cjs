@@ -145,15 +145,15 @@ function getHooksTestFiles() {
   return files;
 }
 
+// Spawns `node --test` directly, with NODE_TEST_CONTEXT stripped from the
+// child's env to avoid Node v22+'s "recursive node:test" detection. No
+// wrapper script is generated — see no-nested-test-spawn.test.cjs for why:
+// a wrapper that itself spawns a "neto" process orphans that neto whenever
+// the outer spawnSync's timeout kills the wrapper before the neto finishes.
 function runHooksViaBridge() {
-  // Use wrapper script approach (per Phase 2 hooks-regression.test.cjs pattern)
-  // Avoids "node:test recursive" detection in Node v22+
   spawnSync('bash', ['-c', 'rm -f /tmp/soma-state-trap* 2>/dev/null'], { encoding: 'utf8' });
   const hookTestFiles = getHooksTestFiles();
   if (hookTestFiles.length === 0) return { tests: 0, pass: 0, fail: 0, raw: '' };
-
-  const wrapperPath = path.join(os.tmpdir(), `soma-p3-hooks-runner-${Date.now()}.cjs`);
-  const outFile = path.join(os.tmpdir(), `soma-p3-hooks-out-${Date.now()}.txt`);
 
   // Telemetry isolation: the hook test files under HOOKS_DIR exercise
   // capture-defer-gate.cjs / insight-action-coupling.cjs, which append Article
@@ -168,30 +168,17 @@ function runHooksViaBridge() {
   // it's what makes isolation work the day the deployed copy catches up.
   const telemetryLogDir = fs.mkdtempSync(path.join(os.tmpdir(), 'soma-p3-hooks-telemetry-'));
 
-  const wrapperCode = `
-'use strict';
-const { spawnSync } = require('node:child_process');
-const fs = require('node:fs');
-const files = ${JSON.stringify(hookTestFiles)};
-const outFile = ${JSON.stringify(outFile)};
-// Strip NODE_TEST_CONTEXT to avoid "recursive node:test" detection in Node v22+
-const env = Object.assign({}, process.env);
-delete env.NODE_TEST_CONTEXT;
-env.FORCE_COLOR = '0';
-env.ARTICLE_XI_LOG_DIR = ${JSON.stringify(telemetryLogDir)};
-env.INSIGHT_COUPLING_LOG_DIR = ${JSON.stringify(telemetryLogDir)};
-const result = spawnSync(${JSON.stringify(NODE_BIN)}, ['--test', ...files], {
-  encoding: 'utf8', timeout: 60000, env
-});
-fs.writeFileSync(outFile, (result.stdout || '') + (result.stderr || ''));
-process.exit(result.status || 0);
-`;
-  fs.writeFileSync(wrapperPath, wrapperCode);
+  const env = Object.assign({}, process.env);
+  delete env.NODE_TEST_CONTEXT;
+  env.FORCE_COLOR = '0';
+  env.ARTICLE_XI_LOG_DIR = telemetryLogDir;
+  env.INSIGHT_COUPLING_LOG_DIR = telemetryLogDir;
 
   try {
-    spawnSync(NODE_BIN, [wrapperPath], { encoding: 'utf8', timeout: 60000 });
-    if (!fs.existsSync(outFile)) return { tests: null, pass: null, fail: null, raw: '' };
-    const raw = fs.readFileSync(outFile, 'utf8');
+    const result = spawnSync(NODE_BIN, ['--test', ...hookTestFiles], {
+      encoding: 'utf8', timeout: 60000, env
+    });
+    const raw = (result.stdout || '') + (result.stderr || '');
     const testsMatch = raw.match(/# tests (\d+)/);
     const passMatch = raw.match(/# pass (\d+)/);
     const failMatch = raw.match(/# fail (\d+)/);
@@ -202,8 +189,6 @@ process.exit(result.status || 0);
       raw
     };
   } finally {
-    try { fs.unlinkSync(wrapperPath); } catch (e) { /* cleanup */ }
-    try { fs.unlinkSync(outFile); } catch (e) { /* cleanup */ }
     try { fs.rmSync(telemetryLogDir, { recursive: true, force: true }); } catch (e) { /* cleanup */ }
   }
 }

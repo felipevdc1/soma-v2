@@ -143,11 +143,20 @@ function generatesAndSpawnsWrapperScript(src) {
 
 // ---- The gate ----
 
+// This file itself, relative to REPO_ROOT (POSIX-style, matching `git ls-files`
+// output) — excluded below because its OWN known-bad self-check fixture (see
+// the next test) deliberately contains the literal wrapper-spawn pattern this
+// gate looks for. Same self-exclusion idiom already used by
+// phase4a-regression.test.cjs for the same kind of reason ("do NOT include
+// this regression file itself to avoid recursion").
+const SELF_PATH = path.relative(REPO_ROOT, __filename).split(path.sep).join('/');
+
 test('structural: no *.test.cjs generates a wrapper script that itself spawns a process', () => {
   const files = execSync('git ls-files "*.test.cjs"', { cwd: REPO_ROOT, encoding: 'utf8' })
     .trim()
     .split('\n')
-    .filter(Boolean);
+    .filter(Boolean)
+    .filter((f) => f !== SELF_PATH);
 
   // Sanity floor so a broken cwd/git invocation (0 files silently scanned)
   // can't read as "0 offenders" = success.
