@@ -3,8 +3,11 @@
 **Feature ID:** 024-gate-de-operador
 **Branch:** `feature/024-gate-de-operador`
 **Created:** 2026-08-23
-**Status:** DRAFT — pronta para Gate 1. As 6 questões bloqueantes foram resolvidas por medição (§Decisões),
-e o documento passou por 5 lentes adversariais + 2 leitores em contexto isolado (§0.5).
+**Status:** APPROVED — Gate #1 do Felipe em 2026-08-23 ("Aprovar os 4 ACs"), sobre a versão auditada
+(`7554a03`), com os 4 ACs vivos: AC-01, AC-02, AC-04, AC-05. As 6 questões bloqueantes foram resolvidas por
+medição (§Decisões) e o documento passou por 5 lentes adversariais + 2 leitores em contexto isolado (§0.5).
+Provenance: nenhum gate no código lê este campo — é declaração para leitor humano.
+Próximo passo: **teste RED**, não `/plan-sdd` (decisão travada no handoff-forge).
 
 ---
 
