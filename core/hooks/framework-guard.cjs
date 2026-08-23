@@ -18,8 +18,12 @@
  *       via marker, or not inside a git repo — the one deliberate
  *       exception to "impossibility-to-check is REJECT": see the
  *       contract's note on why failing closed here would be worse)
- *   2 - Block (a staged path matches a protected pattern, no matching
- *       bypass marker for this session)
+ *   2 - Block (a staged path matches a protected pattern with no matching
+ *       bypass marker for this session; the command stages changes and
+ *       commits in the same line, so final staged state can't be seen
+ *       (K1); or an unexpected exception left the guard unable to decide
+ *       — "couldn't decide" fails CLOSED, unlike the documented
+ *       not-a-git-repo case above (K/2026-08-23, Bucket K))
  */
 
 'use strict';
@@ -277,7 +281,23 @@ function main() {
     );
     process.exit(2);
   } catch (_err) {
-    process.exit(0); // Fail-open on any unexpected error
+    // (d) Bucket K, 2026-08-23: an unexpected exception here means the
+    // guard could not determine whether the commit is safe — "couldn't
+    // decide" must never read as "allowed". Fail CLOSED, name the
+    // exception, and give an escape hatch. This is deliberately different
+    // from the INNER catch above (git diff --cached failing because we're
+    // not in a git repo) — that one stays fail-open, per the contract's
+    // documented AC-10 exception; this one is a genuinely unknown failure.
+    let sessionId = 'unknown';
+    try { sessionId = getSessionId(); } catch (_) { /* best effort */ }
+    const marker = markerPath(sessionId);
+    process.stderr.write(
+      `\n[framework-guard] BLOCKED — unexpected error, failing closed: ${(_err && _err.message) || _err}\n` +
+      `The guard could not determine whether this commit touches protected paths, so it refuses by default.\n` +
+      `To override once, create ${marker}\n` +
+      `If this keeps happening, remove the PreToolUse/Bash entry citing framework-guard.cjs from settings.json.\n`
+    );
+    process.exit(2);
   }
 }
 

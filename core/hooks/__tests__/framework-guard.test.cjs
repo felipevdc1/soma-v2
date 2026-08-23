@@ -487,6 +487,39 @@ test('(a) controle: sem payload.cwd, process.cwd() fora de repo -> continua fail
   }
 });
 
+// ── Bucket K (2026-08-23) — (d): o `catch` externo de main() fazia
+// `process.exit(0)` MUDO em qualquer exceção inesperada. "Não sei decidir"
+// não pode ler como "pode passar". Par: uma exceção forçada tem que
+// bloquear com mensagem nomeando a causa; e o `catch` INTERNO deliberado
+// (fora de repo git — AC's fail-open documentado no contrato) tem que
+// continuar saindo 0, senão o conserto do externo vazou pro caso errado.
+
+test('(d): exceção inesperada (JSON malformado) -> exit 2, nunca silencioso', async () => {
+  const sessionId = `fw-d-bad-${process.pid}-${Date.now()}`;
+  try {
+    const { code, stderr } = await runHook({ sessionId, rawStdin: '{not valid json' });
+    assert.equal(code, 2, `esperava exit 2 (falha fechada em exceção inesperada), veio ${code}. stderr: ${stderr}`);
+    assert.notEqual(stderr.trim(), '', 'esperava stderr nomeando a causa da falha, veio vazio');
+  } finally {
+    // sem repo/marker pra limpar — stdin malformado nunca chega a criar nada
+  }
+});
+
+test('(d) controle: fora de repo git continua exit 0 (o catch INTERNO documentado não vira fail-closed)', async () => {
+  const nonRepo = fs.mkdtempSync(path.join(os.tmpdir(), 'fw-guard-d-neg-'));
+  const sessionId = `fw-d-good-${process.pid}-${Date.now()}`;
+  try {
+    const { code, stderr } = await runHook({ cwd: nonRepo, sessionId });
+    assert.equal(
+      code, 0,
+      `esperava exit 0 (fail-open documentado pro caso "fora de repo git" — não é uma exceção inesperada), veio ${code}. stderr: ${stderr}`
+    );
+    assert.notEqual(stderr.trim(), '', 'esperava warning na stderr (git diff --cached falhou, não é um erro genérico)');
+  } finally {
+    cleanup(nonRepo);
+  }
+});
+
 // ── wiring: sem entrada no soma-hooks-map.json, o hook nunca dispara ───
 
 test('CONTRACT: está registrado em install/soma-hooks-map.json com PreToolUse/Bash', () => {
