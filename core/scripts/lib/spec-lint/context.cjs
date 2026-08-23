@@ -4,7 +4,8 @@
  *
  * Single loader: reads spec.md, plan.md, tasks.md, quickstart.md and
  * contracts/*.md (whichever exist — absence is not fatal), and parses
- * tasks.md once into { id, parallel, files[], dependsOn[], specRefs[] }.
+ * tasks.md once into { id, parallel, description, files[], dependsOn[],
+ * specRefs[], line }.
  *
  * No check reads the disk on its own (plan.md §"Interface de check") — this
  * is the one place the tasks.md format can break, and fixtures for check
@@ -18,8 +19,23 @@
  * one, so `parallel-collision` sees real paths without inheriting prose as
  * phantom files.
  *
- * @spec [SPEC:AC-03] [SPEC:AC-08] [SPEC:AC-09] [SPEC:AC-15] [SPEC:AC-16]
- * @task T-02 / T-13
+ * AC-02 (spec 019): two aditive changes for `red-only-coverage`, neither a
+ * contract break — `specRefs` has zero consumers repo-wide before this
+ * check, and `contracts/check-parallel-collision.md`'s 4-field list is
+ * already descriptive (it omits `specRefs`/`line`, which exist today), not
+ * a closed shape. (1) `description` is now carried on the returned task
+ * object — the column was already read (below) and used only to test
+ * `parallel`, never returned. (2) `extractSpecRefs` expands interval
+ * notation (`[SPEC:AC-01..AC-12]`) into every AC in the range — the old
+ * regex required `]` immediately after the digits, so an interval cell
+ * matched zero refs, not the wrong ones. Measured across the repo: interval
+ * width is always 2 digits (854 `AC-NN` occurrences, zero 1-digit), and a
+ * bracket can carry a trailing non-AC token after the range
+ * (`[SPEC:AC-01..AC-12 + D4]`, `[SPEC:AC-09..AC-11 + Security]`) — the
+ * expansion ignores everything past the second `AC-NN`.
+ *
+ * @spec [SPEC:AC-02] [SPEC:AC-03] [SPEC:AC-08] [SPEC:AC-09] [SPEC:AC-15] [SPEC:AC-16]
+ * @task T-02 / T-13 / T-AC02
  */
 
 const fs = require('node:fs');
@@ -108,10 +124,38 @@ function splitList(cell) {
   return trimmed.split(',').map(s => unbacktick(s.trim())).filter(Boolean);
 }
 
+// AC-02: `[SPEC:AC-01..AC-12]` interval notation, used by 5 specs' Wave 1
+// stub tasks. Only the range prefix is parsed — a trailing non-AC token
+// (`+ D4`, `+ Security`) is dropped, never mistaken for a third AC.
+const AC_RANGE_RE = /^(AC-(\d+))\.\.(AC-(\d+))/;
+const AC_SINGLE_RE = /^AC-\d+$/;
+
+/** "AC-01".."AC-12" -> ["AC-01", ..., "AC-12"], zero-padded to the width of
+ *  the FIRST number as written (measured: both ends always share width in
+ *  this corpus). Empty (never observed) if the range runs backwards. */
+function expandAcRange(startDigits, endDigits) {
+  const width = startDigits.length;
+  const start = parseInt(startDigits, 10);
+  const end = parseInt(endDigits, 10);
+  const acs = [];
+  for (let n = start; n <= end; n++) {
+    acs.push(`AC-${String(n).padStart(width, '0')}`);
+  }
+  return acs;
+}
+
 function extractSpecRefs(cell) {
   if (!cell) return [];
   const refs = [];
-  for (const m of cell.matchAll(/\[SPEC:(AC-\d+)\]/g)) refs.push(m[1]);
+  for (const m of cell.matchAll(/\[SPEC:([^\]]*)\]/g)) {
+    const inner = m[1].trim();
+    const rangeMatch = inner.match(AC_RANGE_RE);
+    if (rangeMatch) {
+      refs.push(...expandAcRange(rangeMatch[2], rangeMatch[4]));
+      continue;
+    }
+    if (AC_SINGLE_RE.test(inner)) refs.push(inner);
+  }
   return refs;
 }
 
@@ -168,6 +212,7 @@ function parseTasksTable(table) {
     tasks.push({
       id: idCell,
       parallel: PARALLEL_MARKER_RE.test(description.trim()),
+      description,
       files: splitList(filesCell).filter(looksLikePath),
       dependsOn: splitList(dependsCell),
       specRefs: extractSpecRefs(specRefCell),
