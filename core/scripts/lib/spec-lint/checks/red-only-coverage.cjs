@@ -42,12 +42,16 @@ module.exports = {
   run(ctx) {
     const tasks = ctx.tasks || [];
 
-    // AC -> tasks that reference it, in order of appearance in tasks.md.
-    // "Única" (AC-02) means this list has length 1 — never task.id read as
-    // its own dependency or anything of that shape; this is a plain count.
+    // AC -> tasks (LINES, per the AC text) that reference it, in order of
+    // appearance in tasks.md. "Única" (AC-02) means this list has length
+    // 1. Dedupe per task before pushing — not observed in the real corpus,
+    // but a cell mixing an individual ref with an overlapping interval
+    // (`[SPEC:AC-01] [SPEC:AC-01..AC-03]`) would otherwise count one LINE
+    // twice, which is not what "única" means.
     const referencingTasksByAc = new Map();
     for (const task of tasks) {
-      for (const ac of task.specRefs || []) {
+      const uniqueAcs = new Set(task.specRefs || []);
+      for (const ac of uniqueAcs) {
         if (!referencingTasksByAc.has(ac)) referencingTasksByAc.set(ac, []);
         referencingTasksByAc.get(ac).push(task);
       }
