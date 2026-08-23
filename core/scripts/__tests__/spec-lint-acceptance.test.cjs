@@ -62,10 +62,18 @@ const HISTORICAL_SHA = '0c165d0c9fa6fb3817834dc974e3531725788bb1';
 
 const EXPECTED_HISTORICAL_FINDING =
   'parallel-collision: tasks.md:65: T-12 e T-15 são [P] no mesmo nível e escrevem em install/soma-hooks-map.json';
+// AC-01 (spec 019, dispatch avulso): heading-near-miss foi registrado no FIM
+// de registry.cjs, depois de parallel-collision — a ordem no rodapé é a
+// ordem do registry (spec-lint.cjs:81, checks.map(c => c.name)), então a
+// lista cresce de 2 para 3 nomes SEM reordenar os dois já existentes.
+// `achados:` continua idêntico (1 e 0) — rodado direto contra os dois casos
+// reais (worktree histórico e core/specs/016-artifact-gated-trilho no HEAD
+// atual) para confirmar que heading-near-miss não gera falso-positivo nem
+// pula (`pulados: -` também intacto) contra este corpus.
 const EXPECTED_HISTORICAL_FOOTER =
-  'checks executados: cli-surface, parallel-collision  |  pulados: -  |  achados: 1';
+  'checks executados: cli-surface, parallel-collision, heading-near-miss  |  pulados: -  |  achados: 1';
 const EXPECTED_CORRECTED_FOOTER =
-  'checks executados: cli-surface, parallel-collision  |  pulados: -  |  achados: 0';
+  'checks executados: cli-surface, parallel-collision, heading-near-miss  |  pulados: -  |  achados: 0';
 
 function runSpecLint(specDir) {
   return spawnSync('node', [SOMA_CLI, 'spec-lint', specDir], {
