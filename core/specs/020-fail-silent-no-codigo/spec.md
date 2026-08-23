@@ -140,7 +140,7 @@ entradas de um manifesto de snapshot). Sujeitos genuinamente diferentes. `init.c
 
 O escopo é, portanto: mesmo nome **E** mesma entrada **E** dois produtores independentes.
 
-### AC-04: The sistema SHALL garantir que o processo filho de uma medição morra com o pai
+### AC-04: The sistema SHALL recusar teste que gere script wrapper que ele mesmo spawna processo
 
 Given `phase3-regression.test.cjs:192`, `phase4a-regression.test.cjs:81` e `hooks-regression.test.cjs:108`,
 que fazem `spawnSync(NODE_BIN, [wrapperPath], { timeout })`, e o wrapper por dentro faz
@@ -154,9 +154,21 @@ não medido. Efeito medido: a suíte passou de ~5,5 min para
 12 min, e **o mesmo SHA rendeu contagens diferentes**. É a causa do flake de ±1 que este repositório
 vinha registrando **sem causa nomeada**.
 
-🔴 **Este AC é o chão dos outros seis e o da spec 019 inteira.** Toda prova de dois lados é colhida pela
-suíte; enquanto o órfão viver, um gate que acuse ou deixe de acusar por ±1 é indistinguível de um gate
-correto. **Implementar primeiro, sozinho, antes de qualquer outro AC de qualquer das duas specs.**
+✅ **CONSERTADO em 2026-08-22, antes desta spec ser aprovada.** Branch `fix/orphan-node-test-process`,
+commits `da00a8b` (RED) e `2a3a352` (GREEN), PR #22. O conserto **não** foi matar o neto por grupo de
+processo — foi eliminar a camada do wrapper, que é dispensável: medido em Node v22.15.0, `spawnSync`
+direto com `NODE_TEST_CONTEXT` removido do env roda o teste interno normalmente. Sem wrapper não há neto.
+Escopo: 3 sites, das 29 chamadas `spawnSync` dos três arquivos.
+
+🔴 **Por isso este AC vira REGRESSÃO, não construção.** O que resta é impedir a reintrodução:
+o gate estrutural `core/scripts/__tests__/no-nested-test-spawn.test.cjs` acusa qualquer `*.test.cjs` que
+gere script wrapper que spawna, e tem controles nos dois sentidos. **Caso conhecido-ruim**: o fixture
+sintético que o próprio gate carrega. **Caso conhecido-bom**: `phase4d-regression.test.cjs`, que spawna
+direto sem wrapper.
+
+⚠️ **Nota de método**: esta spec já teve um AC (o antigo AC-02) que descrevia trabalho já feito, porque o
+autor transcreveu bucket de handoff sem re-medir. Converter este AC no mesmo dia em que o conserto entrou
+é o que impede a repetição — *"`DONE` é afirmação sobre o código, não sobre o documento"*.
 
 ### AC-05: WHEN uma medição for apresentada como controle, the sistema SHALL declarar se o ambiente contém o artefato sob teste
 
