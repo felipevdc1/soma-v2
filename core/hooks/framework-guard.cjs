@@ -23,7 +23,7 @@
  *       commits in the same line, so final staged state can't be seen
  *       (K1); or an unexpected exception left the guard unable to decide
  *       — "couldn't decide" fails CLOSED, unlike the documented
- *       not-a-git-repo case above (K/2026-08-23, Bucket K))
+ *       not-a-git-repo case above (Bucket K, 2026-08-23))
  */
 
 'use strict';
