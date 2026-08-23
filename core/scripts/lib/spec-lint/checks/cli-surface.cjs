@@ -365,6 +365,14 @@ function checkInvocation(surface, invocationText) {
 
 module.exports = {
   name: 'cli-surface',
+  // AC-05 (spec 019): a cerca vive em plan.md, mas os achados são
+  // reportados contra `ctx.artifacts` inteiro — o `for` logo abaixo
+  // (`for (const artifact of ctx.artifacts)`) não filtra por arquivo, e
+  // `ctx.artifacts` (context.cjs ARTIFACT_FILES + contracts/*.md) é
+  // exatamente esta lista. `retroactive: false`: este check só roda sobre
+  // o `<spec-dir>` recebido pelo CLI — spec-lint.cjs não tem flag nenhuma
+  // além do posicional, então não existe varredura retroativa hoje.
+  scope: { artifacts: ['spec.md', 'plan.md', 'tasks.md', 'quickstart.md', 'contracts/'], retroactive: false },
   run(ctx) {
     const planArtifact = ctx.artifacts.find(a => a.file === 'plan.md');
     if (!planArtifact) {
