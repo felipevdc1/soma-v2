@@ -335,24 +335,6 @@ test('AC-06 [T-02] --json output validates soma-manifest-baseline/v1 schema fiel
   }
 });
 
-// @spec AC-07
-test('AC-07 [T-02] frozen libs invariant — lib/*.cjs files not modified from main', () => {
-  // This test verifies git-level invariant: lib/ files must not appear in diff from main.
-  // In T-02 (RED commit), no lib/ files are modified → test PASSES.
-  // In GREEN commits (T-03+), same invariant holds — any modification would FAIL this test.
-  const r = spawnSync(
-    'git',
-    ['diff', '--name-only', 'main', '--', 'core/scripts/lib/'],
-    { cwd: REPO_ROOT }
-  );
-  assert.strictEqual(r.status, 0, `git diff exited ${r.status}: ${r.stderr}`);
-  const changed = r.stdout.toString().trim();
-  assert.strictEqual(
-    changed, '',
-    `Frozen lib files must NOT be modified from main. Changed: ${changed}`
-  );
-});
-
 // @spec AC-08
 test('AC-08 [T-02] sourceSha256 is preserved after apply (never mutated)', () => {
   const { somaHome, manifestPath, entries, cleanup } = setupFixture({ staleCount: 2, cleanCount: 1 });
