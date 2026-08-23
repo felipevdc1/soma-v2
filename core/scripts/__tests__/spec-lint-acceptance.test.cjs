@@ -70,10 +70,17 @@ const EXPECTED_HISTORICAL_FINDING =
 // reais (worktree histórico e core/specs/016-artifact-gated-trilho no HEAD
 // atual) para confirmar que heading-near-miss não gera falso-positivo nem
 // pula (`pulados: -` também intacto) contra este corpus.
+//
+// AC-02 (spec 019, dispatch avulso): red-only-coverage registrado no FIM,
+// depois de heading-near-miss — a lista cresce de 3 para 4 nomes, mesma
+// regra. Verificado ao vivo (não por leitura): 016/tasks.md não tem AC
+// coberto por task única RED-only em nenhum dos dois estados (T-01
+// referencia AC-01+AC-03, cada um com 3+ tasks referenciadoras) — `achados:`
+// permanece 1 e 0.
 const EXPECTED_HISTORICAL_FOOTER =
-  'checks executados: cli-surface, parallel-collision, heading-near-miss  |  pulados: -  |  achados: 1';
+  'checks executados: cli-surface, parallel-collision, heading-near-miss, red-only-coverage  |  pulados: -  |  achados: 1';
 const EXPECTED_CORRECTED_FOOTER =
-  'checks executados: cli-surface, parallel-collision, heading-near-miss  |  pulados: -  |  achados: 0';
+  'checks executados: cli-surface, parallel-collision, heading-near-miss, red-only-coverage  |  pulados: -  |  achados: 0';
 
 function runSpecLint(specDir) {
   return spawnSync('node', [SOMA_CLI, 'spec-lint', specDir], {
