@@ -173,6 +173,28 @@ function hasStagingMutator(command) {
   return commandParts(command).some((p) => STAGING_MUTATOR_RES.some((re) => re.test(p)));
 }
 
+// (a) CWD resolution (Bucket K, 2026-08-23): `process.cwd()` is the cwd of
+// the PROCESS THAT SPAWNS THIS HOOK, not necessarily the cwd the upcoming
+// Bash command will run in — the two coincide by default in an interactive
+// session, but a real PreToolUse payload carries its own `cwd` field (the
+// harness fills it in), and a command that opens with `cd <path>` names an
+// even more specific cwd than that. Resolution order: `cd <path>` at the
+// START of the command wins; then `payload.cwd`; then `process.cwd()` as
+// the last resort.
+const CD_PREFIX_RE = /^\s*cd\s+(?:"([^"]*)"|'([^']*)'|(\S+))\s*(?:&&|;|\n|$)/;
+
+function resolveCwd(command, payload) {
+  const cdMatch = CD_PREFIX_RE.exec(command);
+  if (cdMatch) {
+    const cdPath = cdMatch[1] ?? cdMatch[2] ?? cdMatch[3];
+    if (cdPath) return cdPath;
+  }
+  if (payload && typeof payload.cwd === 'string' && payload.cwd.trim() !== '') {
+    return payload.cwd;
+  }
+  return process.cwd();
+}
+
 // AC-13 override marker — same {os.tmpdir()}/claude-*-{sessionId}.marker
 // shape as the repo's existing bypass markers. ⚠️ os.tmpdir() on this Mac
 // is NOT `/tmp` — never hardcode the literal, here or in a caller creating
@@ -212,10 +234,12 @@ function main() {
     // deliberate exception to AC-10 in this spec set — failing closed would
     // make committing impossible in every non-git directory, for zero real
     // protection (blast-radius reasoning documented in the contract).
+    const cwd = resolveCwd(command, payload);
+
     let staged;
     try {
       const out = execFileSync('git', ['diff', '--cached', '--name-only'], {
-        cwd: process.cwd(),
+        cwd,
         encoding: 'utf-8',
       });
       staged = out.split('\n').map((line) => line.trim()).filter(Boolean);

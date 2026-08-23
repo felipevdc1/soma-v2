@@ -76,7 +76,7 @@ function writeMarker(tmpdir, sessionId) {
  * and an unscrubbed inherited value would silently make "no matching
  * marker" tests pass or fail for the wrong reason.
  */
-function runHook({ cwd, command = 'git commit -m "test"', sessionId, tmpdir, stdinSessionId } = {}) {
+function runHook({ cwd, command = 'git commit -m "test"', sessionId, tmpdir, stdinSessionId, payloadCwd, rawStdin } = {}) {
   return new Promise((resolve) => {
     const env = { ...process.env };
     delete env.CK_SESSION_ID;
@@ -84,8 +84,16 @@ function runHook({ cwd, command = 'git commit -m "test"', sessionId, tmpdir, std
     if (sessionId !== undefined) env.CK_SESSION_ID = sessionId;
     if (tmpdir !== undefined) env.TMPDIR = tmpdir;
 
-    const payload = JSON.stringify({
+    // rawStdin lets a test send stdin that isn't the normal well-formed
+    // payload at all (e.g. malformed JSON), to force an unexpected
+    // exception inside the hook — see the (d) fail-closed tests.
+    const payload = rawStdin !== undefined ? rawStdin : JSON.stringify({
       tool_input: { command },
+      // A real PreToolUse payload carries its own top-level `cwd` — the
+      // cwd the upcoming Bash command will actually run in, which is NOT
+      // necessarily process.cwd() of the process that spawned this hook.
+      // See the (a) resolveCwd tests.
+      ...(payloadCwd !== undefined ? { cwd: payloadCwd } : {}),
       // Real Claude Code PreToolUse payloads carry a top-level session_id.
       // The contract requires the hook to ignore it and use the env var
       // instead — this field exists so test #6 can prove that.
@@ -437,6 +445,45 @@ test('K3 controle: git commit real após && (não no início da linha) -> contin
     assert.ok(stderr.includes('core/hooks/foo.cjs'), `esperava o path ofensor citado, stderr: ${stderr}`);
   } finally {
     cleanup(repo);
+  }
+});
+
+// ── Bucket K (2026-08-23) — (a): `process.cwd()` é o cwd do PROCESSO QUE
+// GERA o hook, não necessariamente o cwd em que o comando Bash vai rodar.
+// Um payload PreToolUse real carrega `cwd` — o harness manda o cwd real do
+// comando ali. Ordem de resolução: `cd <path>` no INÍCIO do comando (se
+// houver) -> `payload.cwd` -> `process.cwd()` como último recurso.
+
+test('(a): payload.cwd aponta pro repo, process.cwd() do processo do hook fica fora -> bloqueia (hoje passaria)', async () => {
+  const repo = initTmpRepo();
+  const nonRepo = fs.mkdtempSync(path.join(os.tmpdir(), 'fw-guard-cwd-a-'));
+  const sessionId = `fw-a-bad-${process.pid}-${Date.now()}`;
+  try {
+    stageFile(repo, 'core/hooks/foo.cjs');
+    // Spawn cwd (o que process.cwd() devolve DENTRO do hook) é nonRepo —
+    // sem o fallback pro payload.cwd, `git diff --cached` roda fora de
+    // qualquer repo git e o guard sai 0 (fail-open), silenciosamente.
+    const { code, stderr } = await runHook({ cwd: nonRepo, sessionId, payloadCwd: repo });
+    assert.equal(
+      code, 2,
+      `esperava exit 2 (payload.cwd aponta pro repo com path protegido staged), veio ${code}. stderr: ${stderr}`
+    );
+    assert.ok(stderr.includes('core/hooks/foo.cjs'), `esperava o path ofensor citado, stderr: ${stderr}`);
+  } finally {
+    cleanup(repo, nonRepo);
+  }
+});
+
+test('(a) controle: sem payload.cwd, process.cwd() fora de repo -> continua fail-open (comportamento existente preservado)', async () => {
+  const nonRepo = fs.mkdtempSync(path.join(os.tmpdir(), 'fw-guard-cwd-a-neg-'));
+  const sessionId = `fw-a-good-${process.pid}-${Date.now()}`;
+  try {
+    // Sem payload.cwd -> cai no último recurso, process.cwd() (nonRepo).
+    const { code, stderr } = await runHook({ cwd: nonRepo, sessionId });
+    assert.equal(code, 0, `esperava exit 0 (fail-open fora de repo git, sem payload.cwd), veio ${code}. stderr: ${stderr}`);
+    assert.notEqual(stderr.trim(), '', 'esperava warning na stderr (git diff --cached falhou)');
+  } finally {
+    cleanup(nonRepo);
   }
 });
 
