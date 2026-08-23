@@ -110,6 +110,29 @@ function isProtected(relPath) {
   return MATCHERS.some((matches) => matches(relPath));
 }
 
+// K1 (Bucket K, 2026-08-23): `git add X && git commit` in the SAME command
+// blinds this guard. PreToolUse fires BEFORE the shell command runs, so at
+// the instant this hook reads `git diff --cached`, a chained `git add`
+// hasn't executed yet — staged-right-now is empty, offenders is empty,
+// exit 0, silence. The guard cannot see the FINAL staged set of a composite
+// command, so the correct answer is to refuse the composite command, not
+// guess its outcome. `cd` is NOT a staging mutator and must keep working —
+// `cd "<repo>" && git commit ...` is this repo's standard dispatch preamble.
+const STAGING_MUTATOR_RES = [
+  /^git\s+add\b/,
+  /^git\s+rm\b/,
+  /^git\s+stage\b/,
+  /^git\s+restore\s+--staged\b/,
+  /^git\s+reset\b/,
+];
+
+function hasStagingMutator(command) {
+  return command
+    .split(/&&|\|\||;|\||\n/)
+    .map((p) => p.trim().replace(/^\(+/, '').trim())
+    .some((p) => STAGING_MUTATOR_RES.some((re) => re.test(p)));
+}
+
 // AC-13 override marker — same {os.tmpdir()}/claude-*-{sessionId}.marker
 // shape as the repo's existing bypass markers. ⚠️ os.tmpdir() on this Mac
 // is NOT `/tmp` — never hardcode the literal, here or in a caller creating
@@ -129,6 +152,19 @@ function main() {
     // Only intercept git commit invocations — everything else passes
     // through silently (contract's "Trigger" section).
     if (!/\bgit\s+commit\b/.test(command)) process.exit(0);
+
+    // K1: the guard cannot see what a chained staging mutator would leave
+    // staged, so it refuses the composite command outright — regardless of
+    // what happens to be staged right now.
+    if (hasStagingMutator(command)) {
+      process.stderr.write(
+        `\nFRAMEWORK GUARD: commit blocked — this command stages changes and commits in the same call:\n` +
+        `  ${command}\n\n` +
+        `This guard reads \`git diff --cached\` BEFORE the command runs, so staging done on the same ` +
+        `line is invisible to it. Run the staging command and \`git commit\` as two separate Bash calls.\n`
+      );
+      process.exit(2);
+    }
 
     // Staged files, real `git diff --cached` (Article III — no fs/child_process
     // mock). A failure here (not a repo, git unavailable) fails OPEN: the one

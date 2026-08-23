@@ -355,6 +355,50 @@ test('CONTRACT: controle negativo — core/docs/README.md staged (mesmo dir, nã
   }
 });
 
+// ── Bucket K (2026-08-23) — K1: `git add X && git commit` na mesma chamada
+// cega o guard. PreToolUse roda ANTES do comando: no instante em que este
+// hook lê `git diff --cached`, o `git add` encadeado ainda não rodou —
+// staged-agora é vazio, offenders vazio, exit 0, silêncio. O guard não
+// consegue ver o staging FINAL de um comando composto, então a resposta
+// correta é recusar o comando composto, não tentar adivinhar o resultado.
+// `cd` não é mutador de staging e TEM que continuar funcionando — é o
+// preamble padrão de todo dispatch pós-merge deste repo.
+
+test('K1: git add + git commit na mesma chamada -> bloqueia mesmo com staged vazio agora', async () => {
+  const repo = initTmpRepo();
+  const sessionId = `fw-k1-bad-${process.pid}-${Date.now()}`;
+  try {
+    // Nada staged ainda — é exatamente o instante em que o PreToolUse roda.
+    const { code, stderr } = await runHook({
+      repo,
+      cwd: repo,
+      sessionId,
+      command: 'git add core/hooks/whatever.cjs && git commit -m "x"',
+    });
+    assert.equal(code, 2, `esperava exit 2 (guard não pode ver o staging final), veio ${code}. stderr: ${stderr}`);
+    assert.notEqual(stderr.trim(), '', 'esperava stderr explicando por que foi bloqueado');
+  } finally {
+    cleanup(repo);
+  }
+});
+
+test('K1 controle: cd "<repo>" && git commit continua funcionando (cd não é mutador de staging)', async () => {
+  const repo = initTmpRepo();
+  const sessionId = `fw-k1-good-${process.pid}-${Date.now()}`;
+  try {
+    stageFile(repo, 'core/hooks/foo.cjs');
+    const { code, stderr } = await runHook({
+      cwd: repo,
+      sessionId,
+      command: `cd "${repo}" && git commit -m "x"`,
+    });
+    assert.equal(code, 2, `esperava exit 2 (path protegido staged, detectado via cd), veio ${code}. stderr: ${stderr}`);
+    assert.ok(stderr.includes('core/hooks/foo.cjs'), `esperava o path ofensor citado (bloqueio NORMAL, não o de K1), stderr: ${stderr}`);
+  } finally {
+    cleanup(repo);
+  }
+});
+
 // ── wiring: sem entrada no soma-hooks-map.json, o hook nunca dispara ───
 
 test('CONTRACT: está registrado em install/soma-hooks-map.json com PreToolUse/Bash', () => {
