@@ -75,6 +75,12 @@ function sharedFiles(a, b) {
 
 module.exports = {
   name: 'parallel-collision',
+  // AC-05 (spec 019): este check só consome `ctx.tasks` (linha abaixo,
+  // `ctx.tasks || []`) — nunca `ctx.artifacts` — e todo achado é reportado
+  // com `file: 'tasks.md'` (ver sharedFiles/findings acima). `retroactive:
+  // false`: roda só sobre o `<spec-dir>` recebido pelo CLI, sem flag de
+  // varredura retroativa (spec-lint.cjs tem um único posicional).
+  scope: { artifacts: ['tasks.md'], retroactive: false },
   run(ctx) {
     const tasks = ctx.tasks || [];
     const { reachableFrom } = buildReachability(tasks);
