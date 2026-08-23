@@ -1,18 +1,22 @@
 'use strict';
 /**
- * lib/spec-lint/registry.cjs — the two checks, in deterministic output order.
+ * lib/spec-lint/registry.cjs — the checks, in deterministic output order.
  *
- * Registered once, complete, in T-02. The Wave 2 tasks (T-06, T-07) are `[P]`
- * and each owns exactly one checks/*.cjs file — if they also had to register
- * themselves here, both would write to this file and collide, which is
- * literally the defect class `parallel-collision` exists to catch.
+ * Originally registered once, complete, in T-02 (spec 017: cli-surface,
+ * parallel-collision — see those two entries' own header comments for why
+ * this file avoided parallel edits during that spec's Wave 2).
  *
- * After T-02, nobody else edits this file (nor spec-lint.cjs).
+ * heading-near-miss (AC-01, spec 019) added by a later, separate dispatch —
+ * "nobody else edits this file" only held for T-02's own Wave 2, not
+ * forever; each addition here is still a single, sequential edit, never a
+ * parallel one, which is what actually matters for the
+ * `parallel-collision` defect class this comment originally warned about.
  *
- * @task T-02
+ * @task T-02 / T-AC01
  */
 
 const cliSurface = require('./checks/cli-surface.cjs');
 const parallelCollision = require('./checks/parallel-collision.cjs');
+const headingNearMiss = require('./checks/heading-near-miss.cjs');
 
-module.exports = [cliSurface, parallelCollision];
+module.exports = [cliSurface, parallelCollision, headingNearMiss];

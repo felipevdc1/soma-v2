@@ -42,6 +42,7 @@ const checks = require('../lib/spec-lint/registry.cjs');
 
 const CLI_SURFACE_DIR = path.join(__dirname, 'fixtures/spec-lint/cli-surface');
 const PARALLEL_DIR = path.join(__dirname, 'fixtures/spec-lint/parallel');
+const HEADING_NEAR_MISS_DIR = path.join(__dirname, 'fixtures/spec-lint/heading-near-miss');
 
 // One known-bad + one known-good fixture per registered check, drawn from
 // each check's own contract corpus (T-04 for cli-surface, T-05 for
@@ -62,6 +63,10 @@ const CORPUS = {
     // alone rules out every pair there regardless of whether the check's
     // depends_on-graph logic works at all.
     good: path.join(PARALLEL_DIR, '07-parallel-direct-dependency'),
+  },
+  'heading-near-miss': {
+    bad: path.join(HEADING_NEAR_MISS_DIR, '01-mixed-near-miss-forms'),
+    good: path.join(HEADING_NEAR_MISS_DIR, '02-real-content-non-vacuous'),
   },
 };
 
@@ -101,6 +106,34 @@ function assertNonTrivialContent(checkName, ctx) {
       `[${checkName}] good fixture must have at least two [P] tasks that SHARE a file — otherwise condition 2 ` +
         `alone already rules out every pair, and "zero achados" would not exercise condition 3 (the ` +
         `depends_on-graph check) at all`
+    );
+  } else if (checkName === 'heading-near-miss') {
+    const specArtifact = ctx.artifacts.find((a) => a.file === 'spec.md');
+    assert.ok(specArtifact, `[${checkName}] good fixture must have a spec.md to examine`);
+    assert.match(
+      specArtifact.text,
+      /^### AC-\d+:/m,
+      `[${checkName}] good fixture's spec.md must contain a REAL canonical AC heading — an empty or ` +
+        `near-miss-free file would trivially yield zero findings without the check having examined a heading at all`
+    );
+    const planArtifact = ctx.artifacts.find((a) => a.file === 'plan.md');
+    assert.ok(planArtifact, `[${checkName}] good fixture must have a plan.md with a fenced near-miss example`);
+    assert.match(
+      planArtifact.text,
+      /```\n#{1,6}\s*-?\s*\*{0,2}AC-[\s\S]*?```/,
+      `[${checkName}] good fixture's plan.md must contain a near-miss-shaped heading INSIDE a fenced block — ` +
+        `proving the fence exclusion is exercised, not just absent from the fixture`
+    );
+    const quickstartArtifact = ctx.artifacts.find((a) => a.file === 'quickstart.md');
+    assert.ok(
+      quickstartArtifact,
+      `[${checkName}] good fixture must have a quickstart.md full of legitimate near-miss-shaped headings`
+    );
+    assert.match(
+      quickstartArtifact.text,
+      /^#{1,6}\s*-?\s*\*{0,2}AC-/m,
+      `[${checkName}] good fixture's quickstart.md must contain near-miss-shaped headings — proving the ` +
+        `quickstart.md file-name exclusion is exercised, not just absent from the fixture`
     );
   } else {
     assert.fail(
