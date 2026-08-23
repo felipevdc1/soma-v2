@@ -43,6 +43,7 @@ const checks = require('../lib/spec-lint/registry.cjs');
 const CLI_SURFACE_DIR = path.join(__dirname, 'fixtures/spec-lint/cli-surface');
 const PARALLEL_DIR = path.join(__dirname, 'fixtures/spec-lint/parallel');
 const HEADING_NEAR_MISS_DIR = path.join(__dirname, 'fixtures/spec-lint/heading-near-miss');
+const RED_ONLY_COVERAGE_DIR = path.join(__dirname, 'fixtures/spec-lint/red-only-coverage');
 
 // One known-bad + one known-good fixture per registered check, drawn from
 // each check's own contract corpus (T-04 for cli-surface, T-05 for
@@ -67,6 +68,10 @@ const CORPUS = {
   'heading-near-miss': {
     bad: path.join(HEADING_NEAR_MISS_DIR, '01-mixed-near-miss-forms'),
     good: path.join(HEADING_NEAR_MISS_DIR, '02-real-content-non-vacuous'),
+  },
+  'red-only-coverage': {
+    bad: path.join(RED_ONLY_COVERAGE_DIR, '01-single-and-interval-red'),
+    good: path.join(RED_ONLY_COVERAGE_DIR, '02-real-content-non-vacuous'),
   },
 };
 
@@ -134,6 +139,26 @@ function assertNonTrivialContent(checkName, ctx) {
       /^#{1,6}\s*-?\s*\*{0,2}AC-/m,
       `[${checkName}] good fixture's quickstart.md must contain near-miss-shaped headings — proving the ` +
         `quickstart.md file-name exclusion is exercised, not just absent from the fixture`
+    );
+  } else if (checkName === 'red-only-coverage') {
+    assert.ok(ctx.tasks.length >= 2, `[${checkName}] good fixture must parse >=2 tasks, not an empty tasks.md`);
+    const redLabeled = ctx.tasks.filter((t) => /\bRED:\s/.test(t.description || ''));
+    assert.ok(
+      redLabeled.length >= 1,
+      `[${checkName}] good fixture must contain at least one RED:-labeled task — otherwise "zero achados" ` +
+        `would not exercise the RED-label branch at all, only the "shared AC" one`
+    );
+    const sharedAcCounts = new Map();
+    for (const t of ctx.tasks) {
+      for (const ac of t.specRefs || []) {
+        sharedAcCounts.set(ac, (sharedAcCounts.get(ac) || 0) + 1);
+      }
+    }
+    const hasSharedAc = [...sharedAcCounts.values()].some((count) => count > 1);
+    assert.ok(
+      hasSharedAc,
+      `[${checkName}] good fixture must contain an AC referenced by 2+ tasks — otherwise "zero achados" would ` +
+        `not exercise the "única" branch, only the RED-label one`
     );
   } else {
     assert.fail(
