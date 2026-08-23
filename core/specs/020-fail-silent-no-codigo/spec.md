@@ -23,7 +23,7 @@
 | **G11** fixture deriva do formato de produção | `core/scripts/__tests__/install-cli.contract.test.cjs:326` × produção | a fixture injeta `<!-- soma:start id=...`; a produção casa `<!-- soma-v2:start` (`lib/anchored-blocks.cjs:36`) e o legado bare `<!-- NAME:start -->` (`lib/migration.cjs:71`). O marcador do CC-07 **não casa nenhum dos dois** |
 | **G12** guarda assere sobre um dublê, não sobre o sujeito | 1ª versão de `install-home-isolation-guard.test.cjs` | passou **verde** enquanto o `runInstall()` real escrevia 32 arquivos no `$HOME` ambiente |
 | **G13** mesmo nome de campo, duas réguas | `doctor.cjs:846` × `bootstrap.cjs:330` | mesmo `somaHome`: `doctor` reporta `install_targets_count` **8**, `bootstrap` **39**. Reproduzido executando os dois |
-| **G14** ambiente de medição carrega o objeto medido | `phase3-regression:192` · `phase4a-regression:81` · `hooks-regression:108` | `spawnSync(wrapper, {timeout})` mata o **wrapper**, não o neto → `node --test` órfão com `PPID=1` rodando 180 arquivos contra o `~/.soma-v2` vivo |
+| **G14** ambiente de medição carrega o objeto medido | `phase3-regression:192` · `phase4a-regression:81` · `hooks-regression:108` | `spawnSync(wrapper, {timeout})` mata o **wrapper**, não o neto → `node --test` órfão com `PPID=1` rodando **119** arquivos contra o `~/.soma-v2` vivo (180 é a contagem crua do diretório; o código filtra antes) |
 | **G15** remediação recortada pelo sintoma | — | Bucket G escopado por *"quais testes falham"*; o que escrevia no `$HOME` **passava** |
 | **G16** leitor sem strip perde dado em silêncio | `core/scripts/install.cjs:655` `readBlockIdsFromTargetsFile` | é o único dos 4 leitores de `install-targets.json` que não faz strip de comentário antes do `JSON.parse`, e o `try/catch` devolve `[]` para qualquer erro. Documentado em `core/specs/018-install-whole-files/plan.md:280` como *"Achado colateral"*, nunca promovido |
 | **G17** dependência opcional sem contrato de abort exercitado | `CONTRACT-01` (`core/specs/015-soma-install/contracts/install-cli.md:3`) | nenhum teste cobre *"Codex NÃO instalado → aborta com a mensagem do CONTRACT-01"*. `install.cjs:1156-1163` exige `~/.codex/`; CC-02b/CC-02c passavam porque `~/.codex` existe na máquina. Pendência nomeada no merge `91c1b27`, nunca fechada |
@@ -83,8 +83,18 @@ legado **de propósito**, para provar detecção/upgrade/drift:
 `lib-anchored-blocks.test.cjs` · `migrate-cbm-deprecation.test.cjs` ·
 `core/scripts/lib/__tests__/migration.test.cjs` · `core/tests/integration/bf-04-cbm-e2e.test.cjs`
 
-Os oito casam `migration.cjs::startRe` e são **casos conhecido-bons obrigatórios**. O `CC-07` não casa
-nenhum dos dois regexes e é o **caso conhecido-ruim**.
+⚠️ **Correção de contagem, medida em 2026-08-22**: rodando o `startRe` real (`migration.cjs:71`) contra
+os 203 `*.test.cjs` versionados, casam **12** arquivos, não 8. Os oito acima estão todos entre os 12
+(nenhuma inclusão errada), mas faltam quatro: `bf-03-consolidation-reproducer.test.cjs` ·
+`bf-04-cbm-deprecation-reproducer.test.cjs` · `sync.dry-run-edits.test.cjs` ·
+`core/tests/phase5/synthetic-validation.test.cjs`. **A lista de oito veio de relatório e não foi
+re-medida pelo autor.**
+
+🔴 E há uma contradição interna: `synthetic-validation.test.cjs` está na lista de exclusão abaixo
+(*"parecem casos e não são"*) **e** casa o `startRe`. Antes de implementar, resolver os 12 um a um —
+separando fixture real em código de menção em comentário.
+
+O `CC-07` não casa nenhum dos dois regexes e é o **caso conhecido-ruim**.
 
 ⚠️ **Três arquivos que parecem casos e não são**: `content-preservation.test.cjs`,
 `idempotency.test.cjs` e `synthetic-validation.test.cjs` usam marcador bare em **source doc**, que é o
@@ -92,17 +102,21 @@ formato **atual** de produção para source docs — confirmado contra `core/doc
 comentário deles chama isso de *"legacy anchor format"*, e o rótulo está errado no próprio código de
 teste. Não entram na lista de exceção porque não são casos do AC.
 
-### AC-02: WHEN um guarda de regressão asserir, the sistema SHALL exigir que ele fique vermelho contra o estado defeituoso anterior
+### ~~AC-02~~ — **MORTO. Consertado em `3cfa6e8`, 2026-08-22 10:44:39.** Registro abaixo, sem ação.
 
 Given a primeira versão de `install-home-isolation-guard.test.cjs`, que provava apenas que o **próprio**
 `spawnSync` interno dela era seguro / When o `runInstall()` real de `install-cli.contract.test.cjs`
 escrevia **32 arquivos** (19 hooks + 12 comandos + `CLAUDE.md`) num `$HOME` limpo / Then o guarda acusa.
 **Hoje passava verde.**
 
-**O critério é decidível e é este**: o guarda tem de ficar **vermelho** contra o estado defeituoso
-*anterior* e verde contra o corrigido. Se nasce verde nos dois estados, é cego. A cura aplicada foi
-extrair a função real para `helpers/cli-run-install.cjs` e o guarda importá-la — um guarda que testa uma
-versão idealizada de si mesmo não é guarda da coisa que ele protege.
+🔴 **Este AC nasceu morto, e o erro é do autor.** Medido em 2026-08-22: o guarda **já** importa o
+`runInstall` real — `install-home-isolation-guard.test.cjs:66`. O commit é `3cfa6e8`, de **10:44 do mesmo
+dia**, e o handoff que o autor leu de manhã o lista textualmente como *"fecha o ponto cego do guarda — ele
+vigia o `runInstall()` REAL"*. Foi lido como item aberto e transcrito como AC.
+
+E o critério que o AC chamava de decidível — *"vermelho contra o estado defeituoso anterior"* — é
+**inexequível**: o estado defeituoso era uma versão anterior do próprio arquivo de teste, deletada pelo
+commit que consertou. Um teste não fica vermelho contra uma versão de si mesmo que não existe mais.
 
 ⚠️ **Armadilha medida na própria validação deste AC**: a primeira tentativa de falsificar o guarda trocou
 `env: fakeHomeEnv(fakeHome)` por `env: process.env` — **no-op**, porque `withFakeHome` já muta
@@ -133,7 +147,10 @@ que fazem `spawnSync(NODE_BIN, [wrapperPath], { timeout })`, e o wrapper por den
 `spawnSync(NODE_BIN, ['--test', ...])` / When o timeout dispara / Then o neto morre também.
 
 **Hoje o timeout mata o wrapper e nunca o neto**: o `node --test` sobrevive, é reparentado para `PID 1` e
-segue rodando **180 arquivos** contra o `~/.soma-v2` vivo. Efeito medido: a suíte passou de ~5,5 min para
+segue rodando **119 arquivos** contra o `~/.soma-v2` vivo — ⚠️ **correção**: uma versão anterior deste
+AC dizia *180*, que é a contagem **crua** de `~/.soma-v2/scripts/__tests__/*.test.cjs`; o código filtra
+antes de passar ao `node --test` (`phase4a-regression.test.cjs:202-208`). O 180 foi herdado de relatório,
+não medido. Efeito medido: a suíte passou de ~5,5 min para
 12 min, e **o mesmo SHA rendeu contagens diferentes**. É a causa do flake de ±1 que este repositório
 vinha registrando **sem causa nomeada**.
 
@@ -171,9 +188,16 @@ um defeito conhecido, escrito, e invisível a toda a maquinaria.
 Given o `CONTRACT-01` (`core/specs/015-soma-install/contracts/install-cli.md:3`), que declara o abort de
 `soma install --tool codex` quando o Codex não está instalado, e `install.cjs:1156-1163`, que exige
 `~/.codex/` / When a suíte roda / Then existe teste que remove a dependência e assere a mensagem do
-contrato. **Hoje não existe**: `CC-02b` e `CC-02c` passavam porque `~/.codex` existe na máquina do
-desenvolvedor. O seed introduzido no commit `fc85bfb` resolve o teste certo e **torna a lacuna
-invisível** — por isso ela está escrita no próprio commit e aqui.
+contrato. 🔴 **A premissa original era falsa, e a correção torna o AC melhor.** O autor escreveu *"hoje não
+existe"*. Medido em 2026-08-22: **existe** — `install.test.cjs:206-226`, `T-07-S3`, invoca
+`runInstall([os.tmpdir(), '--tool=codex'])` e assere `exit 2` mais a mensagem do CONTRACT-01. Ele é
+`t.skip()`-guarded quando `~/.codex` existe, e `~/.codex` existe na máquina que roda a suíte.
+
+O defeito não é ausência de cobertura — é **teste pulado que lê como suíte verde**. Mesma classe do órfão
+do AC-04 e do `G-LINT` da spec 019.
+
+⚠️ Complicação medida: `withFakeHome` semeia `.codex/` **incondicionalmente**, sem opt-out — provar este
+AC exige contornar o próprio mecanismo de isolamento que o NFR exige.
 
 ---
 
@@ -195,8 +219,22 @@ invisível** — por isso ela está escrita no próprio commit e aqui.
 
 - [NEEDS CLARIFICATION] O AC-05 exige decidir como a corrida de validação se isola do SOMA instalado —
   isolamento explícito de `~/.soma-v2` e `$HOME`, ou declaração de contaminação no relatório?
-- [NEEDS CLARIFICATION] O AC-06 muda comportamento de um leitor em produção: falhar alto pode quebrar
-  chamadores que hoje dependem do `[]`. Levantar os chamadores antes do Gate 1.
+  ⚠️ **Medido em 2026-08-22 e maior do que o AC sugere**: são **104** arquivos de
+  `core/scripts/__tests__/` que resolvem para o `~/.soma-v2` instalado (mais 6 fora do glob do
+  `npm test`), não os 3 citados. E `rollback.cjs:30-31` é **hardcoded**, sem nem env var de override.
+  Nuance: os scripts instalados estão hoje **byte-idênticos** ao checkout — a contaminação é de
+  **resolução**, não de conteúdo velho.
+- [NEEDS CLARIFICATION] O AC-06 **se contradiz**: o título manda *"falhar alto"*, o corpo nomeia o
+  defeito como *"não faz strip de comentário"* (que pede adicionar o strip). O Given/When aponta para um
+  conserto e o Then para o outro. Escolher um lado.
+  ✅ **Chamadores levantados em 2026-08-22, como o Gate 1 exigia**: são **2**, ambos em `install.cjs`
+  (`:1063` e `:1066`), nenhum em teste, e a função **não está em `module.exports`** — a enumeração é
+  definitiva. O `[]` alimenta uma cadeia de 3 fallbacks (adapter → regex no stdout → placeholder
+  `'(injected)'`). Risco de quebrar teste hoje: **0, medido** — o caminho de erro está dormente.
+  🔴 **Mas lançar é perigoso, e isso é novo**: os dois call sites ficam dentro do *"Step 4: Write success
+  state"*, **depois** de o `sync --apply` já ter escrito os arquivos reais e **antes** do
+  `writeInstallState(status:'complete')`. Não há `catch` em nenhum ponto da pilha até o entry point.
+  Lançar ali deixa o projeto em estado **pior** que hoje.
 
 ## Completeness Checklist
 
