@@ -46,7 +46,7 @@ Use HYD v2 as the default anti-shallowness loop before planning or implementatio
 - Do not stop on a polished answer if the underlying reasoning is still weak.
 <!-- soma-v2:end id=block.codex.AGENTS.hyd-v2 -->
 
-<!-- soma-v2:start id=block.codex.AGENTS.soma-stsd version=2.1.0-draft sha256=df48392768459b2877c35ebea894df209e33b16972539d4d8d2bf72dfd357512 -->
+<!-- soma-v2:start id=block.codex.AGENTS.soma-stsd version=2.1.0-draft sha256=c121c869dae01f250895e8936ff6adcd517179eec91cc250267d8b2c22ef855f -->
 # SOMA / STSD Operating Lens
 
 Use SOMA v2 as the default execution philosophy for non-trivial work. Treat it as an always-on lens, not mandatory ceremony for tiny commands. Scale the artifacts to the risk and size of the task, but keep the core discipline: spec first, tests tied to acceptance criteria, execution in safe waves, validation before claims, audit before done.
@@ -63,6 +63,7 @@ Canonical references, when deeper context is needed:
 
 - **Envelope de orquestração:** cada task tem um executor, no máximo 2 tentativas (inicial + uma correção), um revisor integrado por padrão e no máximo 2 revisores. O prompt exato de um dispatch tem até 8.000 bytes e o retorno conversacional até 4.000 bytes. Execute `soma run dispatch-record begin` antes do spawn com o prompt exato; execute `soma run dispatch-record end` antes da transição com output e metadata. O retorno curto contém status, SHA/artefato, provas e blockers; detalhes ficam em arquivos referenciados. Sem ledger paralelo: use o dispatch-record existente.
 - **Stop eficiente:** após uma correção, blocker residual transita para `PAUSED_DIAGNOSTIC` com handoff durável (candidato, provas, finding residual e próxima decisão), sem escalation e sem novo agente automático.
+- **Precedência de Recovery:** o Recovery eficiente posterior prevalece sobre qualquer seção Recovery unmanaged anterior no mesmo arquivo.
 - Rode checks determinísticos antes da auditoria integrada. Um segundo revisor só é permitido para risco independente declarado no plano; ambos leem o mesmo commit imutável.
 
 - Treat the user's intent/spec as source of truth. Do not silently invent requirements.

@@ -46,7 +46,7 @@
     {
       "id": "core.soma-stsd",
       "path": "docs/soma-stsd.md",
-      "sha256": "df48392768459b2877c35ebea894df209e33b16972539d4d8d2bf72dfd357512",
+      "sha256": "7258f319054cf306d6543434730a40879049354ac2c82efd7b3315afe60215b2",
       "sourceMtime": "2026-04-24T20:29:13Z",
       "sourceSha256": "3e6a1a8f6c4f0c8dadef714990e292c13b28ae7db16a23701759e8d4e01b384c",
       "targets": [
@@ -178,7 +178,7 @@
     {
       "id": "adapter.codex.AGENTS",
       "path": "adapters/codex/AGENTS.md",
-      "sha256": "5e5268d171935dcf6752417be62001954ccdbeab2de8e35ee7ffb3df017eb923",
+      "sha256": "6ab261ba6c55f3278d5e746948a11a76f10c1bac3e8a5b265198cfdafd3b1389",
       "sourceMtime": "2026-04-24T20:29:13Z",
       "sourceSha256": "3e6a1a8f6c4f0c8dadef714990e292c13b28ae7db16a23701759e8d4e01b384c",
       "targets": [

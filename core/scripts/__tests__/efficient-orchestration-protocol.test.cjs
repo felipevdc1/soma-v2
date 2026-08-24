@@ -84,6 +84,7 @@ test('manifest e anchor Codex acompanham as fontes instaláveis atualizadas', ()
     const actual = crypto.createHash('sha256').update(fs.readFileSync(path.join(ROOT, entry.path))).digest('hex');
     assert.equal(entry.sha256, actual, `${id} sha256 deve acompanhar o arquivo`);
   }
-  const stsdHash = crypto.createHash('sha256').update(fs.readFileSync(STSD)).digest('hex');
-  assert.match(read(CODEX), new RegExp(`id=block\\.codex\\.AGENTS\\.soma-stsd version=[^ ]+ sha256=${stsdHash}`));
+  const { extractBlock, computeBlockSha256 } = require('../lib/anchored-blocks.cjs');
+  const block = extractBlock(CODEX, 'block.codex.AGENTS.soma-stsd');
+  assert.equal(block.attrs.sha256, computeBlockSha256(block.content));
 });

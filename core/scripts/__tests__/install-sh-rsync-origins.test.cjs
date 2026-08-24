@@ -12,15 +12,8 @@
  * origin anywhere in install.sh must exist in the repo, found by scanning
  * the whole file, never by naming a line number.
  *
- * Case 2 ties AC-12 to a SECOND install mechanism. install-targets.json's
- * top-level "excluded" field (added by T-08) is the single source of
- * truth for "this file must never be installed" — but install.sh's
- * commands rsync is a completely separate code path that never reads
- * that JSON. Without this test, someone "fixing" :169 by pointing it at
- * core/adapters/claude/commands/ with no --exclude= would silently
- * overwrite the user's real ~/.claude/commands/soma-run.md — exactly the
- * file AC-12 exists to protect, destroyed by the mechanism AC-12's own
- * test (install-targets-set.test.cjs, T-08) never looks at.
+ * Case 2 locks the rollout parity: both install mechanisms install
+ * soma-run.md now that it is a declared whole-file adapter target.
  *
  * Pure static analysis — reads install.sh and install-targets.json as
  * text/JSON, never executes install.sh. Actually running it (even
@@ -83,23 +76,15 @@ test('install.sh: toda origem rsync "${REPO_ROOT}/X/" existe no repo como diret�
   }
 });
 
-test('AC-12 vale para os dois mecanismos: install.sh não instala o que install-targets.json exclui', () => {
+test('rollout vale para os dois mecanismos: install.sh instala soma-run.md declarado no install-targets', () => {
   const targets = JSON.parse(fs.readFileSync(CLAUDE_TARGETS, 'utf8'));
-  const excludedBasenames = (targets.excluded || []).map((e) => path.basename(e.source_path));
-  assert.ok(
-    excludedBasenames.length > 0,
-    'precondição: precisa haver ao menos 1 exclusão declarada em install-targets.json pra este teste fazer sentido'
-  );
+  const somaRun = targets.entries.find((entry) => entry.source_path === 'adapters/claude/commands/soma-run.md');
+  assert.deepEqual(somaRun, { kind: 'file', source_path: 'adapters/claude/commands/soma-run.md', target_path: '~/.claude/commands/soma-run.md' });
 
   const text = fs.readFileSync(INSTALL_SH, 'utf8');
   const lines = readRsyncLines(text);
   const commandsLine = lines.find((l) => l.target.endsWith('commands'));
   assert.ok(commandsLine, 'não achei, em install.sh, a linha de rsync cujo destino termina em "commands" (a sincronização de .claude/commands)');
 
-  for (const basename of excludedBasenames) {
-    assert.ok(
-      commandsLine.excludes.includes(basename),
-      `install-targets.json exclui "${basename}" (AC-12) mas a linha de rsync de comandos em install.sh não tem "--exclude=${basename}": ${commandsLine.raw}`
-    );
-  }
+  assert.equal(commandsLine.excludes.includes('soma-run.md'), false, commandsLine.raw);
 });

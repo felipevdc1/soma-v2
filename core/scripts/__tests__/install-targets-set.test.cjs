@@ -4,11 +4,8 @@
  *
  * Declares (and locks) the real file-entry set in
  * core/adapters/claude/install-targets.json: the 19 hooks under core/hooks/
- * plus the 12 commands the T-04 migration consolidated into
- * core/adapters/claude/commands/ — everything EXCEPT soma-run.md, which is
- * deliberately excluded per AC-12 (Felipe's 2026-08-17 decision: he wants to
- * hand-run a lab with the 296-line version before it becomes default; the
- * one he runs today has 474 lines, 0 `Gate:`, 0 `Report:`, state in /tmp).
+ * plus all 13 commands the T-04 migration consolidated into
+ * core/adapters/claude/commands/, including soma-run.md.
  *
  * The expected hook/command names are DERIVED from the real directories at
  * test time, not hardcoded — that is what makes this a regression guard
@@ -44,8 +41,6 @@ const TARGETS_PATH = path.join(ADAPTER_DIR, 'install-targets.json');
 const HOOKS_DIR = path.join(CORE_DIR, 'hooks');
 const COMMANDS_DIR = path.join(ADAPTER_DIR, 'commands');
 
-const EXCLUDED_COMMAND = 'soma-run.md';
-
 function loadTargetsRaw() {
   // Deliberately the SAME comment-stripping the three real readers use
   // (manifest.cjs's loadInstallTargets, install/targets.cjs's
@@ -69,7 +64,7 @@ function realCommandNames() {
   return fs.readdirSync(COMMANDS_DIR).filter((n) => n.endsWith('.md')).sort();
 }
 
-test('conjunto real: 19 hooks + 12 comandos (13 menos soma-run.md) = 31 entries kind:"file"', () => {
+test('conjunto real: 19 hooks + 13 comandos = 32 entries kind:"file"', () => {
   const hooks = realHookNames();
   const commandsAll = realCommandNames();
 
@@ -78,10 +73,7 @@ test('conjunto real: 19 hooks + 12 comandos (13 menos soma-run.md) = 31 entries 
   // else. Fail loud here rather than downstream.
   assert.equal(hooks.length, 19, `esperava 19 hooks reais em core/hooks/, achou ${hooks.length}: ${hooks.join(', ')}`);
   assert.equal(commandsAll.length, 13, `esperava 13 comandos reais, achou ${commandsAll.length}: ${commandsAll.join(', ')}`);
-  assert.ok(commandsAll.includes(EXCLUDED_COMMAND), 'fixture assumption: soma-run.md deveria existir no repo (senão a exclusão não testa nada)');
-
-  const commands = commandsAll.filter((n) => n !== EXCLUDED_COMMAND);
-  assert.equal(commands.length, 12);
+  assert.ok(commandsAll.includes('soma-run.md'), 'fixture assumption: soma-run.md deveria existir no repo');
 
   const data = loadTargetsRaw();
   const fileEntries = data.entries.filter(isFileEntry);
@@ -90,8 +82,8 @@ test('conjunto real: 19 hooks + 12 comandos (13 menos soma-run.md) = 31 entries 
   assert.equal(blockEntries.length, 3, 'as 3 entries de bloco existentes não podem mudar de quantidade (AC-02)');
   assert.equal(
     fileEntries.length,
-    hooks.length + commands.length,
-    `esperava ${hooks.length + commands.length} entries kind:"file" (${hooks.length} hooks + ${commands.length} comandos), achou ${fileEntries.length}`
+    hooks.length + commandsAll.length,
+    `esperava ${hooks.length + commandsAll.length} entries kind:"file" (${hooks.length} hooks + ${commandsAll.length} comandos), achou ${fileEntries.length}`
   );
 
   const hookSourcePaths = new Set(
@@ -104,7 +96,7 @@ test('conjunto real: 19 hooks + 12 comandos (13 menos soma-run.md) = 31 entries 
   for (const h of hooks) {
     assert.ok(hookSourcePaths.has(`hooks/${h}`), `faltou entry kind:"file" para hooks/${h}`);
   }
-  for (const c of commands) {
+  for (const c of commandsAll) {
     assert.ok(cmdSourcePaths.has(`adapters/claude/commands/${c}`), `faltou entry kind:"file" para adapters/claude/commands/${c}`);
   }
 
@@ -127,29 +119,18 @@ test('conjunto real: 19 hooks + 12 comandos (13 menos soma-run.md) = 31 entries 
   }
 });
 
-test('AC-12: soma-run.md NÃO tem entry, mas um comando irmão (sonar-audit.md) TEM — ausência prova exclusão, não esquecimento', () => {
+test('soma-run.md tem entry whole-file Claude, como seus comandos irmãos', () => {
   const data = loadTargetsRaw();
   const fileEntries = data.entries.filter(isFileEntry);
   const sourcePaths = fileEntries.map((e) => e.source_path);
 
-  assert.ok(
-    !sourcePaths.includes(`adapters/claude/commands/${EXCLUDED_COMMAND}`),
-    `${EXCLUDED_COMMAND} não deveria ter entry kind:"file" (AC-12)`
-  );
+  assert.ok(sourcePaths.includes('adapters/claude/commands/soma-run.md'));
   assert.ok(
     sourcePaths.includes('adapters/claude/commands/sonar-audit.md'),
     'controle: sonar-audit.md (comando irmão) tem que estar presente — senão "ausente" não distingue exclusão intencional de esquecimento'
   );
 
-  // A razão da exclusão fica registrada NO ADAPTER (AC-12: "a razão está
-  // registrada no adapter") — como campo JSON top-level `excluded`, não
-  // como comentário `//`/`/* */` (ver nota em loadTargetsRaw sobre o
-  // reader que não faz strip de comentário).
-  assert.ok(Array.isArray(data.excluded), 'install-targets.json precisa de um campo top-level "excluded" documentando exclusões deliberadas');
-  const entry = data.excluded.find((e) => e && e.source_path === `adapters/claude/commands/${EXCLUDED_COMMAND}`);
-  assert.ok(entry, `data.excluded precisa ter uma entry para adapters/claude/commands/${EXCLUDED_COMMAND}`);
-  assert.ok(typeof entry.reason === 'string' && entry.reason.length > 20, 'a razão registrada precisa ser um texto não-trivial');
-  assert.match(entry.reason, /2026-08-17/, 'a razão deveria citar a data da decisão do Felipe');
+  assert.equal((data.excluded || []).some((e) => e && e.source_path === 'adapters/claude/commands/soma-run.md'), false);
 });
 
 test('todas as entries kind:"file" validam contra o repo real (source_path existe, sem campo proibido, sem "..")', () => {

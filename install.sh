@@ -187,12 +187,7 @@ fi
 echo "[SOMA] Phase 3-5: Copy hooks / commands / templates / output-styles..."
 run "mkdir -p \"${HOME}/.claude/hooks/lib\" \"${HOME}/.claude/commands\" \"${HOME}/.claude/templates\" \"${HOME}/.claude/output-styles\""
 run "rsync -a \"${REPO_ROOT}/core/hooks/\" \"${HOME}/.claude/hooks/\""
-# --exclude=soma-run.md mirrors AC-12 (Spec 018): core/adapters/claude/
-# install-targets.json's top-level "excluded" field is the single source
-# of truth for this — install-sh-rsync-origins.test.cjs cross-checks the
-# two and goes red if they ever diverge. Do not add a second name here
-# without updating that JSON (or vice versa).
-run "rsync -a --exclude=soma-run.md \"${REPO_ROOT}/core/adapters/claude/commands/\" \"${HOME}/.claude/commands/\""
+run "rsync -a \"${REPO_ROOT}/core/adapters/claude/commands/\" \"${HOME}/.claude/commands/\""
 run "rsync -a \"${REPO_ROOT}/templates/\" \"${HOME}/.claude/templates/\""
 run "rsync -a \"${REPO_ROOT}/output-styles/\" \"${HOME}/.claude/output-styles/\""
 

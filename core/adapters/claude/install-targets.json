@@ -1,12 +1,6 @@
 {
   "schema": "soma-install-targets/v1",
   "tool": "claude",
-  "excluded": [
-    {
-      "source_path": "adapters/claude/commands/soma-run.md",
-      "reason": "AC-12 (spec 018-install-whole-files): decisão do Felipe em 2026-08-17 — ele quer rodar um laboratório à mão com a versão de 296 linhas de soma-run.md antes dela virar default. A versão que ele roda hoje tem 474 linhas, 0 `Gate:`, 0 `Report:`, e state ainda em /tmp; trocar isso sem ele ver é mudança de fluxo de trabalho, não refresh de arquivo. Ver spec.md NO-GOS e contracts/install-file-entry.md secao \"Exclusao declarada (AC-12)\"."
-    }
-  ],
   "entries": [
     {
       "block_id": "block.claude.CLAUDE_md.hyd-v2",
@@ -175,6 +169,11 @@
       "kind": "file",
       "source_path": "adapters/claude/commands/sonar-audit.md",
       "target_path": "~/.claude/commands/sonar-audit.md"
+    },
+    {
+      "kind": "file",
+      "source_path": "adapters/claude/commands/soma-run.md",
+      "target_path": "~/.claude/commands/soma-run.md"
     },
     {
       "kind": "file",
