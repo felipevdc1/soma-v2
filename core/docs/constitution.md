@@ -1,7 +1,7 @@
-# SOMA Constitution v1.2.1
+# SOMA Constitution v1.3.0
 
-**Versão:** 1.2.1
-**Data:** 2026-04-19 (amendments: 1.1.0 era-Fable 2026-07-02; 1.2.0 time implícito 2026-07-03; 1.2.1 higiene Fase 0 v3 2026-08-14 — ver `constitution-amendments/`)
+**Versão:** 1.3.0
+**Data:** 2026-08-24 (amendments: 1.1.0 era-Fable; 1.2.0 time implícito; 1.2.1 higiene Fase 0; 1.3.0 orçamento de orquestração — ver `constitution-amendments/`)
 **Status:** Ratified 2026-05-05
 **Escopo:** Governa toda run do SOMA Executor Autônomo. Aplica-se ao orchestrator (main model — Fable 5+; antes Opus), aos executores (Sonnet/Haiku) e aos auditores SONAR. Todo dispatch DEVE pinar `model:` explicitamente; omissão herda o modelo da main session (Fable, 2× Opus em custo) — violação.
 
@@ -72,9 +72,8 @@ Referência: Spec Kit Article III; CLAUDE.md Failure Mode #4; `superpowers:test-
 - Constitution explicit statement lida por todo subagent via `subagent-init.cjs` extend (Fase 3.2).
 
 ### (d) Violation handling
-- Step 5 detecta teste sem RED evidence → **REJECT** merge + retry com agente sendo instruído a refazer no worktree seguindo TDD estrito.
-- 2 retries falham → ESCALATE modelo (Sonnet → Opus) por Recovery Protocol. Escalation cap é Opus; Fable requer human gate (amendment 1.1.0).
-- 3 falhas → STOP AND REPLAN (Article X).
+- Step 5 detecta teste sem RED evidence → **REJECT** merge + uma única correção pelo mesmo agente no worktree seguindo TDD estrito.
+- Blocker residual após a correção → `PAUSED_DIAGNOSTIC`, sem escalation automática ou novo agente automático (Article X).
 
 ---
 
@@ -248,13 +247,13 @@ Referência: `onde-t-salvo-os-idempotent-robin.md` §Human Gates.
 
 ---
 
-## Article X — Stop and Replan
+## Article X — Stop eficiente e handoff durável
 
 ### (a) Statement
-Quando primitivas detectam **3 falhas consecutivas** no mesmo step (mesmo task, mesmo agente ou after ESCALATE), controller transita pra `PAUSED_DIAGNOSTIC` com snapshot estruturado e PARA. Retry automático não é permitido além de 2 tentativas por step (1 retry + 1 escalate Sonnet→Opus; escalation cap é Opus — escalate pra Fable NUNCA é automático, requer human gate). 3ª falha = decisão humana.
+Cada task tem no máximo **duas tentativas**: inicial e uma correção. Qualquer blocker residual após a correção transita para `PAUSED_DIAGNOSTIC`, sem escalation automática nem novo agente automático. O controller reutiliza `/tmp/soma-diagnostic-{runId}.json` como handoff durável com `candidate`, `proofs`, `residualFinding`, `nextDecision` e referência ao `dispatch-record` da tentativa.
 
 ### (b) Rationale
-Regra R5 do 10-step workflow. Adaptado com 2-layer Recovery Protocol do CLAUDE.md: 1ª falha retry com feedback, 2ª falha escalate modelo, 3ª falha stop. Previne loop infinito de retry — "3 fixes failing = approach is wrong, not the attempt" (Brunão). Também implementa Failure Mode #5 ("Action bias") como guard estrutural: `soma-run` bloqueia action quando thinking is needed.
+Amendment 1.3.0 (Feature 025) reduz trabalho repetido sem reduzir a prova: uma correção testada é suficiente para distinguir um defeito local de um problema que exige decisão humana. O handoff preserva o candidato e as provas para retomada, sem criar ledger paralelo.
 
 Referência: CLAUDE.md Recovery Protocol; `feedback_agent_teams_workflow.md` R5; Failure Mode #5.
 
@@ -263,8 +262,8 @@ Referência: CLAUDE.md Recovery Protocol; `feedback_agent_teams_workflow.md` R5;
   ```json
   {"step": "4_WAVES", "attempts": [{"agent": "sonnet-1", "status": "FAILED", "reason": "..."}, ...]}
   ```
-- `attempts.length >= 3 && all failed` → transita `PAUSED_DIAGNOSTIC`.
-- Snapshot emitido: estado atual, último step ok, artefatos produzidos, razão de falha, sugestão de replan (se Opus analisou).
+- `attempts.length >= 2 && última tentativa failed` → transita `PAUSED_DIAGNOSTIC`.
+- O snapshot reutilizado em `/tmp/soma-diagnostic-{runId}.json` contém `candidate`, `proofs`, `residualFinding`, `nextDecision` e `dispatchRecord`.
 
 ### (d) Violation handling
 - `PAUSED_DIAGNOSTIC` → the user decides via marker: `/tmp/soma-diagnostic-{runId}-{continue|rollback|replan}`.
@@ -316,7 +315,7 @@ Alinhado com Self-Maintenance Protocol do CLAUDE.md: quando uma correção do us
 | #2 Rationalization past safety | Preâmbulo + Enforcement HARD em V/IX/X | exit 2 estrutural não negociável |
 | #3 Assumed understanding | I (Spec as Source of Truth) | `[NEEDS CLARIFICATION]` obrigatório |
 | #4 Productivity theater | II + III + VII | proof de RED + integration real + simplicity |
-| #5 Action bias | X (Stop and Replan) | 3 falhas → stop; sem retry infinito |
+| #5 Action bias | X (Stop eficiente) | uma correção → handoff; sem retry infinito |
 | #6 Ignoring own memory | VIII (FAMILY_DOC) | injeção automática via subagent-init |
 | #7 Dispatching with stale git | IV Corolário (Dispatch preamble) | `git pull --ff-only` + SHA check obrigatórios |
 
@@ -324,7 +323,7 @@ Alinhado com Self-Maintenance Protocol do CLAUDE.md: quando uma correção do us
 
 ## Fim do documento
 
-Ao ler esta Constitution como subagent, confirme no seu output inicial: "Constitution v1.2.1 lida; executando sob Articles I-X e XII."
+Ao ler esta Constitution como subagent, confirme no seu output inicial: "Constitution v1.3.0 lida; executando sob Articles I-X e XII."
 
 > **Manutenção desta linha (instituído em F0.2, 2026-08-14):** esta linha estava stale desde a v1.1.0 —
 > dizia "v1.0.0 / Articles I-X" enquanto o header do topo já marcava v1.2.0 e o Article XII estava

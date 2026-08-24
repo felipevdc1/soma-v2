@@ -6,7 +6,7 @@
     {
       "id": "core.constitution",
       "path": "docs/constitution.md",
-      "sha256": "4ba48405dac980928d9154f7212bc191edfa1cd311df9972ba075862fbace6ae",
+      "sha256": "c17dde1bfe267e330c117d5e6af1ce37a74210afcc1bcdfbea149465e91794db",
       "sourceMtime": "2026-05-05T00:00:00Z",
       "sourceSha256": "4ba48405dac980928d9154f7212bc191edfa1cd311df9972ba075862fbace6ae",
       "targets": [
@@ -46,7 +46,7 @@
     {
       "id": "core.soma-stsd",
       "path": "docs/soma-stsd.md",
-      "sha256": "1dd1ed2e6720f0c536a685e3ee1dc13a6364df22be205ae9b93f816f1bbb7d8f",
+      "sha256": "df48392768459b2877c35ebea894df209e33b16972539d4d8d2bf72dfd357512",
       "sourceMtime": "2026-04-24T20:29:13Z",
       "sourceSha256": "3e6a1a8f6c4f0c8dadef714990e292c13b28ae7db16a23701759e8d4e01b384c",
       "targets": [
@@ -60,7 +60,7 @@
     {
       "id": "core.10-step-protocol",
       "path": "docs/10-step-protocol.md",
-      "sha256": "956656f47465969431f37b3e982fb4e2f1069a3696e0d90645ac3141dfe80d0a",
+      "sha256": "eb5ed014b824498dcfa642885d3631bebeace576c5c850b4e4a995072253a0f6",
       "sourceMtime": null,
       "sourceSha256": null,
       "targets": [
@@ -178,7 +178,7 @@
     {
       "id": "adapter.codex.AGENTS",
       "path": "adapters/codex/AGENTS.md",
-      "sha256": "2b50b69683cac442f3724200d86dee137efae3d531c4583e225c1158e8578cbb",
+      "sha256": "5e5268d171935dcf6752417be62001954ccdbeab2de8e35ee7ffb3df017eb923",
       "sourceMtime": "2026-04-24T20:29:13Z",
       "sourceSha256": "3e6a1a8f6c4f0c8dadef714990e292c13b28ae7db16a23701759e8d4e01b384c",
       "targets": [

@@ -46,7 +46,7 @@ Use HYD v2 as the default anti-shallowness loop before planning or implementatio
 - Do not stop on a polished answer if the underlying reasoning is still weak.
 <!-- soma-v2:end id=block.codex.AGENTS.hyd-v2 -->
 
-<!-- soma-v2:start id=block.codex.AGENTS.soma-stsd version=2.1.0-draft sha256=32870d8875d7cc2a98bbce5edb35b88a56ddcfc0964b91c00ed065f917f5d0ee -->
+<!-- soma-v2:start id=block.codex.AGENTS.soma-stsd version=2.1.0-draft sha256=df48392768459b2877c35ebea894df209e33b16972539d4d8d2bf72dfd357512 -->
 # SOMA / STSD Operating Lens
 
 Use SOMA v2 as the default execution philosophy for non-trivial work. Treat it as an always-on lens, not mandatory ceremony for tiny commands. Scale the artifacts to the risk and size of the task, but keep the core discipline: spec first, tests tied to acceptance criteria, execution in safe waves, validation before claims, audit before done.

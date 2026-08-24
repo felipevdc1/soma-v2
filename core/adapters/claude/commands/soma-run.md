@@ -40,7 +40,7 @@ Novo run: `soma run state --init --run <runId>` cria `soma-state/v2` em `{projec
 8. **Mapeamento de `--status`**: `pass` quando as postconditions do step fecharam (inclusive quando não havia nada a fazer); `blocked` quando o step não pode prosseguir sem decisão externa (`AWAITING_*` ou `PAUSED_DIAGNOSTIC`); `fail` quando as postconditions não fecharam e a única correção ainda é permitida pelo Recovery Protocol. `--reason` obrigatório sempre que `--status != pass`.
 9. ⚠️ **`STEP_ORDER` não tem fonte única** — é lista fixa duplicada em `run/gate.cjs` e `run/resume.cjs`. Renomear, reordenar ou fundir qualquer bloco `## N. STEP_X` abaixo quebra os dois **em silêncio**, sem teste acusando. Quem mexer nos nomes/ordem dos 12 blocos atualiza as duas cópias no mesmo commit, ou promove a ordem a dado único primeiro.
 10. **Envelope de orquestração:** cada task tem um executor, no máximo 2 tentativas (inicial + uma correção), um revisor integrado por padrão e no máximo 2 revisores. O prompt exato de um dispatch tem até 8.000 bytes. O retorno conversacional tem até 4.000 bytes, contém status, SHA/artefato, provas e blockers; detalhes ficam em arquivos referenciados. Execute `soma run dispatch-record begin` antes do spawn com o prompt exato; execute `soma run dispatch-record end` antes da transição com output e metadata. Sem ledger paralelo: use o dispatch-record existente.
-11. **Stop eficiente:** após uma correção, blocker residual transita para `PAUSED_DIAGNOSTIC` com handoff durável (candidato, provas, finding residual e próxima decisão), sem escalation e sem novo agente automático.
+11. **Stop eficiente:** após uma correção, blocker residual transita para `PAUSED_DIAGNOSTIC`, sem escalation automática e sem novo agente automático. Reutilize `/tmp/soma-diagnostic-{runId}.json` como handoff durável com os campos `candidate`, `proofs`, `residualFinding`, `nextDecision` e `dispatchRecord` (referência ao dispatch-record da tentativa).
 
 ---
 
@@ -194,7 +194,7 @@ Novo run: `soma run state --init --run <runId>` cria `soma-state/v2` em `{projec
 
 **Gate:** `soma run gate --step STEP_9_FIX_LOOP` — só é chamado quando este bloco é de fato entrado (ramo "≥1 CRITICAL" do STEP_8); no ramo `SONAR_CLEAN`, o report deste step já foi emitido proativamente pelo STEP_8 (nota acima) e a transição vai direto pra STEP_10_COMMIT sem passar por aqui.
 
-**Objetivo:** se o candidato ainda não recebeu correção, faça uma única correção para os findings CRITICAL/HIGH e `spec_violation`, depois sub-VALIDATE (reusa STEP_5: traceability + `/quality-check` + no-deletion + RED phase) e uma re-auditoria. Se já houve correção, registre handoff durável com candidato, provas, finding residual e próxima decisão; não crie nova task, escalation ou agente automático.
+**Objetivo:** se o candidato ainda não recebeu correção, faça uma única correção para os findings CRITICAL/HIGH e `spec_violation`, depois sub-VALIDATE (reusa STEP_5: traceability + `/quality-check` + no-deletion + RED phase) e uma re-auditoria. Se já houve correção, registre em `/tmp/soma-diagnostic-{runId}.json` o handoff durável `candidate`, `proofs`, `residualFinding`, `nextDecision` e `dispatchRecord`; não crie nova task, escalation ou agente automático.
 
 **Transições:** re-audit clean → `STEP_10_COMMIT`. Blocker residual após a única correção → `PAUSED_DIAGNOSTIC`.
 
@@ -243,7 +243,7 @@ Novo run: `soma run state --init --run <runId>` cria `soma-state/v2` em `{projec
 Aplicável em qualquer step com falha: `failureCountsByStep[STEP] += 1`.
 
 - **count 1 → RETRY**: uma única correção pelo mesmo agente, com feedback do erro prepended no prompt; volta ao step.
-- **count ≥ 2 → STOP EFICIENTE**: escreva o handoff durável com candidato, provas, finding residual e próxima decisão; transita `PAUSED_DIAGNOSTIC`, sem escalation ou novo agente automático.
+- **count ≥ 2 → STOP EFICIENTE**: escreva `/tmp/soma-diagnostic-{runId}.json` com `candidate`, `proofs`, `residualFinding`, `nextDecision` e `dispatchRecord`; transita `PAUSED_DIAGNOSTIC`, sem escalation automática ou novo agente automático.
 
 Sempre log o evento (`DISPATCH_RETRY | PAUSE_DIAGNOSTIC`) + append no FAMILY_DOC seção "Pitfalls" (mas não commite ainda — só em STEP_6 ou STEP_10).
 

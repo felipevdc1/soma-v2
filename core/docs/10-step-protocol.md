@@ -35,6 +35,13 @@ Pause and re-plan when:
 - a fix requires deleting or weakening existing behavior without explicit approval;
 - implementation drifts from the spec.
 
+## Orchestration Envelope (Amendment 1.3.0 / Feature 025)
+
+- One executor per task; duas tentativas maximum (initial plus one correction), sem escalation automática.
+- Run deterministic checks before one integrated reviewer. A second reviewer requires an independently declared risk and reads the same commit.
+- Record every dispatch with `soma run dispatch-record begin` before spawn and `dispatch-record end` before transition; conversational output is short and detailed proof stays in referenced artifacts.
+- A residual blocker after the correction writes `/tmp/soma-diagnostic-{runId}.json` with `candidate`, `proofs`, `residualFinding`, `nextDecision`, and `dispatchRecord`, then transitions to `PAUSED_DIAGNOSTIC`.
+
 ---
 
 ## Recovery Protocol (Article X + CLAUDE.md)
@@ -48,14 +55,10 @@ if count == 1: RETRY
   - Re-dispatch SAME agent with error feedback prepended in prompt.
   - Return to step.
 
-if count == 2: ESCALATE
-  - Re-dispatch with model upgrade: Sonnet → Opus (or Haiku → Sonnet).
-  - Prompt includes: "Previous attempt with {prev-model} failed because {reason}".
-
-if count >= 3: STOP AND REPLAN
-  - Write /tmp/soma-diagnostic-{runId}.json (schema per soma-v2-design.md §3.7).
+if count >= 2: STOP EFFICIENTLY
+  - Write /tmp/soma-diagnostic-{runId}.json with candidate, proofs, residualFinding, nextDecision, and dispatchRecord.
   - Transition to PAUSED_DIAGNOSTIC.
   - Preserve worktrees + logs + specs.
 ```
 
-Always log the event (`DISPATCH_RETRY | DISPATCH_ESCALATE | PAUSE_DIAGNOSTIC`) + append to FAMILY_DOC section "Pitfalls" (do not commit yet — only at STEP_6 or STEP_10).
+Always log the event (`DISPATCH_RETRY | PAUSE_DIAGNOSTIC`) + append to FAMILY_DOC section "Pitfalls" (do not commit yet — only at STEP_6 or STEP_10).
