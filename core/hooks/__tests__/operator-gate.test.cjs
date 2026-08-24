@@ -24,7 +24,7 @@
  * @spec AC-01
  */
 
-const { test } = require('node:test');
+const { test, after } = require('node:test');
 const assert = require('node:assert/strict');
 const { spawn } = require('node:child_process');
 const fs = require('node:fs');
@@ -50,6 +50,11 @@ test('AC-01: o hook existe no caminho fixado pela §0.4 (RED planejado até o ho
 
 const WORKDIR = fs.mkdtempSync(path.join(os.tmpdir(), 'opgate-work-')); // NÃO é scratch aos olhos do hook
 const FAKE_TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'opgate-tmp-')); // É scratch: vai como TMPDIR do spawn
+// A mesma pasta em duas grafias: no macOS /var/folders é symlink pra
+// /private/var/folders. `fs.realpathSync` segue o symlink; `mkdtempSync`
+// não. Usado pelo C5 (Grupo C) — medido nesta máquina que as duas
+// divergem, senão C5 seria um teste cego sem alvo (ver relatório).
+const FAKE_TMP_REAL = fs.realpathSync(FAKE_TMP);
 
 // ── AC-01: guarda de ambiente (brief §1-bis(5), verbatim) ──────────────
 // O truque acima depende do TMPDIR do shell ser o padrão do macOS
@@ -175,6 +180,10 @@ const cCases = [
   {
     id: 'C4', expect: 0, payloadCwd: FAKE_TMP, command: 'rm -rf ./lixo',
     desc: 'rm -rf ./lixo com cwd=FAKE_TMP — isento (relativo resolve dentro do scratch)',
+  },
+  {
+    id: 'C5', expect: 0, payloadCwd: WORKDIR, command: `rm -rf ${FAKE_TMP_REAL}/lixo`,
+    desc: 'rm -rf <FAKE_TMP em grafia física (/private/var/folders)> com cwd=WORKDIR — mesma pasta de C1, outra grafia; um hook que compara prefixo cru (em vez de path.resolve contra os.tmpdir() de fato) bloquearia aqui por engano',
   },
 ];
 
@@ -459,4 +468,15 @@ test('AC-01: J2 — não existe um segundo objeto matcher:"Bash" no array PreToo
   const preToolUse = (map.hooks && map.hooks.PreToolUse) || [];
   const bashEntries = preToolUse.filter(e => e.matcher === 'Bash');
   assert.equal(bashEntries.length, 1, `J2: esperava exatamente 1 objeto matcher:"Bash", achei ${bashEntries.length} — a spec proíbe criar um segundo`);
+});
+
+// ── cleanup ──────────────────────────────────────────────────────────────
+// WORKDIR e FAKE_TMP nascem no topo do módulo e não são limpos por nenhum
+// teste individual (os markers já são, em finally). Sem isso, cada rodada
+// deixa para trás os fixtures do A6 (3 arquivos), do H1/H2 (250 + 3
+// arquivos) e os diretórios em si, acumulando em tmpdir a cada `npm test`.
+
+after(() => {
+  fs.rmSync(WORKDIR, { recursive: true, force: true });
+  fs.rmSync(FAKE_TMP, { recursive: true, force: true });
 });
