@@ -29,6 +29,16 @@ echo "[TEST] Setup synthetic env at ${SYNTH_HOME}"
 cleanup
 mkdir -p "${SYNTH_HOME}/.claude"
 
+# Seed: unmanaged command that the rollout will replace. Keep an exact
+# pre-state outside the target so the canary can prove Phase 1 backed it up.
+mkdir -p "${SYNTH_HOME}/.claude/commands"
+cat > "${SYNTH_HOME}/.claude/commands/soma-run.md" <<'SOMA_RUN_EOF'
+# Custom local soma run
+
+This is an unmanaged pre-rollout command and must be recoverable byte-for-byte.
+SOMA_RUN_EOF
+cp "${SYNTH_HOME}/.claude/commands/soma-run.md" "${SYNTH_HOME}/pre-rollout-soma-run.md"
+
 # Seed: existing settings.json with user env + custom hook
 cat > "${SYNTH_HOME}/.claude/settings.json" <<'SETTINGS_EOF'
 {
@@ -121,6 +131,18 @@ if [[ "${CUSTOM_HOOK_OK}" == "ok" ]]; then
   pass "1f: user-custom.sh hook preserved"
 else
   fail "1f: user-custom.sh hook lost or mangled"
+fi
+
+# 1g / R-06: soma-run rollout installs canonical bytes AND retains a
+# recoverable byte-identical pre-state in the Phase 1 backup tree.
+CANONICAL_SOMA_RUN="${REPO_ROOT}/core/adapters/claude/commands/soma-run.md"
+BACKED_UP_SOMA_RUN=$(find "${SYNTH_HOME}/.soma-v2-backups" -path '*/claude/commands/soma-run.md' -type f -print -quit)
+if cmp -s "${SYNTH_HOME}/.claude/commands/soma-run.md" "${CANONICAL_SOMA_RUN}" && \
+   [[ -n "${BACKED_UP_SOMA_RUN}" ]] && \
+   cmp -s "${BACKED_UP_SOMA_RUN}" "${SYNTH_HOME}/pre-rollout-soma-run.md"; then
+  pass "1g/R-06: soma-run canonical installed; custom pre-state recoverable at ${BACKED_UP_SOMA_RUN}"
+else
+  fail "1g/R-06: soma-run rollout did not preserve custom pre-state while installing canonical bytes"
 fi
 
 # ── Test 2: Re-install idempotency ───────────────────────────────────────────

@@ -106,6 +106,10 @@ run "mkdir -p \"${BACKUP_DIR}\""
 [[ -f "${HOME}/.claude/settings.json" ]] && run "cp \"${HOME}/.claude/settings.json\" \"${BACKUP_DIR}/\""
 [[ -f "${HOME}/.claude/CLAUDE.md" ]]     && run "cp \"${HOME}/.claude/CLAUDE.md\" \"${BACKUP_DIR}/\""
 [[ -f "${HOME}/.codex/AGENTS.md" ]]      && run "cp \"${HOME}/.codex/AGENTS.md\" \"${BACKUP_DIR}/\""
+if [[ -f "${HOME}/.claude/commands/soma-run.md" ]]; then
+  run "mkdir -p \"${BACKUP_DIR}/claude/commands\""
+  run "cp \"${HOME}/.claude/commands/soma-run.md\" \"${BACKUP_DIR}/claude/commands/soma-run.md\""
+fi
 if [[ -d "${HOME}/.soma-v2" ]]; then
   run "tar czf \"${BACKUP_DIR}/dot-soma-v2.tgz\" -C \"${HOME}\" .soma-v2"
 fi
