@@ -63,6 +63,10 @@ const path = require('node:path');
 const { validate } = require('./schema.cjs');
 const { resolveSomaPaths, resolveRunIdFromLock } = require('./paths.cjs');
 
+const MAX_PROMPT_BYTES = 8000;
+const MAX_OUTPUT_BYTES = 4000;
+const MAX_ATTEMPT = 2;
+
 // ── soma-dispatch-record/v1 (owned here, per schema.cjs's docstring: the 3
 //    concrete schemas belong to the tasks that emit them — T-06/T-08/T-10) ─
 
@@ -156,6 +160,12 @@ function resolveAttempt(raw) {
   return n;
 }
 
+function enforceBudget(field, bytes, limit) {
+  if (bytes > limit) {
+    fail('DISPATCH_BUDGET_EXCEEDED', `${field} excede o orçamento de ${limit} bytes: recebeu ${bytes} bytes`);
+  }
+}
+
 /**
  * .soma/dispatches/{runId}/{taskId}[/attempt-{n}]/ — attempt 1 lives
  * directly under {taskId}/, attempt >= 2 under attempt-{n}/.
@@ -200,6 +210,10 @@ function cmdBegin(argv, projectRoot) {
   const runId = resolveRunId(projectRoot, args.run);
   const attempt = resolveAttempt(args.attempt);
   const promptBytes = readSourceBytes('--prompt-file', args.promptFile);
+  if (attempt > MAX_ATTEMPT) {
+    fail('DISPATCH_BUDGET_EXCEEDED', `--attempt excede o orçamento de ${MAX_ATTEMPT}: recebeu ${attempt}`);
+  }
+  enforceBudget('--prompt-file', promptBytes.length, MAX_PROMPT_BYTES);
 
   const dir = recordDir(projectRoot, runId, args.task, attempt);
   const promptPath = path.join(dir, 'prompt.md');
@@ -222,6 +236,9 @@ function cmdEnd(argv, projectRoot) {
 
   const runId = resolveRunId(projectRoot, args.run);
   const attempt = resolveAttempt(args.attempt);
+  if (attempt > MAX_ATTEMPT) {
+    fail('DISPATCH_BUDGET_EXCEEDED', `--attempt excede o orçamento de ${MAX_ATTEMPT}: recebeu ${attempt}`);
+  }
 
   // ── Validate FIRST, write NOTHING until validation passes — this is what
   //    makes REJECT all-or-nothing (T-04-04): no partial output.md /
@@ -285,6 +302,7 @@ function cmdEnd(argv, projectRoot) {
 
   // ── Only now: read the output source bytes and write both artifacts.
   const outputBytes = readSourceBytes('--output-file', args.outputFile);
+  enforceBudget('--output-file', outputBytes.length, MAX_OUTPUT_BYTES);
 
   const dir = recordDir(projectRoot, runId, args.task, attempt);
   const outputPath = path.join(dir, 'output.md');

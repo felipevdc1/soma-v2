@@ -451,3 +451,69 @@ test('end: metadata.attempt divergente do --attempt efetivo → REJECT, causa no
     fs.rmSync(projectRoot, { recursive: true, force: true });
   }
 });
+
+// @spec AC-01
+test('begin: prompt acima de 8.000 bytes ou tentativa acima de 2 → exit 2 sem artefato', () => {
+  const projectRoot = makeFixtureProject();
+  try {
+    const promptFile = writeFixtureFile(projectRoot, 'prompt-over-budget.md', 'x'.repeat(8001));
+    const promptResult = begin(projectRoot, { taskId: 'T-025-PROMPT', promptFile });
+    assert.equal(promptResult.status, 2, `stderr=${promptResult.stderr}`);
+    assert.match(promptResult.stderr, /8\.000|8000|prompt/i);
+    assert.ok(!fs.existsSync(recordDir(projectRoot, RUN_ID, 'T-025-PROMPT')));
+
+    const validPrompt = writeFixtureFile(projectRoot, 'prompt-valid.md', 'ok');
+    const attemptResult = begin(projectRoot, { taskId: 'T-025-ATTEMPT', attempt: 3, promptFile: validPrompt });
+    assert.equal(attemptResult.status, 2, `stderr=${attemptResult.stderr}`);
+    assert.match(attemptResult.stderr, /tentativa|attempt|2/i);
+    assert.ok(!fs.existsSync(recordDir(projectRoot, RUN_ID, 'T-025-ATTEMPT', 3)));
+  } finally {
+    fs.rmSync(projectRoot, { recursive: true, force: true });
+  }
+});
+
+// @spec AC-02
+test('end: output acima de 4.000 bytes → exit 2 sem output.md nem metadata.json', () => {
+  const projectRoot = makeFixtureProject();
+  try {
+    const taskId = 'T-025-OUTPUT';
+    const promptFile = writeFixtureFile(projectRoot, 'prompt.md', 'ok');
+    assert.equal(begin(projectRoot, { taskId, promptFile }).status, 0);
+    const outputFile = writeFixtureFile(projectRoot, 'output-over-budget.md', 'x'.repeat(4001));
+    const metadataFile = writeFixtureFile(projectRoot, 'metadata.json', JSON.stringify(validMetadata({ task_id: taskId })));
+
+    const result = end(projectRoot, { taskId, outputFile, metadataFile });
+    assert.equal(result.status, 2, `stderr=${result.stderr}`);
+    assert.match(result.stderr, /4\.000|4000|output/i);
+    const dir = recordDir(projectRoot, RUN_ID, taskId);
+    assert.ok(!fs.existsSync(path.join(dir, 'output.md')));
+    assert.ok(!fs.existsSync(path.join(dir, 'metadata.json')));
+  } finally {
+    fs.rmSync(projectRoot, { recursive: true, force: true });
+  }
+});
+
+// @spec AC-03
+test('begin+end: limites exatos de 8.000/4.000 bytes e tentativa 2 preservam os três artefatos', () => {
+  const projectRoot = makeFixtureProject();
+  try {
+    const taskId = 'T-025-EXACT';
+    const promptFile = writeFixtureFile(projectRoot, 'prompt-exact.md', 'p'.repeat(8000));
+    const beginResult = begin(projectRoot, { taskId, attempt: 2, promptFile });
+    assert.equal(beginResult.status, 0, `stderr=${beginResult.stderr}`);
+    const outputFile = writeFixtureFile(projectRoot, 'output-exact.md', 'o'.repeat(4000));
+    const metadataFile = writeFixtureFile(
+      projectRoot,
+      'metadata-exact.json',
+      JSON.stringify(validMetadata({ task_id: taskId, attempt: 2 }))
+    );
+    const endResult = end(projectRoot, { taskId, attempt: 2, outputFile, metadataFile });
+    assert.equal(endResult.status, 0, `stderr=${endResult.stderr}`);
+    const dir = recordDir(projectRoot, RUN_ID, taskId, 2);
+    for (const artifact of ['prompt.md', 'output.md', 'metadata.json']) {
+      assert.ok(fs.existsSync(path.join(dir, artifact)), `${artifact} deve ser preservado`);
+    }
+  } finally {
+    fs.rmSync(projectRoot, { recursive: true, force: true });
+  }
+});

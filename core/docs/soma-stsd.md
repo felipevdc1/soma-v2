@@ -13,6 +13,10 @@ Canonical references, when deeper context is needed:
 
 ## Always-On Habits
 
+- **Envelope de orquestração:** cada task tem um executor, no máximo 2 tentativas (inicial + uma correção), um revisor integrado por padrão e no máximo 2 revisores. O prompt exato de um dispatch tem até 8.000 bytes e o retorno conversacional até 4.000 bytes. Execute `soma run dispatch-record begin` antes do spawn com o prompt exato; execute `soma run dispatch-record end` antes da transição com output e metadata. O retorno curto contém status, SHA/artefato, provas e blockers; detalhes ficam em arquivos referenciados. Sem ledger paralelo: use o dispatch-record existente.
+- **Stop eficiente:** após uma correção, blocker residual transita para `PAUSED_DIAGNOSTIC` com handoff durável (candidato, provas, finding residual e próxima decisão), sem escalation e sem novo agente automático.
+- Rode checks determinísticos antes da auditoria integrada. Um segundo revisor só é permitido para risco independente declarado no plano; ambos leem o mesmo commit imutável.
+
 - Treat the user's intent/spec as source of truth. Do not silently invent requirements.
 - If ambiguity affects implementation, surface it early or mark the assumption explicitly.
 - Preserve traceability: user intent -> acceptance criteria -> tasks -> tests -> proof.

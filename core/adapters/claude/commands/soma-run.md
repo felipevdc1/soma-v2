@@ -37,8 +37,10 @@ Novo run: `soma run state --init --run <runId>` cria `soma-state/v2` em `{projec
 5. Nunca recrie arquivo "missing" a partir de memória (failure mode #7 do CLAUDE.md) — divergência da working tree é `PAUSED_DIAGNOSTIC`, não reconstrução.
 6. Preamble pós-merge obrigatório em todo dispatch após STEP_6 já ter ocorrido na run: `git fetch origin && git checkout main && git pull --ff-only origin main`, então confira `git status --short` (limpo) e `git log --oneline -1` (SHA esperado) — hard stop se divergir.
 7. **Gate e report do primitivo `soma run`**: cada um dos 12 blocos report-bearing abaixo (GATE 1/GATE 2 não contam — markers humanos, não emitem report) chama `soma run gate --step STEP_X` na entrada e `soma run report --step STEP_X --status pass|fail|blocked [--reason "..."]` na saída, **antes** de aplicar a transição. Nenhum bloco passa `--run` explicitamente — os dois verbos resolvem o run ativo via `.soma.lock` (§0). Exit 0 → prossiga; exit 2 → `PAUSED_DIAGNOSTIC`, causa já nomeada no stderr do gate — propague-a, não a reinterprete.
-8. **Mapeamento de `--status`**: `pass` quando as postconditions do step fecharam (inclusive quando não havia nada a fazer); `blocked` quando o step não pode prosseguir sem decisão externa (`AWAITING_*` ou `PAUSED_DIAGNOSTIC`); `fail` quando as postconditions não fecharam e o Recovery Protocol reage sozinho (retry/escalate, sem esperar humano). `--reason` obrigatório sempre que `--status != pass`.
+8. **Mapeamento de `--status`**: `pass` quando as postconditions do step fecharam (inclusive quando não havia nada a fazer); `blocked` quando o step não pode prosseguir sem decisão externa (`AWAITING_*` ou `PAUSED_DIAGNOSTIC`); `fail` quando as postconditions não fecharam e a única correção ainda é permitida pelo Recovery Protocol. `--reason` obrigatório sempre que `--status != pass`.
 9. ⚠️ **`STEP_ORDER` não tem fonte única** — é lista fixa duplicada em `run/gate.cjs` e `run/resume.cjs`. Renomear, reordenar ou fundir qualquer bloco `## N. STEP_X` abaixo quebra os dois **em silêncio**, sem teste acusando. Quem mexer nos nomes/ordem dos 12 blocos atualiza as duas cópias no mesmo commit, ou promove a ordem a dado único primeiro.
+10. **Envelope de orquestração:** cada task tem um executor, no máximo 2 tentativas (inicial + uma correção), um revisor integrado por padrão e no máximo 2 revisores. O prompt exato de um dispatch tem até 8.000 bytes. O retorno conversacional tem até 4.000 bytes, contém status, SHA/artefato, provas e blockers; detalhes ficam em arquivos referenciados. Execute `soma run dispatch-record begin` antes do spawn com o prompt exato; execute `soma run dispatch-record end` antes da transição com output e metadata. Sem ledger paralelo: use o dispatch-record existente.
+11. **Stop eficiente:** após uma correção, blocker residual transita para `PAUSED_DIAGNOSTIC` com handoff durável (candidato, provas, finding residual e próxima decisão), sem escalation e sem novo agente automático.
 
 ---
 
@@ -114,7 +116,7 @@ Novo run: `soma run state --init --run <runId>` cria `soma-state/v2` em `{projec
 
 **Invariantes (INV-4):** foundation task reporta DONE com SHA + arquivos criados + `tests passing` output. `git log --oneline -1` mostra o commit esperado, se a foundation commita.
 
-**Transições:** DONE → `STEP_4_WAVES`. Falha → Recovery Protocol (retry → escalate → `PAUSED_DIAGNOSTIC`). Sem tasks `[FOUNDATION]` → pula direto pra `STEP_4_WAVES` (log `FOUNDATION_SKIPPED`).
+**Transições:** DONE → `STEP_4_WAVES`. Falha → Recovery Protocol (uma correção → `PAUSED_DIAGNOSTIC`). Sem tasks `[FOUNDATION]` → pula direto pra `STEP_4_WAVES` (log `FOUNDATION_SKIPPED`).
 
 **Report:** `pass` quando a foundation conclui, ou quando não há tasks `[FOUNDATION]` (`FOUNDATION_SKIPPED` — ainda emita `pass`, mesmo padrão de STEP_7 sem `[WIRING]`); `blocked --reason "Recovery Protocol esgotado no STEP_3 — {motivo da última falha}"` se esgotar em `PAUSED_DIAGNOSTIC`.
 
@@ -144,9 +146,9 @@ Novo run: `soma run state --init --run <runId>` cria `soma-state/v2` em `{projec
 3. **No-deletion**: `git diff --stat {baselineSha}..HEAD` — linhas removidas em arquivo existente > linhas adicionadas no mesmo arquivo E sem rationale no commit → REJECT (heurística Article V).
 4. **RED phase evidence**: `git log --oneline {baselineSha}..HEAD` do worktree — precisa ≥1 commit `red:`/`failing test` antes de commits `impl:`. Ausente → REJECT.
 
-**Invariantes (contabilidade por wave):** 0 REJECT → approve all → `STEP_6_CONSOLIDATE`. 1 REJECT (1ª vez) → retry agent com feedback estruturado (volta STEP_4, mesma wave). 1 REJECT (2ª vez mesma task) → ESCALATE Sonnet→Opus, re-dispatch (cap Opus — nunca Fable automaticamente, human gate obrigatório). 2+ REJECTs na mesma wave OU 3ª falha na mesma task → `PAUSED_DIAGNOSTIC` (R5).
+**Invariantes (contabilidade por wave):** 0 REJECT → approve all → `STEP_6_CONSOLIDATE`. 1 REJECT na tentativa inicial → uma única correção com feedback estruturado (volta STEP_4, mesma wave). Qualquer blocker residual após essa correção → `PAUSED_DIAGNOSTIC`, sem escalation e sem novo agente automático.
 
-**Report:** `pass` quando toda a wave aprova (0 REJECT); `fail --reason "REJECT: {check que falhou} na task {T-NN}"` quando volta a `STEP_4_WAVES` pra retry/escalate; `blocked --reason "2+ REJECTs na wave OU 3ª falha na mesma task"` se virar `PAUSED_DIAGNOSTIC`.
+**Report:** `pass` quando toda a wave aprova (0 REJECT); `fail --reason "REJECT: {check que falhou} na task {T-NN}"` quando volta a `STEP_4_WAVES` para a única correção; `blocked --reason "blocker residual após a única correção"` se virar `PAUSED_DIAGNOSTIC`.
 
 ---
 
@@ -170,7 +172,7 @@ Novo run: `soma run state --init --run <runId>` cria `soma-state/v2` em `{projec
 
 **Invariantes:** integration tests pass (`npm test` ou equivalente conforme `plan.md` §Stack). System boots (smoke test definido no spec ou plano).
 
-**Transições:** OK → `STEP_8_SONAR`. Fail → Recovery (retry → escalate → `PAUSED_DIAGNOSTIC`). Sem tasks `[WIRING]` → pula pra `STEP_8_SONAR`.
+**Transições:** OK → `STEP_8_SONAR`. Fail → Recovery (uma correção → `PAUSED_DIAGNOSTIC`). Sem tasks `[WIRING]` → pula pra `STEP_8_SONAR`.
 
 **Report:** `pass` quando os testes de integração passam, ou quando não há tasks `[WIRING]`; `blocked --reason "Recovery Protocol esgotado no STEP_7"` se virar `PAUSED_DIAGNOSTIC`.
 
@@ -180,7 +182,7 @@ Novo run: `soma run state --init --run <runId>` cria `soma-state/v2` em `{projec
 
 **Gate:** `soma run gate --step STEP_8_SONAR`.
 
-**Objetivo:** `/sonar-audit {repo-path}` despacha 5 agents read-only em paralelo (Architecture/Opus, Modules/Sonnet, Tests/Haiku, Config/Haiku, Spec-Adherence/Opus — cada um com `model:` pinado explicitamente; omissão herda o modelo da main session, Fable, 2× custo). Aguarde consolidação em `sonar-report-{runId}-{TS}.{md,json}`; parse `summary.critical_count`, `summary.spec_violations_count`, `findings[]`.
+**Objetivo:** rode checks determinísticos antes da auditoria integrada do mesmo commit imutável. Um revisor integrado cobre arquitetura, módulos, testes, configuração e aderência à spec. Um segundo revisor só é permitido para risco independente declarado no plano; os dois revisores leem o mesmo candidato e podem rodar em paralelo. Aguarde consolidação em `sonar-report-{runId}-{TS}.{md,json}`; parse `summary.critical_count`, `summary.spec_violations_count`, `findings[]`.
 
 **Transições:** `critical_count == 0 && spec_violations_count == 0` → `STEP_10_COMMIT` (log `SONAR_CLEAN`). ≥1 CRITICAL ou ≥1 spec_violation → `STEP_9_FIX_LOOP`.
 
@@ -192,11 +194,11 @@ Novo run: `soma run state --init --run <runId>` cria `soma-state/v2` em `{projec
 
 **Gate:** `soma run gate --step STEP_9_FIX_LOOP` — só é chamado quando este bloco é de fato entrado (ramo "≥1 CRITICAL" do STEP_8); no ramo `SONAR_CLEAN`, o report deste step já foi emitido proativamente pelo STEP_8 (nota acima) e a transição vai direto pra STEP_10_COMMIT sem passar por aqui.
 
-**Objetivo:** incremente `state.fixLoopIterations`; para cada finding CRITICAL/HIGH e cada `spec_violation`, crie `T-FIX-XX` em `tasks.md` (append) com `[SPEC:AC-XX]` se aplicável, `files` do finding `where:`, descrição do `fix_suggested`; dispatch fix agents (sub-wave, respeita thermal-guard); sub-VALIDATE (reusa STEP_5: traceability + `/quality-check` + no-deletion + RED phase); volte a `STEP_8_SONAR` pra re-audit.
+**Objetivo:** se o candidato ainda não recebeu correção, faça uma única correção para os findings CRITICAL/HIGH e `spec_violation`, depois sub-VALIDATE (reusa STEP_5: traceability + `/quality-check` + no-deletion + RED phase) e uma re-auditoria. Se já houve correção, registre handoff durável com candidato, provas, finding residual e próxima decisão; não crie nova task, escalation ou agente automático.
 
-**Transições:** re-audit clean → `STEP_10_COMMIT`. `fixLoopIterations ≥ 5` sem convergir → `PAUSED_DIAGNOSTIC` (snapshot com hint: "5 iterações SONAR sem convergir, spec ou design provavelmente ambíguos").
+**Transições:** re-audit clean → `STEP_10_COMMIT`. Blocker residual após a única correção → `PAUSED_DIAGNOSTIC`.
 
-**Report:** `pass` quando o re-audit fecha limpo (state final antes de `STEP_10_COMMIT`); `blocked --reason "5 iterações SONAR sem convergir"` quando `fixLoopIterations >= 5`.
+**Report:** `pass` quando o re-audit fecha limpo (state final antes de `STEP_10_COMMIT`); `blocked --reason "blocker residual após a única correção"` quando transitar para `PAUSED_DIAGNOSTIC`.
 
 ---
 
@@ -240,11 +242,10 @@ Novo run: `soma run state --init --run <runId>` cria `soma-state/v2` em `{projec
 
 Aplicável em qualquer step com falha: `failureCountsByStep[STEP] += 1`.
 
-- **count 1 → RETRY**: re-dispatch o MESMO agente com feedback do erro prepended no prompt; volta ao step.
-- **count 2 → ESCALATE**: re-dispatch com model upgrade (Sonnet → Opus, ou Haiku → Sonnet; cap Opus — Fable requer human gate); prompt inclui "Tentativa anterior com {prev-model} falhou por {reason}".
-- **count ≥ 3 → STOP AND REPLAN**: escreva `/tmp/soma-diagnostic-{runId}.json` (schema §3.7 do design); transita `PAUSED_DIAGNOSTIC`; preserve worktrees + logs + specs.
+- **count 1 → RETRY**: uma única correção pelo mesmo agente, com feedback do erro prepended no prompt; volta ao step.
+- **count ≥ 2 → STOP EFICIENTE**: escreva o handoff durável com candidato, provas, finding residual e próxima decisão; transita `PAUSED_DIAGNOSTIC`, sem escalation ou novo agente automático.
 
-Sempre log o evento (`DISPATCH_RETRY | DISPATCH_ESCALATE | PAUSE_DIAGNOSTIC`) + append no FAMILY_DOC seção "Pitfalls" (mas não commite ainda — só em STEP_6 ou STEP_10).
+Sempre log o evento (`DISPATCH_RETRY | PAUSE_DIAGNOSTIC`) + append no FAMILY_DOC seção "Pitfalls" (mas não commite ainda — só em STEP_6 ou STEP_10).
 
 ---
 
@@ -272,7 +273,7 @@ IDLE → STEP_1A_SPECIFY → 2 markers → AWAITING_HUMAN_CLARIFICATION → (usu
   → STEP_10_COMMIT → commit + push + PR → AWAITING_DEPLOY_APPROVAL
   → Gate 2: usuário aprova + deploy manual (touch success) → DEPLOY_EXECUTING → DONE
 
-Sumário: 6 tasks, 0 retries, 0 escalates, FAMILY_DOC v3→v4, 1 SONAR iteration.
+Sumário: 6 tasks, 0 correções, FAMILY_DOC v3→v4, 1 auditoria integrada.
 ```
 
 ---
@@ -290,7 +291,7 @@ Sumário: 6 tasks, 0 retries, 0 escalates, FAMILY_DOC v3→v4, 1 SONAR iteration
 
 - Todo output ao usuário em português do Brasil.
 - Nunca escreva código de aplicação — só state file, log file, markers, prompts para subagents.
-- Nunca viole Article X (3 falhas = stop, per-step counter).
+- Nunca ultrapasse uma correção por task; blocker residual vai para `PAUSED_DIAGNOSTIC`.
 - Nunca releia Constitution após snapshot-lock — use `constitutionSnapshotPath`.
 - Nunca recrie arquivos "missing" — isso é failure mode #7 e dispara `PAUSED_DIAGNOSTIC`.
 - Sempre injete preamble pós-merge em dispatch após STEP_6 ter ocorrido na run.
