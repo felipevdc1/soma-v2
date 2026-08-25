@@ -393,8 +393,35 @@ function planFileAdoption(candidateEntries, {
     previousByTarget.set(entry.target_path, entry);
   }
 
-  const conflicts = [];
+  const conflicts = new Set();
   const plannedLedgerEntries = {};
+
+  // Preflight the union, not only the candidate set. A retired target remains
+  // part of the old installation's proof even though it must not enter the
+  // candidate ledger.
+  for (const previousEntry of previousByTarget.values()) {
+    const targetPathAbs = expandHome(previousEntry.target_path);
+    let targetStat;
+    try {
+      targetStat = fs.lstatSync(targetPathAbs);
+    } catch (error) {
+      if (error && error.code === 'ENOENT') continue;
+      conflicts.add(previousEntry.target_path);
+      continue;
+    }
+    if (targetStat.isSymbolicLink() || !targetStat.isFile()) {
+      conflicts.add(previousEntry.target_path);
+      continue;
+    }
+    try {
+      const currentSha256 = sha256OfFile(targetPathAbs);
+      const previousSource = path.resolve(previousRootAbs, previousEntry.source_path);
+      if (currentSha256 !== sha256OfFile(previousSource)) conflicts.add(previousEntry.target_path);
+    } catch (_error) {
+      conflicts.add(previousEntry.target_path);
+    }
+  }
+
   for (const entry of candidates) {
     const targetPathAbs = expandHome(entry.target_path);
     let targetStat;
@@ -402,11 +429,11 @@ function planFileAdoption(candidateEntries, {
       targetStat = fs.lstatSync(targetPathAbs);
     } catch (error) {
       if (error && error.code === 'ENOENT') continue;
-      conflicts.push(entry.target_path);
+      conflicts.add(entry.target_path);
       continue;
     }
     if (targetStat.isSymbolicLink() || !targetStat.isFile()) {
-      conflicts.push(entry.target_path);
+      conflicts.add(entry.target_path);
       continue;
     }
 
@@ -414,7 +441,7 @@ function planFileAdoption(candidateEntries, {
     try {
       currentSha256 = sha256OfFile(targetPathAbs);
     } catch (_error) {
-      conflicts.push(entry.target_path);
+      conflicts.add(entry.target_path);
       continue;
     }
 
@@ -425,11 +452,11 @@ function planFileAdoption(candidateEntries, {
       try {
         previousSha256 = sha256OfFile(previousSource);
       } catch (_error) {
-        conflicts.push(entry.target_path);
+        conflicts.add(entry.target_path);
         continue;
       }
       if (currentSha256 !== previousSha256) {
-        conflicts.push(entry.target_path);
+        conflicts.add(entry.target_path);
         continue;
       }
       plannedLedgerEntries[entry.target_path] = buildLedgerEntry(previousSha256);
@@ -437,16 +464,16 @@ function planFileAdoption(candidateEntries, {
     }
 
     if (!allowNewTargets || !authorizeNewTarget(entry, { targetPathAbs, sha256: currentSha256 })) {
-      conflicts.push(entry.target_path);
+      conflicts.add(entry.target_path);
       continue;
     }
     plannedLedgerEntries[entry.target_path] = buildLedgerEntry(currentSha256);
   }
 
   return {
-    ok: conflicts.length === 0,
-    conflicts,
-    ledgerEntries: conflicts.length === 0 ? plannedLedgerEntries : {},
+    ok: conflicts.size === 0,
+    conflicts: [...conflicts],
+    ledgerEntries: conflicts.size === 0 ? plannedLedgerEntries : {},
   };
 }
 

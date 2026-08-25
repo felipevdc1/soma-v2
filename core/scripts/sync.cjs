@@ -1035,6 +1035,44 @@ function runFileAdoptionMode(entries, previousEntries, flags, somaHome, ledgerRo
   }
 }
 
+function loadPreviousInstallAuthority(previousRoot, tool) {
+  const root = path.resolve(previousRoot);
+  const manifestPath = path.join(root, 'manifest.json');
+  const adapterPath = path.join(root, 'adapters', tool, 'install-targets.json');
+  for (const [label, filePath] of [['manifest', manifestPath], ['adapter', adapterPath]]) {
+    let stat;
+    try {
+      stat = fs.lstatSync(filePath);
+    } catch (error) {
+      throw adoptionError('MANIFEST_INVALID', `previous ${label} is missing or unreadable: ${filePath}: ${error.message}`);
+    }
+    if (stat.isSymbolicLink() || !stat.isFile()) {
+      throw adoptionError('MANIFEST_INVALID', `previous ${label} must be a regular non-symlink file: ${filePath}`);
+    }
+  }
+  loadManifest(root);
+  const targets = loadInstallTargetsWithKinds(root, tool);
+  for (const entry of targets.entries) {
+    const declaredSource = filesModule.isFileEntry(entry) ? entry.source_path : entry.source_doc;
+    const sourcePath = path.resolve(root, declaredSource);
+    const relative = path.relative(root, sourcePath);
+    if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+      throw adoptionError('MANIFEST_INVALID', `previous adapter source escapes its root: ${declaredSource}`);
+    }
+    let stat;
+    try {
+      stat = fs.lstatSync(sourcePath);
+      fs.accessSync(sourcePath, fs.constants.R_OK);
+    } catch (error) {
+      throw adoptionError('MANIFEST_INVALID', `previous adapter source is missing or unreadable: ${sourcePath}: ${error.message}`);
+    }
+    if (stat.isSymbolicLink() || !stat.isFile()) {
+      throw adoptionError('MANIFEST_INVALID', `previous adapter source must be a regular non-symlink file: ${sourcePath}`);
+    }
+  }
+  return targets;
+}
+
 // ---- Apply mode ----
 
 // SANDBOX_VIOLATION safe-path prefix (Article III enforcement — SOMA_SAFE_PATHS_ONLY=1)
@@ -1623,7 +1661,7 @@ function main() {
     if (flags.adoptFrom) {
       let previousTargets;
       try {
-        previousTargets = loadInstallTargetsWithKinds(flags.adoptFrom, flags.tool);
+        previousTargets = loadPreviousInstallAuthority(flags.adoptFrom, flags.tool);
       } catch (error) {
         emitAdoptionError(adoptionError(error.code || 'MANIFEST_INVALID', error.message), useJson);
         return;

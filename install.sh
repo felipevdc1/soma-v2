@@ -223,24 +223,38 @@ if (snapshot && snapshot.existed) process.stdout.write(snapshot.snapshot_path);
 ' "${TRANSACTION_JOURNAL}")"
 
 if [[ ! -e "${GLOBAL_LEDGER}" ]]; then
-  if [[ -z "${PREVIOUS_ROOT}" || ! -f "${PREVIOUS_ROOT}/adapters/claude/install-targets.json" ]]; then
+  if [[ -z "${PREVIOUS_ROOT}" ]]; then
     PREVIOUS_ROOT="${TRANSACTION_DIR}/previous-empty"
+    EMPTY_PREVIOUS_TOOLS=(claude)
+    [[ "${NO_CODEX}" == "1" ]] || EMPTY_PREVIOUS_TOOLS+=(codex)
     node -e '
 const fs = require("fs");
 const path = require("path");
 const root = process.argv[1];
-const adapter = path.join(root, "adapters", "claude");
-fs.mkdirSync(adapter, { recursive: true });
-fs.writeFileSync(path.join(adapter, "install-targets.json"), JSON.stringify({
-  schema: "soma-install-targets/v1", tool: "claude", entries: []
+const tools = process.argv.slice(2);
+fs.mkdirSync(root, { recursive: true });
+fs.writeFileSync(path.join(root, "manifest.json"), JSON.stringify({
+  schema: "soma-manifest/v1", version: "empty", files: []
 }, null, 2) + "\n");
-' "${PREVIOUS_ROOT}"
+for (const tool of tools) {
+  const adapter = path.join(root, "adapters", tool);
+  fs.mkdirSync(adapter, { recursive: true });
+  fs.writeFileSync(path.join(adapter, "install-targets.json"), JSON.stringify({
+    schema: "soma-install-targets/v1", tool, entries: []
+  }, null, 2) + "\n");
+}
+' "${PREVIOUS_ROOT}" "${EMPTY_PREVIOUS_TOOLS[@]}"
   fi
   ADOPTION_ARGS=(--apply --tool=claude --soma-home="${REPO_ROOT}/core" \
     --ledger-root="${HOME}/.soma-v2" --adopt-from="${PREVIOUS_ROOT}" \
     --transaction-journal="${TRANSACTION_JOURNAL}")
   [[ "${FORCE_OVERWRITE}" == "1" ]] && ADOPTION_ARGS+=(--allow-new-target-overwrite)
   node "${REPO_ROOT}/core/scripts/sync.cjs" "${ADOPTION_ARGS[@]}"
+  if [[ "${NO_CODEX}" != "1" ]]; then
+    node "${REPO_ROOT}/core/scripts/sync.cjs" --apply --tool=codex \
+      --soma-home="${REPO_ROOT}/core" --ledger-root="${HOME}/.soma-v2" \
+      --adopt-from="${PREVIOUS_ROOT}" --transaction-journal="${TRANSACTION_JOURNAL}"
+  fi
 fi
 advance_state ADOPTED
 
@@ -275,17 +289,17 @@ advance_state SETTINGS_MERGED
 if [[ "${NO_CLAUDE_MD}" != "1" ]]; then
   node "${HOME}/.soma-v2/scripts/sync.cjs" --apply --tool=claude \
     --soma-home="${HOME}/.soma-v2" --ledger-root="${HOME}/.soma-v2"
-  if [[ "${NO_CODEX}" != "1" ]]; then
-    node "${HOME}/.soma-v2/scripts/sync.cjs" --apply --tool=codex \
-      --soma-home="${HOME}/.soma-v2" --ledger-root="${HOME}/.soma-v2"
-  fi
+fi
+if [[ "${NO_CODEX}" != "1" ]]; then
+  node "${HOME}/.soma-v2/scripts/sync.cjs" --apply --tool=codex \
+    --soma-home="${HOME}/.soma-v2" --ledger-root="${HOME}/.soma-v2"
 fi
 advance_state ANCHORS_SYNCED
 
 VERIFY_CLAUDE_ARGS=(--dry-run --tool=claude --soma-home="${HOME}/.soma-v2" --ledger-root="${HOME}/.soma-v2")
 [[ "${NO_CLAUDE_MD}" == "1" ]] && VERIFY_CLAUDE_ARGS+=(--files-only)
 node "${HOME}/.soma-v2/scripts/sync.cjs" "${VERIFY_CLAUDE_ARGS[@]}"
-if [[ "${NO_CODEX}" != "1" && "${NO_CLAUDE_MD}" != "1" ]]; then
+if [[ "${NO_CODEX}" != "1" ]]; then
   node "${HOME}/.soma-v2/scripts/sync.cjs" --dry-run --tool=codex \
     --soma-home="${HOME}/.soma-v2" --ledger-root="${HOME}/.soma-v2"
 fi
@@ -321,7 +335,7 @@ process.stdin.on("end", () => {
   const blockers = (result.findings || []).filter((finding) => {
     if (["ok", "warning"].includes(finding.severity)) return false;
     if (noCodex === "1" && finding.adapter === "codex") return false;
-    if (noClaudeMd === "1" && finding.kind !== "file_drift") return false;
+    if (noClaudeMd === "1" && finding.adapter === "claude" && finding.kind !== "file_drift") return false;
     return true;
   });
   if (blockers.length) {

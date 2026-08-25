@@ -74,6 +74,30 @@ function atomicWriteJson(filePath, value) {
   }
 }
 
+function writeJsonNoClobber(filePath, value) {
+  const directoryPath = path.dirname(filePath);
+  fs.mkdirSync(directoryPath, { recursive: true });
+  const bytes = Buffer.from(`${JSON.stringify(value, null, 2)}\n`);
+  const fd = fs.openSync(filePath, 'wx', 0o600);
+  try {
+    let offset = 0;
+    while (offset < bytes.length) offset += fs.writeSync(fd, bytes, offset, bytes.length - offset);
+    fs.fsyncSync(fd);
+  } finally {
+    fs.closeSync(fd);
+  }
+  fsyncDirectory(directoryPath);
+}
+
+function maybeTransactionFault(state, boundary) {
+  if (
+    process.env.SOMA_INSTALL_TESTING === '1' &&
+    process.env.SOMA_TRANSACTION_FAULT_AFTER === `${state}:${boundary}`
+  ) {
+    throw codedError('TEST_FAULT', `injected transaction fault after ${state}:${boundary}`);
+  }
+}
+
 function hashFile(filePath) {
   const stat = fs.lstatSync(filePath);
   if (!stat.isFile() || stat.isSymbolicLink()) {
@@ -368,18 +392,39 @@ function pointerPathForBackupRoot(backupRoot) {
   return path.join(backupRoot, POINTER_NAME);
 }
 
-function pointerForJournal(journal) {
+function pointerForJournal(journal, generationPath) {
   return {
     schema: POINTER_SCHEMA,
     transaction_path: journal.journal_path,
-    journal_sha256: hashFile(journal.journal_path),
+    generation_path: generationPath,
+    journal_sha256: hashFile(generationPath),
   };
 }
 
 function persistJournal(journal, withPointer = true) {
   journal.updated_at = new Date().toISOString();
+  journal.generation = Number.isInteger(journal.generation) ? journal.generation + 1 : 1;
+  let generationPath;
+  for (;;) {
+    generationPath = path.join(
+      journal.transaction_dir,
+      `transaction.${String(journal.generation).padStart(8, '0')}.${crypto.randomBytes(8).toString('hex')}.json`
+    );
+    try {
+      writeJsonNoClobber(generationPath, journal);
+      break;
+    } catch (error) {
+      if (!error || error.code !== 'EEXIST') throw error;
+    }
+  }
+  maybeTransactionFault(journal.state, 'generation');
+  if (withPointer) {
+    atomicWriteJson(pointerPathForBackupRoot(journal.backup_root), pointerForJournal(journal, generationPath));
+    maybeTransactionFault(journal.state, 'pointer');
+  }
+  // Compatibility view only. Recovery authenticates generationPath from the
+  // pointer and never treats this replaceable file as authority.
   atomicWriteJson(journal.journal_path, journal);
-  if (withPointer) atomicWriteJson(pointerPathForBackupRoot(journal.backup_root), pointerForJournal(journal));
   return journal;
 }
 
@@ -389,6 +434,9 @@ function validateJournal(journal, journalPath) {
   }
   if (!ALL_STATES.has(journal.state) || !Array.isArray(journal.snapshots) || !Array.isArray(journal.phases)) {
     throw codedError('RECOVERY_BLOCKED', `invalid transaction state or snapshots: ${journalPath}`);
+  }
+  if (journal.generation !== undefined && (!Number.isInteger(journal.generation) || journal.generation < 1)) {
+    throw codedError('RECOVERY_BLOCKED', `invalid journal generation: ${journalPath}`);
   }
   if (!path.isAbsolute(journal.home) || !path.isAbsolute(journal.backup_root)) {
     throw codedError('RECOVERY_BLOCKED', `journal contains non-absolute roots: ${journalPath}`);
@@ -477,8 +525,9 @@ function validateJournal(journal, journalPath) {
   return journal;
 }
 
-function readJournal(journalPath) {
+function readJournal(journalPath, expectedJournalPath = journalPath) {
   const absolute = assertAbsolute('transaction', journalPath);
+  const expected = assertAbsolute('expected transaction', expectedJournalPath);
   let journal;
   try {
     const stat = fs.lstatSync(absolute);
@@ -487,12 +536,18 @@ function readJournal(journalPath) {
   } catch (error) {
     throw codedError('RECOVERY_BLOCKED', `cannot read transaction journal ${absolute}: ${error.message}`);
   }
-  return validateJournal(journal, absolute);
+  return validateJournal(journal, expected);
 }
 
 function loadAuthenticatedJournal(journalPath) {
-  const journal = readJournal(journalPath);
-  const pointerPath = pointerPathForBackupRoot(journal.backup_root);
+  const requestedPath = assertAbsolute('transaction', journalPath);
+  if (path.basename(requestedPath) !== 'transaction.json') {
+    throw codedError('RECOVERY_BLOCKED', `transaction handle must be transaction.json: ${requestedPath}`);
+  }
+  const canonicalPath = requestedPath;
+  const transactionDirectory = path.dirname(canonicalPath);
+  const backupRoot = path.dirname(transactionDirectory);
+  const pointerPath = pointerPathForBackupRoot(backupRoot);
   let pointer;
   try {
     const stat = fs.lstatSync(pointerPath);
@@ -501,14 +556,27 @@ function loadAuthenticatedJournal(journalPath) {
   } catch (error) {
     throw codedError('RECOVERY_BLOCKED', `cannot read active transaction pointer: ${error.message}`);
   }
+  const selectedPath = pointer.generation_path || pointer.transaction_path;
   if (
     pointer.schema !== POINTER_SCHEMA ||
-    pointer.transaction_path !== journal.journal_path ||
-    pointer.journal_sha256 !== hashFile(journal.journal_path)
+    pointer.transaction_path !== canonicalPath ||
+    !path.isAbsolute(selectedPath) ||
+    path.dirname(selectedPath) !== transactionDirectory
   ) {
     throw codedError('RECOVERY_BLOCKED', 'active transaction pointer does not authenticate the current journal bytes');
   }
-  return journal;
+  try {
+    if (pointer.journal_sha256 !== hashFile(selectedPath)) {
+      throw new Error('journal hash mismatch');
+    }
+    return readJournal(selectedPath, canonicalPath);
+  } catch (error) {
+    if (error && error.code === 'RECOVERY_BLOCKED') throw error;
+    throw codedError(
+      'RECOVERY_BLOCKED',
+      `active transaction pointer cannot authenticate its selected generation: ${error.message}`
+    );
+  }
 }
 
 function removePointer(backupRoot, expectedJournalPath) {
@@ -531,6 +599,16 @@ function removePointer(backupRoot, expectedJournalPath) {
   }
   fs.unlinkSync(pointerPath);
   fsyncDirectory(backupRoot);
+  let state = 'UNKNOWN';
+  if (expectedJournalPath) {
+    try {
+      state = readJournal(expectedJournalPath).state;
+    } catch (_error) {
+      // The pointer is already durably absent. Fault injection still uses the
+      // caller's terminal state when the compatibility view is unavailable.
+    }
+  }
+  maybeTransactionFault(state, 'unlink');
 }
 
 function prepareTransaction(options) {

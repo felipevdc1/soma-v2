@@ -626,18 +626,32 @@ test('026 AC-04: an old-only present target is preflighted but never enters the 
   withTmp('soma-adoption-candidate-', (candidateRoot) => {
     withTmp('soma-adoption-previous-', (previousRoot) => {
       withTmp('soma-adoption-target-', (targetRoot) => {
-        const targetPath = path.join(targetRoot, 'retired.cjs');
-        makeRepoWithFiles(previousRoot, { 'hooks/retired.cjs': 'old soma bytes\n' });
-        fs.writeFileSync(targetPath, 'user divergent bytes\n');
+        const divergent = path.join(targetRoot, 'divergent-retired.cjs');
+        const symlinked = path.join(targetRoot, 'symlinked-retired.cjs');
+        const unreadable = path.join(targetRoot, 'unreadable-retired.cjs');
+        const destination = path.join(targetRoot, 'destination.cjs');
+        makeRepoWithFiles(previousRoot, {
+          'hooks/a.cjs': 'old a\n',
+          'hooks/b.cjs': 'old b\n',
+          'hooks/c.cjs': 'old c\n',
+        });
+        fs.writeFileSync(divergent, 'user divergent bytes\n');
+        fs.writeFileSync(destination, 'old b\n');
+        fs.symlinkSync(destination, symlinked);
+        fs.mkdirSync(unreadable);
 
         const result = files.planFileAdoption([], {
           candidateRoot,
           previousRoot,
-          previousEntries: [adoptionEntry('hooks/retired.cjs', targetPath)],
+          previousEntries: [
+            adoptionEntry('hooks/a.cjs', divergent),
+            adoptionEntry('hooks/b.cjs', symlinked),
+            adoptionEntry('hooks/c.cjs', unreadable),
+          ],
         });
 
         assert.equal(result.ok, false);
-        assert.deepEqual(result.conflicts, [targetPath]);
+        assert.deepEqual(result.conflicts.sort(), [divergent, symlinked, unreadable].sort());
         assert.deepEqual(result.ledgerEntries, {});
       });
     });
