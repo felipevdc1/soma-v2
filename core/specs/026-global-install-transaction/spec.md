@@ -234,6 +234,12 @@ Suítes focadas rodam em RED/GREEN. A suíte global roda uma vez no gate final, 
 - uma onda de correção e revalidação;
 - blocker residual termina em `PAUSED_DIAGNOSTIC`.
 
+### Emenda operacional A-026-01 — fechamento de segurança
+
+Em 2026-08-25, a primeira revalidação pós-correção fechou os findings originais, mas revelou blockers novos na mesma fronteira de durabilidade: uso residual da visão compatível não autenticada e ausência de `fsync` dos bytes antes da liberação terminal. O usuário havia delegado ao Codex as decisões necessárias para entregar a instalação funcionando enquanto estivesse ausente.
+
+Fica autorizada uma segunda e última onda, limitada exclusivamente a esses blockers reproduzidos e aos seus testes. Não há terceira onda: blocker residual volta a `PAUSED_DIAGNOSTIC` e mantém a ativação live proibida.
+
 ## Fora de escopo
 
 - Windows, PowerShell e chezmoi;

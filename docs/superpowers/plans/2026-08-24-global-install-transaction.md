@@ -15,7 +15,7 @@
 - Cada task recebe `TaskContract` e dispatch duráveis em `.soma/runs/run-260824-global-install-transaction/` antes do agente iniciar.
 - Cada executor grava receipt com commits, paths, comandos e resultados. O orquestrador só despacha, integra e verifica.
 - RED precisa ser commitado antes de produção. GREEN fica em commit separado.
-- Uma revisão integrada de spec e uma revisão de qualidade/crash após Task 4. No máximo uma onda de correção.
+- Uma revisão integrada de spec e uma revisão de qualidade/crash após Task 4. A Emenda A-026-01 autoriza uma segunda e última onda somente para blockers novos descobertos na primeira revalidação.
 - Falha repetida, conflito de ownership ou rollback não comprovado termina em `PAUSED_DIAGNOSTIC`; nenhuma mutação live é autorizada.
 
 ### Task 1: Fixar a raiz do ledger sem quebrar a Spec 018
@@ -285,4 +285,4 @@ Registrar source commit, receipts, comandos, resultados, backup/quarantine e est
 - Não existe Windows, chezmoi, daemon, dependência externa ou segundo writer de `kind:"file"`.
 - Adoção perigosa depende de journal PREPARED ativo; `--force-overwrite` não libera target antigo divergente.
 - Crash sem trap é recuperado por outro processo; dry-run nunca recupera nem escreve.
-- O caminho crítico é sequencial e usa quatro tasks de implementação, dois reviewers e no máximo uma correção.
+- O caminho crítico é sequencial e usa quatro tasks de implementação, dois reviewers e, pela Emenda A-026-01, no máximo duas correções; a segunda fica restrita à autoridade do journal e barreiras de durabilidade.
