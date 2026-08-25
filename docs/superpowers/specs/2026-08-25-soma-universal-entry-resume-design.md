@@ -1,448 +1,406 @@
 # SOMA universal entry and safe resume design
 
-**Status:** approved contract, implementation not started
+**Status:** REPLAN approved, implementation not started
 
 **Date:** 2026-08-25
 
-**Scope:** Claude `/soma-run`, internal CLI preflight, project adoption, safe resume, structured handoff, installation sync and current documentation
+**Scope:** Claude `/soma-run`, fixed internal CLI preflight, request broker, project adoption, safe resume, structured handoff, transactional installation and current documentation
 
-## Context
+## Evidence status
 
-The current system has two similarly named layers with different jobs:
+### Verified facts
 
-- `/soma-run` is a Claude command stored at `core/adapters/claude/commands/soma-run.md`. It is a prompt that describes the orchestration state machine. It does not consume `$ARGUMENTS`, so `--help`, `--status` and `--resume` reach Claude as unclassified text.
-- `soma run` is an internal CLI family implemented by `core/scripts/run.cjs` and `core/scripts/run/*.cjs`. Its verbs persist state, reports and dispatch records, enforce gates and compute a read-only reentry point.
+- The current Claude command is `core/adapters/claude/commands/soma-run.md`. It does not consume `$ARGUMENTS`, so it does not provide deterministic help, status or resume routing.
+- The installed CLI is `~/.soma-v2/scripts/soma.cjs`. The current contract has no required `soma` executable on `PATH`.
+- Existing `soma run` primitives live in `core/scripts/run.cjs` and `core/scripts/run/*.cjs`; project installation and global installation have separate state.
+- The repository requires Node 22 or newer. The checked Node 22.15.0 runtime exposes the built-in `node:test` JUnit reporter.
+- This repository does not define a trustworthy Claude Code session identifier. That fact does not prove whether the host product exposes one at runtime.
+- The inherited spec 024 failure is present before this feature and remains outside this scope.
 
-The global installer already copies the adapter and the complete `core/` tree transactionally. The real installed CLI is `~/.soma-v2/scripts/soma.cjs`; a `soma` shell shim is not part of that contract. Project installation is separate and writes `<project>/.soma/install-state.json`.
+### Decisions
 
-The current resume primitive is read-only and evidence-based, but it only returns `reentry` and `last_pass`. It assumes the caller is already in the correct project. The current `/handoff` command can emit prose outside the project and cannot prove the repo, SHA, dirty files, tasks, evidence or closed agents to a later session.
+- `/soma-run` remains the only public command for starting or resuming project-changing work.
+- One `soma-entry-request/v1` envelope carries every mode. No objective, run ID, project, scope, handoff locator or digest crosses Bash as an argument or interpolated command fragment.
+- The adapter invokes only fixed `broker-prepare` and `broker-consume` CLI forms. A random capability returned by preparation is used only through structured tools.
+- Handoff contains durable facts and a canonical resume-inspection command. It contains no continuation digest or continue command.
+- Resume inspection computes `continuityDigest` after handoff publication. Continue recomputes it before any project lock or write.
+- Entry and adoption only report `baselineRequired`. The orchestrator creates the single logical `T-BASELINE` task after `READY`; an executor runs it through dispatch records.
 
-## Quality checklist
+### Hypothesis to falsify during implementation
 
-- One public user command for project-changing work.
-- No project write, lock creation or agent creation in help, status or resume inspection.
-- Explicit and testable repo and scope resolution, including monorepos.
-- Honest adoption that records observed facts without fabricating history.
-- A complete second `/soma-run --continue` invocation before a resumed run can mutate.
-- Machine-readable and human-readable continuation artifacts in the project.
-- No dependency on a shell shim or silent `cd`.
-- Compatibility with existing `soma run` primitives and transactional install.
+The Claude adapter can use a structured file-write tool with an exact path returned by fixed CLI preparation. Task 1 must prove that behavior in the real adapter harness. If Claude Code exposes a stable, unforgeable session channel, the broker binds to it. If it does not, the implementation must use the capability fallback below and must not synthesize a session ID from prompt text, cwd, timestamps or predictable process data.
 
-## Initial thesis and challenge
+## Context and revised thesis
 
-The initial thesis was to teach the existing `soma run` dispatcher to accept public objective, status and resume forms. That would keep all routing under one name.
+The public slash command and the internal `soma run` family have different jobs. Adding public workflow grammar to `soma run` would make its existing primitive grammar ambiguous. Letting the prompt improvise project resolution would leave start-from-home and resume behavior unsafe.
 
-The challenge falsified it. `soma run` already has a stable primitive grammar whose first token is one of `state`, `report`, `gate`, `resume` or `dispatch-record`. Making the same grammar also mean “start project work” would make `resume` ambiguous and would mix a user entry contract with low-level state transitions. An adapter-only fix also fails because a prompt cannot safely resolve a project started from `~`, and it would leave behavior dependent on Claude interpretation.
+The selected design keeps a thin adapter and adds a fixed internal controller:
 
-The revised thesis is a thin public adapter plus one internal preflight controller:
+1. The adapter classifies `$ARGUMENTS` without loading the long orchestration reference.
+2. It invokes a fixed preparation command that creates one short-lived broker slot outside the project.
+3. It writes a canonical request envelope to that slot with a structured tool. The slot path and random capability never enter Bash.
+4. It invokes a fixed consume command with no request values in argv.
+5. The CLI validates and consumes the request once. It resolves, inspects or adopts the project according to mode.
+6. The adapter loads the long orchestration reference only after `READY` or `CONTINUE_READY`.
 
-1. `/soma-run` is the only documented public entry for project-changing work.
-2. The adapter consumes `$ARGUMENTS`, classifies the public form, and calls the installed CLI by absolute path. It stays below 8,000 UTF-8 bytes and does not contain the 10-step state machine.
-3. `soma entry` is an internal machine preflight. It parses modes, resolves project and scope, adopts when required, and emits a deterministic JSON envelope.
-4. Existing `soma run` verbs remain internal orchestration primitives. New `checkpoint`, `handoff` and `baseline` verbs persist the evidence required by continuity.
-5. Claude orchestrates only after the preflight returns `READY`, or after a second slash command reaches the adapter and validates to `CONTINUE_READY`.
+Existing `soma run` verbs remain internal orchestration primitives. New baseline, checkpoint and handoff verbs add durable evidence without changing the public command.
 
 ## Alternatives considered
 
-### Adapter-only parsing
+### Direct flag forwarding
 
-This is the smallest textual change, but it leaves root selection, legacy adoption and resume safety as instructions that Claude may improvise. It does not provide a reusable test boundary. Rejected.
+Rejected. Status, resume and continue contain external paths and identifiers just as start contains external objective text. Validating a string before interpolating it does not close the shell boundary.
 
-### Dual-purpose `soma run`
+### Caller-selected request path
 
-This would add public forms alongside existing primitive verbs. It creates grammar collisions and turns a low-level API into a public workflow controller. Rejected.
+Rejected. A path accepted from the adapter arguments permits traversal, symlink substitution and cross-session reuse. The CLI must create and later rediscover the slot from its own broker state.
 
-### Thin adapter plus internal `soma entry`
+### Prompt or cwd as session identity
 
-This adds one focused CLI controller, reuses the installed absolute CLI path and leaves `soma run` compatible. It provides pure modules for argument parsing, project resolution and read-only card generation. Selected.
+Rejected. Neither is an authenticated session channel. The fallback is a random capability with a single live unbound lease, not an invented session ID.
 
-## Public contract
+### Digest stored in handoff
 
-The only documented public forms are:
+Rejected. Publishing the handoff changes the dirty tree and therefore changes continuity. A handoff that stores its own digest or continue command is stale or self-referential at creation.
+
+## Public grammar
+
+The documented user forms remain:
 
 ```text
 /soma-run "objective" [--project <path>] [--scope <path>]
-/soma-run --resume [runId] [--project <path>] [--scope <path>] [--handoff <path>]
-/soma-run --continue <runId> --project <path> --scope <path> --snapshot <sha256> [--handoff <path>]
 /soma-run --status [--project <path>] [--scope <path>]
+/soma-run --resume [runId] [--project <path>] [--scope <path>] [--handoff <path>]
+/soma-run --continue <runId> --project <path> --scope <path> --digest <sha256> [--handoff <generation>]
 /soma-run --help
 ```
 
-`/soma-run` must include `$ARGUMENTS`. Start requests never interpolate the objective into Bash. The adapter uses the structured Write tool to create a session-scoped `soma-entry-request/v1` JSON envelope, validates its schema and content hash, then invokes this fixed executable with only a path:
+These are slash-command forms, not shell commands. The adapter converts all five modes to `soma-entry-request/v1`. The only Bash invocations are fixed text:
 
 ```bash
-node "${SOMA_HOME:-$HOME/.soma-v2}/scripts/soma.cjs" entry --request-file "/tmp/soma-entry-requests/<sessionId>/<requestId>.json"
+node "${SOMA_HOME:-$HOME/.soma-v2}/scripts/soma.cjs" entry broker-prepare
+node "${SOMA_HOME:-$HOME/.soma-v2}/scripts/soma.cjs" entry broker-consume
 ```
 
-The request path is a regular file in an owner-only session directory; symlinks and paths outside that directory fail. The directory name, request filename, `sessionId` and `requestId` must agree, which lets the CLI validate session binding without another public flag. The adapter removes the request after preflight; it contains request data, never run evidence.
+No value derived from `$ARGUMENTS` is present in either invocation. The `soma` command on `PATH` is not required. `soma entry` remains an internal adapter API and is not documented as another workflow entry.
 
-Help, status, resume and continue use validated flags only. No user text becomes shell syntax. Objective tests include spaces, quotes, `$()`, backticks and a newline; none may execute.
+Unknown flags, conflicting modes, duplicate single-value flags, malformed run IDs and non-lowercase 64-hex digests fail in the adapter before preparation. The CLI repeats schema and semantic validation after consume. Normal whitespace may separate slash-command tokens, but values remain exact in the envelope.
 
-The `soma` command on `PATH` is never a prerequisite. `soma entry` is an internal adapter API and is not presented as another user workflow command.
+## Session-bound request broker
 
-The thin adapter handles parsing, preflight and mode routing. The single long orchestration source lives at `core/adapters/claude/references/soma-run-orchestration.md` and installs to `~/.claude/references/soma-run-orchestration.md`. Help, status and resume inspection return before that file is read. A start response of `READY`, or a continue response of `CONTINUE_READY`, authorizes one lazy read of the reference. No other repo file duplicates the state machine body.
+### Storage and preparation
 
-## Architecture
-
-### Entry parser
-
-`core/scripts/entry/args.cjs` parses exactly one mode:
-
-- `help`
-- `status`
-- `resume_inspect`
-- `continue`
-- `start`
-
-Unknown flags, conflicting modes, missing flag values, invalid run IDs and malformed snapshots return exit 2 before project discovery. Start accepts `--request-file` only; it validates `soma-entry-request/v1`, its session binding and SHA-256 before reading the objective. Continue requires run ID, project, scope and a lowercase 64-hex snapshot. `--handoff` is optional in the grammar but required when the inspected snapshot locator contains a handoff. CLI tokenization may contain normal whitespace between flags, but parsed values remain exact.
-
-### Project and scope resolver
-
-`core/scripts/entry/project.cjs` resolves paths without calling `process.chdir()`:
-
-1. An explicit `--project` or a validated handoff `repo.root` has priority.
-2. Otherwise the current Git top-level is used.
-3. Without Git, the canonical cwd is accepted as a new project when it is a real directory, is neither filesystem root nor home, and is empty or contains a recognized project marker such as `package.json`, `pyproject.toml`, `Cargo.toml`, `go.mod` or `.project`.
-4. A resume run ID may use a handoff locator only when that locator points to a valid `soma-handoff/v2` whose repo path still contains the same handoff.
-5. Any other cwd without an explicit project or handoff returns `PROJECT_UNRESOLVED`.
-
-The resolver returns both `repoRoot` and `scopeRoot`. In a monorepo, a nested scope is accepted only when it matches a declared workspace or an explicit `--scope`. The filesystem root, the user's home directory and a path outside `repoRoot` are rejected. Symlinks are resolved before containment checks.
-
-No mode performs a silent `cd`. Child processes receive an explicit `cwd`. Every read-only Git call sets `GIT_OPTIONAL_LOCKS=0` and invokes `git --no-optional-locks`; tests compare index bytes and mtime even when its stat cache is stale.
-
-### Project inspection and adoption
-
-`core/scripts/entry/adoption.cjs` classifies the observed project as `new`, `legacy`, `monorepo` or `installed`. `monorepo` describes structure; `adoption.previousState` records whether it was new or legacy.
-
-When `.soma/install-state.json` is complete, inspection is read-only. When `.soma` is absent, `start` performs adoption through the existing project install/init components, then atomically writes `.soma/adoption.json`. The record contains:
-
-- canonical repo and scope paths;
-- classification and detection reasons;
-- branch, HEAD and whether either is unavailable;
-- porcelain dirty entries with working-tree hashes where readable;
-- detected test command, budget classification and status `pending`, `not_run_budget` or `not_available`;
-- existing specs, plans, task files, manifests and handoffs found before adoption;
-- installed SOMA version and adoption timestamp.
-
-Adoption never edits application source. It may create SOMA metadata and the existing anchored project bootloader through the established install path. It never claims earlier SOMA steps, decisions or proofs. A second adoption with the same observed state is byte-stable. If the pre-existing `.soma` is partial, corrupt or drifted, adoption stops with a diagnostic instead of overwriting it.
-
-Adoption never executes a project script. It detects an argv array and records `pending` only when the command fits the baseline policy. Scripts that declare watch/dev/serve mode, Docker, browser E2E, integration infrastructure, or fan-out across more than eight workspaces are `not_run_budget`; missing commands are `not_available`. A pending baseline always creates synthetic task `T-BASELINE` before any FOUNDATION, wave or other task. `dispatch-record begin` rejects every other task until `.soma/evidence/<runId>/baseline.json` validates and its hash appears in run proofs. The `T-BASELINE` executor invokes `soma run baseline --run <runId> --dispatch <dispatchId>`. The primitive verifies that the dispatch is active, runs the recorded argv with 120 seconds, 256 KiB of stdout and 256 KiB of stderr, writes the proof and appends it to run continuity. `soma entry` never calls this primitive. Fail or timeout writes a diagnostic checkpoint and transitions to `PAUSED_DIAGNOSTIC`; no process cleans the working tree.
-
-### Run context and ceremony
-
-New runs keep `soma-state/v2` and add optional backward-compatible `entry` and `continuity` objects. Existing v2 files remain readable. `entry` stores objective, repo, scope, adoption snapshot and baseline. `continuity` contains append-only checkpoint references and proofs; task summaries, blocker, next decision and pause reason enter it only through `soma run checkpoint`.
-
-Small work may use a compressed specify, test, implement, validate and audit sequence. Work with multiple components, cross-package scope, migration, security, data, install or unclear blast radius uses the full SOMA sequence. This choice affects ceremony only. It never removes RED, focused GREEN, final validation or audit.
-
-Agents perform implementation. The orchestrator resolves state, records dispatches, validates reports and coordinates transitions.
-
-### Read-only status and resume
-
-`status` reads install state, adoption, run states, reports and handoffs. It does not initialize, migrate, repair, lock, touch timestamps or create directories.
-
-`resume_inspect` resolves an explicit run ID. If omitted, it selects the only non-terminal run in the resolved project. Zero or multiple candidates produce a diagnostic. It normalizes old v2 state in memory, reuses the evidence ordering from `run/resume.cjs`, and emits a short card containing:
-
-- project, repo root and scope;
-- branch and current SHA;
-- run ID and last safe state;
-- tasks and attempts;
-- dirty files and hashes;
-- proofs and their artifact hashes;
-- blocker and next action;
-- a complete copyable confirmation command containing run, resolved project, resolved scope, optional resolved handoff and snapshot.
-
-The snapshot is SHA-256 over canonical JSON containing exactly `run`, `locator`, `branch`, `headSha`, `dirty` and `proofs`. Canonicalization sorts object keys recursively, preserves array order, encodes UTF-8 and adds no trailing newline. The card prints:
+The broker root is outside every project. The CLI chooses an OS runtime directory owned by the current uid, preferring a verified owner-only runtime directory and otherwise a private directory under the platform temporary root. It creates this layout without following links:
 
 ```text
-/soma-run --continue <runId> --project "<repo>" --scope "<scope>" --snapshot <sha256>
+<runtime>/soma-entry/<uid>/<channel-or-unbound>/<capability>/
+  lease.json
+  request.json
 ```
 
-When inspection resolved a handoff, it appends `--handoff "<handoffPath>"`. This command is the human authorization. The second slash invocation reaches the thin adapter, which calls `entry --continue` using validated flags only. Before any lock or write, entry validates locator containment, reloads the same durable inputs, recalculates the canonical snapshot and compares it byte-for-byte. Mismatch returns `RESUME_DRIFT` and performs no mutation. Only a match may recreate the run lock, persist reentry and return `CONTINUE_READY`. No hook mutates resume state.
+Every directory is mode `0700`. Every file is a regular file created with exclusive creation, mode `0600` and no-follow semantics. `broker-prepare` generates at least 256 bits of randomness for `capability`, records creation and expiry, and returns the exact request path plus capability through structured stdout. It never reads the project.
 
-### Structured handoff
+If the host exposes a trustworthy session channel, the CLI derives the channel key from that host channel at both preparation and consumption. The adapter does not supply it. If no such channel exists, the CLI uses the literal `unbound` bucket and permits exactly one live lease for the uid. A concurrent preparation fails `BROKER_BUSY`; it never guesses which request belongs to which session.
 
-`soma run handoff --run <runId>` builds two siblings inside one immutable generation directory:
+The capability is the fallback authority. The adapter copies it into the envelope and writes only to the returned path through a structured tool. It never places the capability or path in Bash, environment overrides, command substitutions or shell redirections.
 
-```text
-.soma/handoffs/<runId>/<handoffId>/handoff.json
-.soma/handoffs/<runId>/<handoffId>/handoff.md
-```
+### Validation and one-time consumption
 
-The writer creates and validates both files in a sibling temporary directory, then publishes the generation with one directory rename. Existing generations are immutable. Resume chooses the newest schema-valid generation by `createdAt`, not a mutable pointer. The files are intentionally not ignored. The writer never stages, commits, pushes or otherwise changes the Git index. It reports each artifact as `tracked`, `modified`, `untracked` or `non_git`, so STEP_10 can make the normal commit decision. Project-resident atomic files survive sessions without contaminating an unrelated commit.
+`broker-consume` derives the same trusted channel or the single unbound lease. Before reading payload data it verifies:
 
-Before handoff, the orchestrator persists human-only pause data through one append-only primitive:
+- every ancestor stays under the canonical broker root;
+- directory and file owners equal the effective uid;
+- directory mode is exactly `0700` and file mode is exactly `0600`;
+- the request is one regular file opened with no-follow semantics;
+- capability, channel binding, request ID, mode, expiry, schema and canonical content hash agree with the lease;
+- size and string limits hold before JSON parsing completes;
+- the lease is live, unique and not already consumed.
 
-```text
-soma run checkpoint --run <runId> --input-file <checkpoint.json>
-```
+Consumption atomically changes the lease from `prepared` to `consuming` before project access. Replay, a second consumer or a second ready request fails closed. The CLI removes the capability directory in `finally` after success or error. SIGINT, SIGTERM and SIGHUP handlers request cancellation, run the same cleanup and then exit. Preparation also removes expired owned regular slots without following links. It never removes unknown-owner, linked or structurally invalid entries.
 
-The input validates as `soma-checkpoint/v1` and contains pause reason, blocker, next decision and task summary. The primitive writes an immutable `.soma/checkpoints/<runId>/<sequence>-<sha256>.json`, then appends its path and hash to `continuity.checkpoints[]` in run state. It never overwrites a checkpoint.
+The ephemeral request is the only filesystem effect allowed before a read-only mode completes, and it is outside the project. Help, status and resume inspection preserve project bytes and mtimes, Git index bytes and mtime, run state, locks and agent records. Rejected continue has the same zero-project-mutation rule.
 
-The JSON handoff is canonical. Markdown is derived from it and carries all information that restricts the next action inline. The writer reads only run state, the newest valid checkpoint, dispatch records and durable proofs. It derives task attempts and agent closure from `.soma/dispatches`: a prompt without output is active and blocks handoff; output plus valid metadata means closed; any partial or inconsistent combination is corrupt and blocks. The checkpoint task summary preserves the human pause description but cannot override dispatch-derived attempt, status or closure fields. Claude does not supply invisible task or agent state to the writer. Proof paths that are temporary, ignored, outside repo scope or path escapes block publication.
-
-The existing `/handoff` adapter has one routing rule. With an active SOMA run, resolved from explicit `--run` or a valid `.soma.lock`, it must call `soma run handoff` and may not write a second continuation ledger. Without an active run, it may keep the current general session handoff, but its header must mark `$schema: soma-handoff/legacy`, `resumable_by_soma_run: false`, and it must stay outside `.soma/handoffs/`. `/soma-run --resume` never treats a legacy handoff as run evidence.
-
-## State transitions
-
-```text
-HELP -> HELP_SHOWN
-STATUS -> PROJECT_RESOLVED -> STATUS_SHOWN
-
-START -> PROJECT_RESOLVED -> PROJECT_INSPECTED
-      -> ADOPTION_REQUIRED -> ADOPTING -> ADOPTED
-      -> RUN_INITIALIZED -> READY
-      -> BASELINE_PENDING -> T_BASELINE_DISPATCHED
-      -> BASELINE_PROVED -> SOMA_FLOW
-
-RESUME_INSPECT -> PROJECT_RESOLVED -> RUN_RESTORED_READ_ONLY
-               -> AWAITING_CONTINUE
-               -> second /soma-run --continue with locator + snapshot
-               -> RESUME_PREFLIGHT
-               -> CONTINUE_READY -> SOMA_FLOW
-
-RESUME_PREFLIGHT -> RESUME_DRIFT -> AWAITING_CONTINUE
-T_BASELINE_DISPATCHED -> BASELINE_DIAGNOSTIC -> PAUSED_DIAGNOSTIC
-```
-
-`HELP_SHOWN`, `STATUS_SHOWN`, `RUN_RESTORED_READ_ONLY`, `AWAITING_CONTINUE` and `RESUME_DRIFT` are non-mutating states. No agent may exist before `READY` or `CONTINUE_READY`.
-
-## Schemas
-
-### Entry request
+### Entry request schema
 
 ```json
 {
   "$schema": "soma-entry-request/v1",
-  "requestId": "entry-session-123-001",
-  "sessionId": "session-123",
+  "requestId": "random-128-bit-id",
+  "capability": "random-256-bit-secret",
+  "channelBinding": "trusted-channel-hash-or-unbound",
   "createdAt": "ISO-8601",
-  "objective": "literal user objective, including newlines",
-  "locator": {"project": "/abs/repo", "scope": "/abs/repo"},
+  "expiresAt": "ISO-8601",
+  "mode": "start|help|status|resume|continue",
+  "payload": {
+    "objective": "literal string or null",
+    "runId": "run-id or null",
+    "project": "/absolute/path or null",
+    "scope": "/absolute/path or null",
+    "handoff": "generation locator or null",
+    "continuityDigest": "lowercase-64-hex or null"
+  },
   "contentSha256": "sha256-of-canonical-fields-excluding-contentSha256"
 }
 ```
 
-The adapter writes this envelope with the structured Write tool. `entry --request-file` rejects schema, hash, session or locator mismatch before adoption or run initialization.
+The mode defines the allowed payload fields. Help requires every payload value to be null. Start requires an objective. Continue requires run ID, project, scope and digest. Status and resume accept only their documented locator fields. The CLI rejects surplus fields rather than ignoring them.
 
-### Resume snapshot
+## Project and scope resolution
+
+`core/scripts/entry/project.cjs` resolves paths without `process.chdir()`:
+
+1. A canonical project path from the validated envelope has priority.
+2. Otherwise the current Git top-level is used.
+3. Without Git, canonical cwd is a new project only if it is a real directory, is neither filesystem root nor home, and is empty or has a recognized marker.
+4. A handoff generation is accepted only if it resolves under the selected repo and validates as `soma-handoff/v2`.
+5. Anything else returns `PROJECT_UNRESOLVED`.
+
+The resolver returns canonical `repoRoot` and `scopeRoot`. A nested monorepo scope must be a declared workspace or an explicit contained scope. It rejects home, filesystem root, symlink escapes and paths outside the repo. Every child process receives an explicit cwd. Every read-only Git call sets `GIT_OPTIONAL_LOCKS=0` and invokes `git --no-optional-locks`.
+
+## Adoption and run readiness
+
+Inspection classifies `new`, `legacy`, `installed` and `monorepo` projects. `monorepo` describes structure; `previousState` records new or legacy status.
+
+Adoption records canonical repo and scope, detection reasons, branch, HEAD, dirty paths and hashes, existing artifacts, installed version and a detected baseline command. It never runs the command, edits application source, fabricates earlier SOMA progress or overwrites partial or corrupt `.soma` state. An unchanged second adoption is byte-stable.
+
+Entry returns `READY` with:
 
 ```json
 {
-  "run": {"id": "run-260825-1200-a1b2c3", "lastSafeState": "STEP_4_WAVES"},
-  "locator": {"project": "/abs/repo", "scope": "/abs/repo", "handoff": null},
-  "branch": "main",
-  "headSha": "40-hex-sha",
-  "dirty": [{"path": "src/a.js", "status": " M", "sha256": "64-hex-or-null"}],
-  "proofs": [{"path": ".soma/evidence/run/baseline.json", "sha256": "64-hex"}]
-}
-```
-
-The printed `--snapshot` value is SHA-256 of this canonical object.
-
-### Adoption
-
-```json
-{
-  "$schema": "soma-adoption/v1",
-  "project": {
-    "repoRoot": "/abs/repo",
-    "scopeRoot": "/abs/repo/packages/app",
-    "classification": "monorepo",
-    "previousState": "legacy",
-    "reasons": ["git-root", "package-workspaces"]
-  },
-  "git": {
-    "branch": "main",
-    "headSha": "40-hex-sha",
-    "dirty": [{"path": "src/a.js", "status": " M", "sha256": "64-hex-or-null"}]
-  },
+  "baselineRequired": true,
   "baseline": {
-    "command": ["npm", "test", "--", "--runInBand"],
+    "command": ["npm", "test"],
     "status": "pending",
-    "budget": {"timeoutMs": 120000, "maxOutputBytesPerStream": 262144},
-    "exitCode": null,
-    "capturedAt": "ISO-8601"
-  },
-  "existingArtifacts": ["docs/spec.md"],
-  "installedVersion": "2.3.0",
-  "adoptedAt": "ISO-8601"
-}
-```
-
-`branch`, `headSha`, `sha256`, `command` and `exitCode` may be null only when the corresponding facility is unavailable or pending. Adoption-time `baseline.status` is `pending`, `not_run_budget` or `not_available`; FOUNDATION proof status is `pass`, `fail` or `timeout`.
-
-### Handoff
-
-```json
-{
-  "$schema": "soma-handoff/v2",
-  "schemaVersion": 2,
-  "createdAt": "ISO-8601",
-  "repo": {
-    "root": "/abs/repo",
-    "scope": "/abs/repo",
-    "branch": "main",
-    "headSha": "40-hex-sha"
-  },
-  "dirty": {
-    "capturedAt": "ISO-8601",
-    "files": [{"path": "src/a.js", "status": " M", "worktreeSha256": "64-hex-or-null", "indexBlob": "40-hex-or-null"}]
-  },
-  "run": {
-    "id": "run-260825-1200-a1b2c3",
-    "step": "STEP_5_VALIDATE",
-    "lastSafeState": "STEP_4_WAVES",
-    "tasks": [{"id": "T-01", "status": "blocked", "attempt": 2}]
-  },
-  "proofs": [{"kind": "test", "command": "node --test test.cjs", "status": "fail", "exitCode": 1, "path": ".soma/evidence/run/test.json", "sha256": "64-hex"}],
-  "agents": {
-    "declared": [{"id": "worker-1", "role": "executor", "task": "T-01"}],
-    "closed": ["worker-1"],
-    "active": []
-  },
-  "pause": {
-    "reason": "correction exhausted",
-    "blocker": {"code": "TEST_FAILURE", "summary": "one focused test still fails", "evidenceRefs": [".soma/evidence/run/test.json"]},
-    "nextDecision": "accept a scope change or stop the run"
-  },
-  "resume": {
-    "command": "/soma-run --resume run-260825-1200-a1b2c3 --project /abs/repo",
-    "continueCommand": "/soma-run --continue run-260825-1200-a1b2c3 --project \"/abs/repo\" --scope \"/abs/repo\" --snapshot 64-hex",
-    "snapshot": "64-hex"
-  },
-  "artifacts": {
-    "jsonTracking": "untracked",
-    "markdownTracking": "untracked"
+    "budget": {"timeoutMs": 120000, "maxOutputBytesPerStream": 262144}
   }
 }
 ```
 
-### Checkpoint
+Entry and adoption do not create a task or dispatch record. After `READY`, the orchestrator creates exactly one logical task named `T-BASELINE`, records its dispatch before every other task and assigns it to an executor. Attempts remain records under that one task. The executor invokes the internal baseline primitive. `dispatch-record begin` rejects another task while a required baseline lacks a valid proof, rejects a duplicate live `T-BASELINE`, and preserves the normal two-attempt envelope.
+
+The executor runs the recorded argv in the explicit scope cwd with the time and output limits. Pass records a hashed proof. Fail or timeout records the proof and diagnostic checkpoint, then transitions to `PAUSED_DIAGNOSTIC` without cleaning the working tree. Do not call this task FOUNDATION.
+
+## Checkpoint publication and orphan recovery
+
+The checkpoint input contains run ID, step, pause reason, blocker, next decision and task summaries. The primitive canonicalizes semantic content and computes its SHA-256 before choosing storage.
+
+Under the run mutation lock, checkpoint uses this transaction:
+
+1. Read the authoritative checkpoint references from run state and compute the next sequence.
+2. If that content hash is already referenced, return the referenced checkpoint unchanged.
+3. Look only for an unreferenced regular checkpoint at the expected sequence with the same content hash. Validate owner, mode, schema, run ID, bytes and hash. Reuse it if valid.
+4. Otherwise write and fsync a sibling temporary file, validate it and rename it to `.soma/checkpoints/<runId>/<sequence>-<contentSha256>.json` without overwrite.
+5. Atomically replace run state with one new `{sequence,path,sha256}` reference.
+6. Release the lock.
+
+Only state-referenced checkpoints are authoritative. A crash after step 4 and before step 5 leaves an orphan. Retrying the identical payload may reuse that exact valid orphan and then reference it. A different hash, sequence, owner, mode or schema is never selected implicitly and never influences handoff or continuity. The operation is idempotent by content hash.
+
+## Handoff publication
+
+The internal handoff primitive reads only authoritative run state, the selected referenced checkpoint, dispatch records and durable proofs. It derives task attempts and agent closure from dispatch records. A prompt without a completed record is active and blocks publication; missing or contradictory components are corrupt and also block.
+
+It validates canonical JSON and derived Markdown in a sibling temporary generation, then publishes one immutable directory rename:
+
+```text
+.soma/handoffs/<runId>/<generationId>/handoff.json
+.soma/handoffs/<runId>/<generationId>/handoff.md
+```
+
+Handoff contains repo, scope, branch, HEAD, dirty facts observed before publication, run and last safe state, selected checkpoint facts, task summaries and attempts, ordered proofs, blocker, next decision, declared and closed agents, and this inspection command:
+
+```text
+/soma-run --resume <runId>
+```
+
+It contains no digest, snapshot or continue command. It also does not try to store the post-publication tracking state of its own files. The CLI reports tracking status after publication as command output. It never stages, commits, pushes or changes the Git index.
+
+The existing `/handoff` adapter routes an active SOMA run to checkpoint followed by handoff. Without an active SOMA run it may retain the legacy session handoff, marked non-resumable and stored outside `.soma/handoffs/`.
+
+## Resume inspection and continuity digest
+
+Resume inspection selects an explicit run or the only non-terminal run. When a handoff is used, it selects the newest schema-valid immutable generation by `createdAt`, breaking ties by UTF-8 byte order of generation ID. It rejects inconsistent JSON/Markdown pairs.
+
+Only after the handoff generation exists, resume inspection rereads all durable facts and the complete current dirty tree. The handoff generation and both handoff files therefore appear in continuity normally. Handoff never contains its own digest.
+
+The digest input has schema `soma-continuity/v1` and these fields:
 
 ```json
 {
-  "$schema": "soma-checkpoint/v1",
-  "runId": "run-260825-1200-a1b2c3",
-  "createdAt": "ISO-8601",
-  "step": "STEP_5_VALIDATE",
-  "pauseReason": "correction exhausted",
-  "blocker": {"code": "TEST_FAILURE", "summary": "focused test fails", "evidenceRefs": [".soma/evidence/run/test.json"]},
-  "nextDecision": "approve scope change or stop",
-  "tasks": [{"id": "T-01", "status": "blocked", "attempt": 2}]
+  "$schema": "soma-continuity/v1",
+  "run": {"id": "run-id", "lastSafeState": "STEP_5_VALIDATE", "stateSha256": "64-hex"},
+  "locator": {
+    "repoRoot": "/canonical/repo",
+    "scopeRoot": "/canonical/repo/package",
+    "handoff": {"generationId": "id", "jsonSha256": "64-hex", "markdownSha256": "64-hex"}
+  },
+  "git": {"branch": "main-or-null", "headSha": "git-id-or-null"},
+  "dirty": [{"path": ".soma/handoffs/run/id/handoff.json", "status": "??", "worktreeSha256": "64-hex-or-null", "indexSha256": "64-hex-or-null"}],
+  "checkpoint": {"sequence": 3, "path": ".soma/checkpoints/run/3-hash.json", "sha256": "64-hex"},
+  "dispatches": [{"taskId": "T-01", "attempt": 1, "status": "done", "executor": "worker-1", "baseSha": "git-id", "promptSha256": "64-hex", "metadataSha256": "64-hex", "outputSha256": "64-hex"}],
+  "proofs": [{"kind": "test", "path": ".soma/evidence/run/test.json", "status": "fail", "sha256": "64-hex"}],
+  "pause": {"blocker": {"code": "TEST_FAILURE", "summary": "focused test fails", "evidenceRefs": [".soma/evidence/run/test.json"]}, "nextDecision": "approve scope change or stop"},
+  "tasks": [{"id": "T-01", "summary": "focused correction", "status": "blocked", "attempts": 2}],
+  "agents": {"declared": ["worker-1"], "closed": ["worker-1"], "active": []}
 }
 ```
 
+If no handoff or checkpoint applies, the field is explicit `null`. The digest never omits a category because it is empty.
+
+### Canonicalization and ordering
+
+- Paths are canonical repo-relative POSIX strings where they are inside the repo; repo and scope roots are canonical absolute paths.
+- Hashes are lowercase hex over exact file bytes. Null means the file or Git value is genuinely unavailable, not unread.
+- Dirty entries sort by UTF-8 bytes of path, then status. Each includes both worktree and staged-content SHA-256 when present.
+- Checkpoint selection comes only from the latest valid state reference by numeric sequence. Orphans are ignored.
+- Dispatches sort by UTF-8 task ID, then numeric attempt. Status is derived from the component set. Prompt, metadata and output hashes are separate; absent output is explicit null.
+- Proofs sort by UTF-8 kind, then path, then hash. Their status is copied from validated proof content.
+- Task summaries sort by UTF-8 task ID. Agent ID arrays sort by UTF-8 bytes and contain no duplicates.
+- Blocker keys and evidence references are normalized and sorted. `nextDecision` remains exact UTF-8 text.
+- Objects serialize with keys in UTF-8 byte order. Domain arrays use the orders above. Integers use base-10 JSON numbers, strings are preserved byte-for-byte after valid UTF-8 decoding, nulls remain explicit, and output has no insignificant whitespace or trailing newline.
+
+`continuityDigest` is SHA-256 of those canonical bytes. Resume inspection prints a short card and a complete second slash invocation:
+
+```text
+/soma-run --continue <runId> --project "<repo>" --scope "<scope>" --digest <continuityDigest> --handoff "<generationId>"
+```
+
+The adapter places those values in a new structured envelope. Continue resolves the same locator, reloads every digest input, recalculates canonical bytes and compares the lowercase digest before any project lock, run-state write or agent creation. Any changed item returns `RESUME_DRIFT` with zero project mutation.
+
+## Lazy orchestration and state transitions
+
+The single long orchestration source lives at `core/adapters/claude/references/soma-run-orchestration.md` and installs transactionally with the adapter. Help, status and resume inspection never read it and never create agents. Start reads it once after `READY`. Continue reads it once after `CONTINUE_READY`.
+
+```text
+HELP -> BROKER_PREPARED -> REQUEST_CONSUMED -> HELP_SHOWN
+STATUS -> BROKER_PREPARED -> REQUEST_CONSUMED -> PROJECT_RESOLVED -> STATUS_SHOWN
+START -> BROKER_PREPARED -> REQUEST_CONSUMED -> PROJECT_RESOLVED
+      -> PROJECT_INSPECTED -> ADOPTION_IF_REQUIRED -> RUN_INITIALIZED -> READY
+      -> ORCHESTRATOR_CREATES_T_BASELINE_IF_REQUIRED -> EXECUTOR_RUNS_BASELINE
+      -> SOMA_FLOW
+RESUME -> BROKER_PREPARED -> REQUEST_CONSUMED -> PROJECT_RESOLVED
+       -> RUN_RESTORED_READ_ONLY -> DIGEST_COMPUTED -> AWAITING_CONTINUE
+CONTINUE -> BROKER_PREPARED -> REQUEST_CONSUMED -> DIGEST_RECOMPUTED
+         -> RESUME_DRIFT | CONTINUE_READY -> SOMA_FLOW
+```
+
+Broker preparation and cleanup may touch only the external broker. `HELP_SHOWN`, `STATUS_SHOWN`, `RUN_RESTORED_READ_ONLY`, `AWAITING_CONTINUE` and `RESUME_DRIFT` are non-mutating with respect to project, Git and run state. No agent exists before `READY` or `CONTINUE_READY`.
+
 ## Invariants
 
-1. `/soma-run` is the only documented public command that starts or resumes project mutation.
-2. Help, status and resume inspection cause zero filesystem, Git, process-lock and agent mutation; read-only Git disables optional locks.
-3. Every mutating child process receives an explicit validated `cwd`.
-4. Home, filesystem root, unresolved paths and ambiguous monorepo scopes fail closed.
-5. Adoption writes SOMA metadata only, never executes project scripts and never invents completed steps, history or evidence.
-6. Resume evidence comes from durable reports and handoff data. Prose never upgrades a failed or absent proof to pass.
-7. No resume mutation or agent creation occurs before a complete second slash command and a matching canonical snapshot.
-8. JSON handoff validates before its generation directory publishes. Markdown derives from the same state, checkpoint, dispatch and proof snapshot.
-9. Handoff artifacts do not live in temporary or ignored paths, and the writer does not mutate the Git index.
-10. Existing project install and global install ownership remain separate.
-11. Installed adapter and core CLI update in the same existing global transaction.
-12. Normal `/soma-run "objective"` behavior remains available after adding flags.
-13. A pending baseline dispatches as `T-BASELINE` before every other task; dispatch-record enforces the order.
-14. Pause data enters continuity only through immutable checkpoint files referenced by append-only state entries.
+1. `/soma-run` is the only public entry for start and resume.
+2. Every mode uses `soma-entry-request/v1`; external values never appear in Bash argv or interpolation.
+3. The CLI chooses broker storage. No caller-selected request path exists.
+4. Broker requests are owner-only, no-follow, session-channel or capability bound, one-time and cleaned in `finally`.
+5. Help, status and resume inspection mutate only the external ephemeral broker.
+6. No mode silently changes cwd. Every child process receives an explicit validated cwd.
+7. Adoption never executes project scripts or invents history.
+8. Entry returns baseline facts but never creates or dispatches `T-BASELINE`.
+9. The orchestrator creates one logical `T-BASELINE` after `READY`; an agent executes it through dispatch records before any other task.
+10. Only state-referenced checkpoints are authoritative; identical orphan reuse is the sole recovery exception.
+11. Handoff contains no continuity digest or continue command.
+12. Continuity is calculated after handoff publication and includes every durable decision input plus the resulting dirty tree.
+13. Continue validates continuity before any project lock or write.
+14. Handoff and resume never use ignored, temporary, escaped or external proof paths.
+15. Global installation updates or rolls back adapter, reference and CLI together.
+16. No plugin, daemon, hook, PATH shim, public alias or silent third attempt is added.
 
 ## Failure modes
 
 | Failure | Required result |
 |---|---|
-| Unknown or conflicting flags | `INVALID_ENTRY_ARGS`, exit 2, no project access |
-| Malformed, stale or hash-mismatched entry request | `INVALID_ENTRY_REQUEST`, no objective execution or project mutation |
-| Started from `~` without project or handoff | `PROJECT_UNRESOLVED`, no `cd`, no write |
-| Explicit path outside allowed repo scope | `PROJECT_SCOPE_INVALID`, no write |
-| Monorepo scope not declared or ambiguous | `MONOREPO_SCOPE_AMBIGUOUS`, show valid scopes |
-| Partial, corrupt or drifted `.soma` | `ADOPTION_BLOCKED`, preserve bytes |
-| Test baseline unavailable | record `not_available`, do not fabricate pass |
-| Test baseline exceeds policy before execution | record `not_run_budget`; do not execute it during adoption |
-| FOUNDATION baseline exceeds runtime budget | executor stops it at 120 seconds or output limit and persists `timeout` proof |
-| Missing resume run | `NO_SUCH_RUN`, read-only |
-| Multiple runs and omitted run ID | `RUN_AMBIGUOUS`, list IDs, read-only |
-| State/report disagreement | report warning and trust latest durable report |
-| Locator, branch, SHA, dirty or proof hash changed after card | `RESUME_DRIFT`, no mutation |
-| Snapshot is absent, uppercase, malformed or different | `INVALID_ENTRY_ARGS` or `RESUME_DRIFT`, no mutation |
-| Baseline is pending and another task dispatches | `BASELINE_REQUIRED`, no dispatch record or agent |
-| Active or corrupt dispatch exists at handoff | `HANDOFF_ACTIVE_DISPATCH` or `CORRUPT_DISPATCH_RECORD`, no generation |
-| Temporary, ignored, escaped or external proof | `HANDOFF_NOT_DURABLE`, no generation |
-| Handoff pair or schema mismatch | `CORRUPT_HANDOFF`, no resume |
-| Installed core missing | diagnostic names `~/.soma-v2/scripts/soma.cjs`; never suggest a nonexistent shim |
+| Unknown, conflicting or malformed slash args | `INVALID_ENTRY_ARGS`; no broker or project access |
+| Traversal, symlink, wrong owner/mode or schema/hash mismatch in broker | `INVALID_ENTRY_REQUEST`; no project access |
+| Replayed or concurrently consumed capability | `REQUEST_ALREADY_CONSUMED` or `BROKER_BUSY`; no project access |
+| Signal or error during consume | owned capability directory removed by `finally`; project result remains atomic |
+| Started from home without a valid project locator | `PROJECT_UNRESOLVED`; no silent cwd or project write |
+| Partial, corrupt or drifted `.soma` | `ADOPTION_BLOCKED`; preserve bytes |
+| Baseline task omitted or another task starts first | `BASELINE_REQUIRED`; no dispatch record for that task |
+| Duplicate live logical baseline task | `BASELINE_ALREADY_ACTIVE`; no second logical task |
+| Crash after checkpoint publish but before state update | orphan remains non-authoritative; identical retry may reference it |
+| Different checkpoint orphan exists | ignore it; never select it implicitly |
+| Active or corrupt dispatch at handoff | `HANDOFF_ACTIVE_DISPATCH` or `CORRUPT_DISPATCH_RECORD`; no generation |
+| Handoff contains non-durable proof | `HANDOFF_NOT_DURABLE`; no generation |
+| Handoff is edited or dirty/checkpoint/dispatch/proof/task/agent facts drift | `RESUME_DRIFT`; no lock, write or agent |
+| Installed core missing | diagnostic names the absolute installed CLI; no shim suggestion |
+
+## Challenge pass and falsifiers
+
+| Boundary | Counterexample | Required test |
+|---|---|---|
+| Shell | Project path is ``/tmp/x$(touch sentinel)`` and objective contains quotes, backticks and newline | All modes round-trip through the envelope; fixed Bash strings remain byte-identical and sentinel stays absent |
+| Broker | A second consumer races the first while `request.json` is replaced by a symlink | Exactly one regular owned request can enter `consuming`; both traversal and symlink attempts fail, and no residual slot remains |
+| Handoff and digest | Digest is calculated before publishing handoff, then publication adds two dirty files | Pre-publication digest is rejected; post-publication digest includes generation hashes and both dirty files, then succeeds until any fact changes |
+| Checkpoint | Process fails after checkpoint rename and before state replacement | Orphan is ignored by reads; identical retry reuses and references it; different orphan hash remains ignored |
+| Baseline | Entry returns `baselineRequired`, but orchestrator tries `T-01` first or creates two baseline tasks | Gate rejects `T-01` and the duplicate; one recorded `T-BASELINE` runs through an executor before all other tasks |
 
 ## Compatibility and migration
 
-- Keep every existing `soma run` verb and CLI form. Add `baseline`, `checkpoint` and `handoff`; do not rename `resume` or change `--run` for the primitive.
-- Read old `soma-state/v2` without rewriting it in status or resume. Optional fields appear only on new writes or post-confirmation updates.
-- Keep project install at `<project>/.soma/install-state.json` and global install at `~/.soma-v2/.soma/install-state.json`.
-- Update the existing Claude `kind:"file"` target. Do not add a Claude plugin or `/soma:run` alias.
-- Install the orchestration reference as one `kind:"file"` target. The adapter and reference must update or roll back in the same global transaction.
-- Run global transaction tests to prove the adapter, reference, entry, baseline, checkpoint, handoff, manifests and targets update together and rollback together.
-- Replace current documentation references to `/soma:run` with `/soma-run`. Historical specs remain historical evidence and are not rewritten.
-- Update architecture documentation that still claims run state lives only under a temporary directory.
-- The branch inherits the planned RED from spec 024 for missing `operator-gate.cjs` through commits `1cbebb4` and `b3a4997`. Before implementation, Task 0 runs the full suite in an immutable worktree at the exact docs-only candidate SHA and persists the structured failure set. The final delta may not add a failure. Implementing spec 024 is outside this scope.
+- Preserve all current internal `soma run` forms. Add baseline, checkpoint and handoff without renaming existing primitives.
+- Read old `soma-state/v2` in memory. Status and resume do not rewrite it.
+- Keep project install state under the project and global install state under `~/.soma-v2`.
+- Install the adapter and single long reference through existing `kind:"file"` targets and the existing global transaction.
+- Update current user docs to `/soma-run`; do not rewrite historical specs or snapshots.
+- Preserve the inherited spec 024 RED. The implementation baseline uses structured `node:test` events or the verified Node 22 JUnit reporter, never TAP ordinals or indentation.
+- Baseline capture and final comparison remove detached worktrees and temporary reporter files through `trap` or `finally`, including test failure and interruption.
 
 ## Acceptance criteria
 
-### AC-01: Public parsing is deterministic
+### AC-01: One structured envelope covers every mode
 
-Given each supported `/soma-run` form, when the adapter and entry parser receive it, then help, status, resume, continue and request-file start select one mode, while unknown or conflicting input fails before project discovery. Objectives containing spaces, quotes, `$()`, backticks and newline round-trip through `soma-entry-request/v1` without becoming commands.
+Start, help, status, resume and continue produce valid mode-specific `soma-entry-request/v1` envelopes. No external value appears in either fixed Bash invocation. Hostile values remain data and execute nothing.
 
-### AC-02: Help and status are read-only
+### AC-02: Broker binding and cleanup fail closed
 
-Given a stale Git stat cache and a filesystem snapshot, when `--help`, `--status` or `--resume` inspection runs, then Git receives `GIT_OPTIONAL_LOCKS=0` plus `--no-optional-locks`, and index bytes, index mtime, project bytes, locks and agent records remain identical.
+Preparation and consumption enforce canonical containment, owner, mode, regular-file no-follow access, capability, trusted channel when available, schema, hash, expiry and one-time state. Traversal, symlink, replay, concurrency, signal and residual-file tests cause no project access and leave no owned live slot.
 
-### AC-03: Resume requires an exact handshake
+### AC-03: Read-only modes preserve project state
 
-Given a resumable run, when `--resume` runs, then it emits the required card and creates no file, lock or agent. Only the complete printed `/soma-run --continue` command with resolved locator and exact snapshot permits a mutating preflight.
+Help, status and resume inspection may create and remove only the external broker request. Project bytes and mtimes, Git index bytes and mtime, run state, locks and agent records remain identical. Read-only Git disables optional locks.
 
-### AC-04: Resume detects drift
+### AC-04: Project and scope resolution fail closed
 
-Given a card followed by a locator, branch, SHA, dirty-file or proof-hash change, when the second slash command arrives, then entry recalculates the canonical snapshot, returns `RESUME_DRIFT` and performs no mutation.
+New, legacy, installed and monorepo projects resolve without `chdir`. Home, root, ambiguity, containment failures and symlink escapes stop before project mutation.
 
-### AC-05: Adoption covers new and legacy projects
+### AC-05: Adoption is honest and idempotent
 
-Given an empty or marker-bearing non-home directory without Git, or a legacy Git project without `.soma`, when a normal objective starts, then adoption records classification, paths, branch, HEAD, dirty state, a pending or budget-classified baseline and existing artifacts without executing project scripts, modifying application source or inventing history.
+Adoption records observed repo, scope, Git, dirty, artifact and baseline facts without running a script or editing application code. Repeat input is byte-stable; partial or corrupt SOMA state blocks.
 
-### AC-06: Adoption is idempotent and fail-closed
+### AC-06: Baseline ownership is unambiguous
 
-Given an unchanged adopted project, when start runs again, then adoption bytes do not change. Partial, corrupt or drifted SOMA state blocks without overwrite.
+Entry returns `baselineRequired` and detected facts only. After `READY`, the orchestrator creates one logical `T-BASELINE`; its executor and dispatch record precede every other task. Failure or timeout pauses diagnostically without cleanup.
 
-### AC-07: CWD and monorepo scope are protected
+### AC-07: Checkpoint recovery is transactional
 
-Given a session in home, an invalid nested path or ambiguous workspace, when entry resolves the project, then it stops with a readable diagnostic. Explicit valid repo and workspace paths succeed without silent `cd`.
+Checkpoint publication is idempotent by semantic content hash. Only state references are authoritative. A valid same-hash orphan at the expected sequence may be reused on retry; no different orphan is selected.
 
-### AC-08: Handoff is structured and durable
+### AC-08: Handoff is durable and non-self-referential
 
-Given a paused run with a valid checkpoint, when handoff is emitted, then validated JSON and derived Markdown contain repo, branch, SHA, dirty hashes, run, derived task attempts, durable proofs, dispatch-derived closed agents, pause reason, blocker, next decision, Git tracking status and canonical resume command. Active or corrupt dispatches and temporary, ignored, escaped or external proofs block publication. The Git index remains byte-identical.
+Handoff JSON and Markdown derive from state-referenced checkpoint, dispatches and durable proofs, publish atomically and contain only durable facts plus `/soma-run --resume <runId>`. They contain no digest or continue command and never change the Git index.
 
-### AC-09: Install and live sync stay transactional
+### AC-09: Continuity covers every restricting input
 
-Given global install from any worktree, when the changed adapter, orchestration reference and CLI are activated, then all match the candidate source and share the existing transaction. Fault injection restores every pre-state.
+The canonical digest includes run state, repo, scope, handoff generation and pair hashes, branch, HEAD, full dirty state, selected checkpoint, dispatch component hashes, proofs, blocker, next decision, task summaries and attempts, and agent closure with the specified ordering and null rules.
 
-### AC-10: Normal command regresses neither behavior nor ceremony
+### AC-10: Resume handshake detects all drift
 
-Given `/soma-run "objective"` in an installed project, when preflight succeeds, then the run reaches `READY`, lazy-loads the orchestration reference, chooses compressed or full ceremony from declared risk, and delegates the pending baseline plus all project mutation to agents.
+Resume inspection computes continuity only after handoff publication and prints a complete second slash command. Continue receives a new envelope, rereads every input and returns `RESUME_DRIFT` before lock or write if any input changes.
 
-### AC-11: Current documentation uses the canonical name
+### AC-11: Lazy loading and agent timing remain bounded
 
-Given current README and user documentation, when scanned outside historical specs and snapshots, then `/soma:run` has zero occurrences and `/soma-run` is documented as the public entry.
+The adapter stays at most 8,000 UTF-8 bytes. Help, status and resume do not read the long reference or create agents. Start and continue read it once only after `READY` or `CONTINUE_READY`.
 
-### AC-12: Scope stays bounded
+### AC-12: Installation remains transactional
 
-The implementation adds no Claude plugin, daemon, hook, external dependency, PATH shim, automatic third attempt, application-code adoption write or rewrite of historical specs.
+Adapter, orchestration reference, broker, entry, baseline, checkpoint, handoff, continuity modules and changed targets activate together. Fault injection restores every previous byte.
 
-### AC-13: The long state machine loads lazily within budget
+### AC-13: Current docs use the canonical command
 
-Given help, status or resume inspection, when `/soma-run` routes the request, then the adapter is at most 8,000 UTF-8 bytes and does not read the orchestration reference. Given `READY` or `CONTINUE_READY`, it reads the single installed reference before orchestration. The reference has one repo source and updates transactionally with the adapter.
+Current README and user docs use `/soma-run`, document broker-backed envelopes and the two-step resume, and make no claim that inspection mutates project state.
 
-### AC-14: Pending baseline blocks all other dispatches
+### AC-14: Scope stays bounded
 
-Given adoption baseline status `pending`, when orchestration begins, then synthetic `T-BASELINE` is the first dispatch regardless of planned FOUNDATION tasks. `dispatch-record begin` rejects every other task until a valid hashed baseline proof exists. Fail or timeout persists a diagnostic checkpoint and pauses without cleaning the tree.
+The feature adds no plugin, daemon, hook, external dependency, PATH shim, public alias, adoption-time script execution, automatic stage or historical-spec rewrite. It does not implement spec 024.
 
-### AC-15: Checkpoint and dispatch records are the handoff source
+### AC-15: Structured baseline comparison is deterministic
 
-Given pause data and dispatch attempts, when `soma run checkpoint` and then handoff run, then checkpoint appends an immutable validated artifact, handoff derives task attempts and closed agents from durable records, and no invisible Claude state enters the output.
+The pre-implementation and final full-suite runs use a stable `node:test` event or JUnit representation that preserves full test name, source file, normalized error and artifact hashes. Cleanup runs on pass, failure and signal. The final failure identity set adds nothing beyond the pinned baseline.
