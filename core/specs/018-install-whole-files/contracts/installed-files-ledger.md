@@ -2,12 +2,19 @@
 
 **Contract ID:** CONTRACT-FILES-LEDGER-02
 **Serve:** `[SPEC:AC-03]` `[SPEC:AC-04]` `[SPEC:AC-06]` `[SPEC:AC-07]` `[SPEC:AC-08]` `[SPEC:AC-09]` `[SPEC:AC-10]`
+**Qualified by:** `[SPEC-026:AC-01]` `[SPEC-026:AC-02]`
 
 ---
 
 ## Artifact Path
 
-`{projeto}/.soma/install-state.json`, campo `installedFiles`.
+Por default, `{projeto}/.soma/install-state.json`, campo `installedFiles`.
+
+A Spec 026 adiciona uma única exceção: para targets da instalação global,
+`sync.cjs` recebe `--ledger-root=<raiz absoluta>` e usa
+`<raiz>/.soma/install-state.json`. Sem a flag, o default continua sendo
+`process.cwd()`, que é o projeto. O ledger global não é fallback nem cópia do
+ledger de projeto. Não há busca, migração ou sincronização entre os dois.
 
 ⚠️ **Este arquivo não existe em lugar nenhum hoje** — nem no repo, nem em `~/.soma-v2`. Medido em 2026-08-17. O caminho "primeira instalação" é o **comum**, não a exceção, e é o que o AC-10 governa.
 
@@ -105,9 +112,11 @@ Medido:
 
 **São dois arquivos diferentes.** Se ficar assim, o `install` grava num, o `sync` lê do outro, todo arquivo aparece como *"presente sem entrada no ledger"* → **divergido** → e a instalação aborta acusando arquivos perfeitos. Exit code de conflito, causa inexistente, e o usuário perseguindo um fantasma.
 
-**A regra, e ela é normativa para T-05 e T-09**: o ledger de arquivos vive em **`<projectPathAbs>/.soma/install-state.json`** — o mesmo arquivo, na mesma localização, que o `install.cjs` já usa para `blockIds` e os outros 7 campos de `ALLOWED_STATE_FIELDS`. Não existe segundo ledger.
+**A regra, e ela é normativa para T-05 e T-09**: sem raiz explícita, o ledger de arquivos vive em **`<projectPathAbs>/.soma/install-state.json`** — o mesmo arquivo, na mesma localização, que o `install.cjs` já usa para `blockIds` e os outros 7 campos de `ALLOWED_STATE_FIELDS`.
 
-**Consequência para o `sync.cjs`**: ele não tem noção de "projeto" na CLI — só `--soma-home`. Portanto, quando o `sync` precisar do ledger, o `projectPathAbs` chega até ele por `process.cwd()`, que é o que o `install.cjs` já define ao invocá-lo (`runStep(..., { cwd: projectPathAbs })`, `install.cjs:841`). **T-05 e T-09 conferem essa igualdade explicitamente**: um teste que roda os dois verbos e prova que escreveram e leram **o mesmo arquivo**, não dois.
+**Consequência para o `sync.cjs`**: no fluxo de projeto, o `projectPathAbs` chega por `process.cwd()`, que é o que o `install.cjs` já define ao invocá-lo (`runStep(..., { cwd: projectPathAbs })`, `install.cjs:841`). **T-05 e T-09 conferem essa igualdade explicitamente**: um teste que roda os dois verbos e prova que escreveram e leram **o mesmo arquivo**, não dois.
+
+**Exceção da Spec 026**: a instalação global passa `--ledger-root` explicitamente. Apply e dry-run recebem a mesma raiz absoluta e operam somente naquele ledger. Essa opção não muda o default de projeto, não consulta o ledger do `cwd` e não copia entradas entre domínios.
 
 ⚠️ **Como este defeito falharia sem o teste**: silenciosamente e com sintoma trocado. Nenhum teste de unidade de qualquer um dos lados o pega — cada um está certo sozinho.
 

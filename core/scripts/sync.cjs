@@ -8,8 +8,8 @@
  *   --apply    (Phase 4b): write anchored blocks + snapshot pre-write state
  *
  * Usage:
- *   node ~/.soma-v2/scripts/sync.cjs --dry-run [--json] [--verbose] [--soma-home=PATH] [--tool=ADAPTER]
- *   node ~/.soma-v2/scripts/sync.cjs --apply --tool=<codex|claude> [--json] [--soma-home=PATH] [--allow-local-edits]
+ *   node ~/.soma-v2/scripts/sync.cjs --dry-run [--json] [--verbose] [--soma-home=PATH] [--ledger-root=ABS] [--tool=ADAPTER]
+ *   node ~/.soma-v2/scripts/sync.cjs --apply --tool=<codex|claude> [--json] [--soma-home=PATH] [--ledger-root=ABS] [--allow-local-edits]
  *
  * Note: --tool is REQUIRED when --apply is used. Optional for --dry-run (scans all adapters when omitted).
  *
@@ -63,6 +63,7 @@ function parseArgs(argv) {
     json: false,
     verbose: false,
     somaHome: null,
+    ledgerRoot: null,
     tool: null,
     allowLocalEdits: false,  // BF-06: opt-in to warn-and-write; default OFF = abort on conflict
     targetsFile: null        // --targets-file=<path>: load adapter from explicit path, resolve relative target_path vs cwd
@@ -78,6 +79,10 @@ function parseArgs(argv) {
     else if (arg.startsWith('--soma-home=')) flags.somaHome = arg.slice('--soma-home='.length);
     else if (arg === '--soma-home' && i + 1 < argv.length && !argv[i + 1].startsWith('--')) {
       flags.somaHome = argv[++i];
+    }
+    else if (arg.startsWith('--ledger-root=')) flags.ledgerRoot = arg.slice('--ledger-root='.length);
+    else if (arg === '--ledger-root' && i + 1 < argv.length && !argv[i + 1].startsWith('--')) {
+      flags.ledgerRoot = argv[++i];
     }
     else if (arg.startsWith('--tool=')) flags.tool = arg.slice('--tool='.length);
     else if (arg === '--tool' && i + 1 < argv.length) flags.tool = argv[++i];
@@ -115,6 +120,15 @@ function parseArgs(argv) {
   }
 
   return { flags, errors };
+}
+
+function resolveLedgerRoot(flags) {
+  const root = flags.ledgerRoot || process.cwd();
+  if (!path.isAbsolute(root)) throw Object.assign(new Error('ledger root must be absolute'), { code: 'INVALID_ARGS' });
+  if (fs.existsSync(root) && fs.lstatSync(root).isSymbolicLink()) {
+    throw Object.assign(new Error('ledger root must not be a symlink'), { code: 'INVALID_ARGS' });
+  }
+  return root;
 }
 
 // ---- Output helpers ----
@@ -706,8 +720,10 @@ function buildSummary(findings, totalEntries) {
 //      never let file-entry state influence a single line of the block
 //      code, not to prove it stays identical after interleaving them.
 //
-// "Project root" for the file ledger (`{projeto}/.soma/install-state.json`,
-// CONTRACT-FILES-LEDGER-02) is `process.cwd()`, NOT `somaHome`.
+// The default project root for the file ledger
+// (`{projeto}/.soma/install-state.json`, CONTRACT-FILES-LEDGER-02) is
+// `process.cwd()`, NOT `somaHome`. Spec 026 may supply an explicit absolute
+// ledger root for global targets; it never changes the default.
 //
 // FIXED 2026-08-21 — T-07 reopened. The first version of this comment
 // argued for `somaHome` "by analogy with .snapshots" and flagged it as an
@@ -838,16 +854,14 @@ function writeFileEntry(item) {
  *
  * @param {object[]} entries  raw kind:"file" entries across all adapters in this run
  * @param {string} somaHome
+ * @param {string} ledgerRoot
  * @param {boolean} useJson
  * @returns {{ aborted: boolean, written?: number }}
  */
-function runFileApplyMode(entries, somaHome, useJson) {
+function runFileApplyMode(entries, somaHome, ledgerRoot, useJson) {
   if (entries.length === 0) return { aborted: false, written: 0 };
 
-  // Ledger root is process.cwd() (the project), never somaHome — see the
-  // "File entries" section comment above for why this changed.
-  const projectRootAbs = process.cwd();
-  const { installedFiles: ledger } = filesModule.readLedger(projectRootAbs);
+  const { installedFiles: ledger } = filesModule.readLedger(ledgerRoot);
   const { ok, diverged, plan } = planFileInstallSafe(entries, somaHome, ledger);
 
   if (!ok) {
@@ -874,7 +888,7 @@ function runFileApplyMode(entries, somaHome, useJson) {
     newLedgerEntries[item.target_path] = filesModule.buildLedgerEntry(item.sourceSha256);
   }
   if (Object.keys(newLedgerEntries).length > 0) {
-    filesModule.writeLedger(projectRootAbs, { ...ledger, ...newLedgerEntries });
+    filesModule.writeLedger(ledgerRoot, { ...ledger, ...newLedgerEntries });
   }
 
   if (!useJson) {
@@ -1289,6 +1303,25 @@ function main() {
   }
 
   const somaHome = flags.somaHome || process.env.SOMA_HOME || path.join(os.homedir(), '.soma-v2');
+  let ledgerRoot;
+  try {
+    ledgerRoot = resolveLedgerRoot(flags);
+  } catch (err) {
+    if (useJson) {
+      process.exitCode = 2;
+      process.stdout.write(JSON.stringify({
+        schema: 'soma-sync-apply/v1',
+        mode: flags.apply ? 'apply' : 'dry-run',
+        snapshot: null,
+        summary: null,
+        error: { code: err.code || 'INVALID_ARGS', message: err.message, details: null }
+      }, null, 2) + '\n');
+    } else {
+      process.stderr.write(`ERROR [${err.code || 'INVALID_ARGS'}]: ${err.message}\n`);
+      process.exit(2);
+    }
+    return;
+  }
 
   try {
     loadManifest(somaHome);
@@ -1451,7 +1484,7 @@ function main() {
     // separation, not a shared branch, is what makes AC-02's "block
     // findings/behavior identical" provable rather than merely hoped for.
     if (fileEntries.length > 0) {
-      const fileResult = runFileApplyMode(fileEntries, somaHome, useJson);
+      const fileResult = runFileApplyMode(fileEntries, somaHome, ledgerRoot, useJson);
       if (fileResult.aborted) return;
     }
     runApplyMode(flags, somaHome, allFindings, totalEntries, adapters, useJson);
@@ -1467,9 +1500,7 @@ function main() {
   // AC-10) and costs one extra fs.existsSync when there is nothing to do.
   const fileFindings = fileEntries.length > 0
     ? (() => {
-        // Ledger root is process.cwd(), matching runFileApplyMode() and
-        // install.cjs — see the "File entries" section comment above.
-        const { installedFiles: ledger } = filesModule.readLedger(process.cwd());
+        const { installedFiles: ledger } = filesModule.readLedger(ledgerRoot);
         return computeFileFindings(fileEntries, somaHome, ledger).map((f) => ({
           ...f,
           adapter: adapters[0] || 'unknown',
