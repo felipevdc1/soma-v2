@@ -21,6 +21,7 @@
 - **R-05:** canary em HOME temporário prova bloco, comando e doctor/sync sem tocar o ambiente live.
 - **R-06:** ativação live só ocorre depois das revisões e deixa prova de snapshot, hashes pós-aplicação e doctor verde.
 - **R-07 (amenda pós-revisão):** `sync` é o único writer de `soma-run.md` e de sua entry em `installedFiles`; `install.sh` protege o pre-state, delega a escrita ao sync e restaura automaticamente se ele falhar. Esta garantia substitui o detalhe anterior de R-03 que atribuía a cópia ao rsync genérico.
+- **R-08 (crash safety):** a Phase 7 trata `soma-run.md` e `.soma/install-state.json` como uma única transação: qualquer erro, `INT` ou `TERM` restaura exatamente os dois pre-states antes de sair; sucesso só é publicado depois de validar target+ledger. Cada invocação usa backup no-clobber único, inclusive dentro do mesmo segundo.
 
 ## Execução eficiente
 
