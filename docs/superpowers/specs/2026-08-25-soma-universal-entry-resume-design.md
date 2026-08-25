@@ -14,21 +14,25 @@
 - The installed CLI is `~/.soma-v2/scripts/soma.cjs`. The current contract has no required `soma` executable on `PATH`.
 - Existing `soma run` primitives live in `core/scripts/run.cjs` and `core/scripts/run/*.cjs`; project installation and global installation have separate state.
 - The repository requires Node 22 or newer. The checked Node 22.15.0 runtime exposes the built-in `node:test` JUnit reporter.
-- This repository does not define a trustworthy Claude Code session identifier. That fact does not prove whether the host product exposes one at runtime.
+- Claude Code 2.1.245 skills support native `${CLAUDE_SESSION_ID}` substitution. `$ARGUMENTS` is the complete user-entered argument text, and dynamic `!` commands run before Claude receives the expanded skill prompt.
+- `UserPromptExpansion` can block or add context but cannot replace the prompt. It is not a request transport.
 - The inherited spec 024 failure is present before this feature and remains outside this scope.
 
 ### Decisions
 
 - `/soma-run` remains the only public command for starting or resuming project-changing work.
-- One `soma-entry-request/v1` envelope carries every mode. No objective, run ID, project, scope, handoff locator or digest crosses Bash as an argument or interpolated command fragment.
-- The adapter invokes only fixed `broker-prepare` and `broker-consume` CLI forms. A random capability returned by preparation is used only through structured tools.
+- One `soma-entry-request/v1` envelope carries the unchanged `$ARGUMENTS` text for every mode. No objective, run ID, project, scope, handoff locator or digest crosses Bash as an argument or interpolated command fragment.
+- The skill invokes fixed `broker-prepare` and `broker-consume` CLI templates. Their only variable shell value is the runtime-supplied `${CLAUDE_SESSION_ID}`. Missing or malformed session ID fails closed.
+- The CLI parser, not Claude, classifies start, help, status, resume and continue after one-time consumption.
 - Handoff contains durable facts and a canonical resume-inspection command. It contains no continuation digest or continue command.
 - Resume inspection computes `continuityDigest` after handoff publication. Continue recomputes it before any project lock or write.
 - Entry and adoption only report `baselineRequired`. The orchestrator creates the single logical `T-BASELINE` task after `READY`; an executor runs it through dispatch records.
 
-### Hypothesis to falsify during implementation
+### Trust model
 
-The Claude adapter can use a structured file-write tool with an exact path returned by fixed CLI preparation. Task 1 must prove that behavior in the real adapter harness. If Claude Code exposes a stable, unforgeable session channel, the broker binds to it. If it does not, the implementation must use the capability fallback below and must not synthesize a session ID from prompt text, cwd, timestamps or predictable process data.
+Text entered by the user in `/soma-run` is trusted user intent and becomes prompt content by platform design. SOMA does not claim to neutralize instructions the user deliberately places in that text. Repository files, handoffs, checkpoints, dispatch records and proofs remain untrusted data and never become shell syntax.
+
+The broker protects against accidental cross-session access, path and shell injection, corrupt files and replay. It is not a sandbox against a hostile process running as the same uid; such a process can already modify the user's files. Owner and mode checks define the normal process boundary without overstating it. The skill sets `disable-model-invocation: true`, so only an explicit user invocation can start it.
 
 ## Context and revised thesis
 
@@ -36,11 +40,11 @@ The public slash command and the internal `soma run` family have different jobs.
 
 The selected design keeps a thin adapter and adds a fixed internal controller:
 
-1. The adapter classifies `$ARGUMENTS` without loading the long orchestration reference.
-2. It invokes a fixed preparation command that creates one short-lived broker slot outside the project.
-3. It writes a canonical request envelope to that slot with a structured tool. The slot path and random capability never enter Bash.
-4. It invokes a fixed consume command with no request values in argv.
-5. The CLI validates and consumes the request once. It resolves, inspects or adopts the project according to mode.
+1. A fixed dynamic command validates native `${CLAUDE_SESSION_ID}` and creates one empty short-lived broker slot before Claude runs.
+2. The adapter copies the entire `$ARGUMENTS` string into `rawArguments` and writes the envelope to that already-created slot with a structured Write tool.
+3. It invokes a fixed consume command. Only the same runtime session ID appears in argv; no request value does.
+4. The CLI claims, validates and consumes the request once, hashes its exact bytes, then parses `rawArguments` deterministically.
+5. The CLI resolves, inspects or adopts the project according to the parsed mode.
 6. The adapter loads the long orchestration reference only after `READY` or `CONTINUE_READY`.
 
 Existing `soma run` verbs remain internal orchestration primitives. New baseline, checkpoint and handoff verbs add durable evidence without changing the public command.
@@ -55,9 +59,9 @@ Rejected. Status, resume and continue contain external paths and identifiers jus
 
 Rejected. A path accepted from the adapter arguments permits traversal, symlink substitution and cross-session reuse. The CLI must create and later rediscover the slot from its own broker state.
 
-### Prompt or cwd as session identity
+### Capability-only or inferred session identity
 
-Rejected. Neither is an authenticated session channel. The fallback is a random capability with a single live unbound lease, not an invented session ID.
+Rejected. Capability alone does not stop another normal session from finding a shared slot, and prompt text, pid, cwd or time is not session identity. Native `${CLAUDE_SESSION_ID}` is the sole session authority.
 
 ### Digest stored in handoff
 
@@ -75,48 +79,51 @@ The documented user forms remain:
 /soma-run --help
 ```
 
-These are slash-command forms, not shell commands. The adapter converts all five modes to `soma-entry-request/v1`. The only Bash invocations are fixed text:
+These are slash-command forms, not shell commands. The adapter copies the complete text to one envelope without classifying it. The prepare form is a fixed dynamic command in the skill; consume is a fixed Bash tool call after the structured Write:
 
 ```bash
-node "${SOMA_HOME:-$HOME/.soma-v2}/scripts/soma.cjs" entry broker-prepare
-node "${SOMA_HOME:-$HOME/.soma-v2}/scripts/soma.cjs" entry broker-consume
+node ~/.soma-v2/scripts/soma.cjs entry broker-prepare --session "${CLAUDE_SESSION_ID}"
+node ~/.soma-v2/scripts/soma.cjs entry broker-consume --session "${CLAUDE_SESSION_ID}"
 ```
 
-No value derived from `$ARGUMENTS` is present in either invocation. The `soma` command on `PATH` is not required. `soma entry` remains an internal adapter API and is not documented as another workflow entry.
+`${CLAUDE_SESSION_ID}` is native runtime data, not user input. It is the only variable substitution in either command and must match `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` before any path derivation. The fixed tilde path resolves the installed CLI without a configurable command fragment. `$ARGUMENTS` and all parsed request values are absent from Bash. The `soma` command on `PATH` is not required. `soma entry` remains an internal adapter API and is not documented as another workflow entry.
 
-Unknown flags, conflicting modes, duplicate single-value flags, malformed run IDs and non-lowercase 64-hex digests fail in the adapter before preparation. The CLI repeats schema and semantic validation after consume. Normal whitespace may separate slash-command tokens, but values remain exact in the envelope.
+After consume, a pure CLI lexer handles quoting and escapes without shell evaluation. Whitespace separates tokens outside quotes; single and double quotes group values; backslash escapes the next character outside single quotes; newline is literal inside quotes and a separator outside them. `$()`, backticks, semicolons and pipes have no special meaning. The parser then rejects unknown or conflicting flags, duplicate single-value flags, malformed run IDs and non-lowercase 64-hex digests. The exact `rawArguments` string is retained for audit and tests.
 
 ## Session-bound request broker
 
 ### Storage and preparation
 
-The broker root is outside every project. The CLI chooses an OS runtime directory owned by the current uid, preferring a verified owner-only runtime directory and otherwise a private directory under the platform temporary root. It creates this layout without following links:
+The broker root is outside every project. The CLI chooses an OS runtime directory owned by the current uid, preferring a verified owner-only runtime directory and otherwise a private directory under the platform temporary root. It hashes the validated native session ID for the directory name and creates this layout without following links:
 
 ```text
-<runtime>/soma-entry/<uid>/<channel-or-unbound>/<capability>/
+<runtime>/soma-entry/<uid>/<sha256(sessionId)>/<requestId>/
   lease.json
   request.json
 ```
 
-Every directory is mode `0700`. Every file is a regular file created with exclusive creation, mode `0600` and no-follow semantics. `broker-prepare` generates at least 256 bits of randomness for `capability`, records creation and expiry, and returns the exact request path plus capability through structured stdout. It never reads the project.
+Every directory is mode `0700`. Prepare creates both `lease.json` and an empty regular `request.json` with no-follow, exclusive creation and mode `0600` before the structured Write can run. It generates random request ID and at least 256 bits of capability. The minimal lease contains only `sessionId`, `requestId`, `capability`, exact request path and expiry, all known at preparation time. It contains no request mode or content hash.
 
-If the host exposes a trustworthy session channel, the CLI derives the channel key from that host channel at both preparation and consumption. The adapter does not supply it. If no such channel exists, the CLI uses the literal `unbound` bucket and permits exactly one live lease for the uid. A concurrent preparation fails `BROKER_BUSY`; it never guesses which request belongs to which session.
+Missing or malformed `${CLAUDE_SESSION_ID}` returns `SESSION_UNAVAILABLE` before broker access. A second prepare in the same session fails `BROKER_BUSY`, or returns the existing lease only when the slot is still empty, regular, owner/mode-correct and unexpired. It never overwrites. Sessions A and B hash to distinct directories, and consume for B derives only B's directory; it never scans A's slots.
 
-The capability is the fallback authority. The adapter copies it into the envelope and writes only to the returned path through a structured tool. It never places the capability or path in Bash, environment overrides, command substitutions or shell redirections.
+Preparation output gives the adapter the exact pre-created path, request ID and capability. The adapter uses those values only in the structured envelope and Write operation. It copies `$ARGUMENTS` once as `rawArguments`. None of these values enters Bash, environment overrides, command substitutions or shell redirections.
 
 ### Validation and one-time consumption
 
-`broker-consume` derives the same trusted channel or the single unbound lease. Before reading payload data it verifies:
+`broker-consume` validates the native session ID and derives only that session directory. An exclusive `claim` file created with `O_EXCL` gives exactly one same-session consumer the right to continue. Before parsing request data it verifies:
 
 - every ancestor stays under the canonical broker root;
 - directory and file owners equal the effective uid;
 - directory mode is exactly `0700` and file mode is exactly `0600`;
 - the request is one regular file opened with no-follow semantics;
-- capability, channel binding, request ID, mode, expiry, schema and canonical content hash agree with the lease;
+- session ID, request ID, capability, exact path and expiry agree with the minimal lease;
+- request schema and `rawArguments` type are valid;
 - size and string limits hold before JSON parsing completes;
-- the lease is live, unique and not already consumed.
+- the lease is live and the claim is unique.
 
-Consumption atomically changes the lease from `prepared` to `consuming` before project access. Replay, a second consumer or a second ready request fails closed. The CLI removes the capability directory in `finally` after success or error. SIGINT, SIGTERM and SIGHUP handlers request cancellation, run the same cleanup and then exit. Preparation also removes expired owned regular slots without following links. It never removes unknown-owner, linked or structurally invalid entries.
+After the claim, consume opens the pre-created slot with no-follow semantics, validates its current inode/type/owner/mode and hashes the exact content bytes. It returns that hash as internal `requestSha256`; the lease does not predict it. A swapped or linked slot returns `INVALID_ENTRY_REQUEST` before parser, project resolution or run mutation. It then parses `rawArguments` and routes the request. Replay and a second consumer fail. The CLI removes the owned request directory in `finally` after success or error. SIGINT, SIGTERM and SIGHUP handlers request cancellation, run the same cleanup and then exit. Expired-slot cleanup skips links, unknown owners and invalid structures.
+
+No-follow and `O_EXCL` prevent accidental replacement through the normal broker API. The structured Write itself is not a same-uid security boundary; consume detects a changed slot before touching project or run state. This matches the stated trust limit rather than promising protection from an already-hostile process with the user's uid.
 
 The ephemeral request is the only filesystem effect allowed before a read-only mode completes, and it is outside the project. Help, status and resume inspection preserve project bytes and mtimes, Git index bytes and mtime, run state, locks and agent records. Rejected continue has the same zero-project-mutation rule.
 
@@ -125,25 +132,14 @@ The ephemeral request is the only filesystem effect allowed before a read-only m
 ```json
 {
   "$schema": "soma-entry-request/v1",
+  "sessionId": "native-Claude-session-id",
   "requestId": "random-128-bit-id",
   "capability": "random-256-bit-secret",
-  "channelBinding": "trusted-channel-hash-or-unbound",
-  "createdAt": "ISO-8601",
-  "expiresAt": "ISO-8601",
-  "mode": "start|help|status|resume|continue",
-  "payload": {
-    "objective": "literal string or null",
-    "runId": "run-id or null",
-    "project": "/absolute/path or null",
-    "scope": "/absolute/path or null",
-    "handoff": "generation locator or null",
-    "continuityDigest": "lowercase-64-hex or null"
-  },
-  "contentSha256": "sha256-of-canonical-fields-excluding-contentSha256"
+  "rawArguments": "exact complete $ARGUMENTS string"
 }
 ```
 
-The mode defines the allowed payload fields. Help requires every payload value to be null. Start requires an objective. Continue requires run ID, project, scope and digest. Status and resume accept only their documented locator fields. The CLI rejects surplus fields rather than ignoring them.
+The adapter does not add mode, parsed payload, expiry or content hash. Expiry belongs to the lease, and consume calculates the request content hash after its no-follow open. The schema rejects surplus fields. Only after validation and claim does the CLI parser produce `{mode, objective, runId, project, scope, handoff, continuityDigest}`.
 
 ## Project and scope resolution
 
@@ -288,9 +284,9 @@ Broker preparation and cleanup may touch only the external broker. `HELP_SHOWN`,
 ## Invariants
 
 1. `/soma-run` is the only public entry for start and resume.
-2. Every mode uses `soma-entry-request/v1`; external values never appear in Bash argv or interpolation.
-3. The CLI chooses broker storage. No caller-selected request path exists.
-4. Broker requests are owner-only, no-follow, session-channel or capability bound, one-time and cleaned in `finally`.
+2. Every mode uses `soma-entry-request/v1`; `$ARGUMENTS` and parsed external values never appear in Bash argv or interpolation.
+3. The only variable shell value is native `${CLAUDE_SESSION_ID}`. Absence or invalid format fails closed; no inferred or alternate ID exists.
+4. The CLI pre-creates broker storage. Requests are owner-only, no-follow, session-bound, claimed once and cleaned in `finally`.
 5. Help, status and resume inspection mutate only the external ephemeral broker.
 6. No mode silently changes cwd. Every child process receives an explicit validated cwd.
 7. Adoption never executes project scripts or invents history.
@@ -302,16 +298,19 @@ Broker preparation and cleanup may touch only the external broker. `HELP_SHOWN`,
 13. Continue validates continuity before any project lock or write.
 14. Handoff and resume never use ignored, temporary, escaped or external proof paths.
 15. Global installation updates or rolls back adapter, reference and CLI together.
-16. No plugin, daemon, hook, PATH shim, public alias or silent third attempt is added.
+16. The skill has `disable-model-invocation: true`; user-entered instructions are trusted intent, while repository and continuity artifacts remain untrusted data.
+17. No plugin, daemon, hook, `UserPromptExpansion` transport, PATH shim, public alias or silent third attempt is added.
 
 ## Failure modes
 
 | Failure | Required result |
 |---|---|
-| Unknown, conflicting or malformed slash args | `INVALID_ENTRY_ARGS`; no broker or project access |
-| Traversal, symlink, wrong owner/mode or schema/hash mismatch in broker | `INVALID_ENTRY_REQUEST`; no project access |
-| Replayed or concurrently consumed capability | `REQUEST_ALREADY_CONSUMED` or `BROKER_BUSY`; no project access |
-| Signal or error during consume | owned capability directory removed by `finally`; project result remains atomic |
+| Missing or malformed native session ID | `SESSION_UNAVAILABLE`; no broker or project access |
+| Unknown, conflicting or malformed `rawArguments` | `INVALID_ENTRY_ARGS`; broker cleans up, no project access |
+| Traversal, symlink, wrong owner/mode or invalid request schema in broker | `INVALID_ENTRY_REQUEST`; no project access |
+| Session B tries to consume session A's request | B derives only B's directory and returns `NO_ENTRY_REQUEST`; A remains intact |
+| Replayed or concurrently consumed request | `REQUEST_ALREADY_CONSUMED` or `BROKER_BUSY`; no project access |
+| Signal or error during consume | owned request directory removed by `finally`; project result remains atomic |
 | Started from home without a valid project locator | `PROJECT_UNRESOLVED`; no silent cwd or project write |
 | Partial, corrupt or drifted `.soma` | `ADOPTION_BLOCKED`; preserve bytes |
 | Baseline task omitted or another task starts first | `BASELINE_REQUIRED`; no dispatch record for that task |
@@ -327,8 +326,11 @@ Broker preparation and cleanup may touch only the external broker. `HELP_SHOWN`,
 
 | Boundary | Counterexample | Required test |
 |---|---|---|
-| Shell | Project path is ``/tmp/x$(touch sentinel)`` and objective contains quotes, backticks and newline | All modes round-trip through the envelope; fixed Bash strings remain byte-identical and sentinel stays absent |
-| Broker | A second consumer races the first while `request.json` is replaced by a symlink | Exactly one regular owned request can enter `consuming`; both traversal and symlink attempts fail, and no residual slot remains |
+| Shell | `rawArguments` contains path ``/tmp/x$(touch sentinel)``, quotes, backticks and newline | The raw string round-trips through Write; no Bash contains `$ARGUMENTS`, the CLI lexer treats metacharacters as data and the sentinel stays absent |
+| Broker session | Sessions A and B prepare concurrently, then B consumes | Session-directory derivation uses their native IDs, so B never searches A and both requests remain isolated |
+| Broker lease | Prepare runs before mode or request bytes exist | Lease contains only session ID, random request ID/capability, path and expiry; consume validates request schema and calculates its hash later |
+| Broker swap | The pre-created slot is replaced before consume and two consumers race | One claim wins; no-follow/inode/type checks reject the swap before project access, replay fails and cleanup removes the owned slot |
+| Trust limit | A hostile same-uid process edits broker files | SOMA detects ordinary corruption when possible but makes no sandbox claim against a process that already has the user's file permissions |
 | Handoff and digest | Digest is calculated before publishing handoff, then publication adds two dirty files | Pre-publication digest is rejected; post-publication digest includes generation hashes and both dirty files, then succeeds until any fact changes |
 | Checkpoint | Process fails after checkpoint rename and before state replacement | Orphan is ignored by reads; identical retry reuses and references it; different orphan hash remains ignored |
 | Baseline | Entry returns `baselineRequired`, but orchestrator tries `T-01` first or creates two baseline tasks | Gate rejects `T-01` and the duplicate; one recorded `T-BASELINE` runs through an executor before all other tasks |
@@ -347,11 +349,11 @@ Broker preparation and cleanup may touch only the external broker. `HELP_SHOWN`,
 
 ### AC-01: One structured envelope covers every mode
 
-Start, help, status, resume and continue produce valid mode-specific `soma-entry-request/v1` envelopes. No external value appears in either fixed Bash invocation. Hostile values remain data and execute nothing.
+Start, help, status, resume and continue use the same envelope containing native session binding, request ID, capability and exact `rawArguments`. The CLI parser classifies the mode after consume. `$ARGUMENTS` never appears in Bash; shell metacharacters round-trip as data and execute nothing.
 
 ### AC-02: Broker binding and cleanup fail closed
 
-Preparation and consumption enforce canonical containment, owner, mode, regular-file no-follow access, capability, trusted channel when available, schema, hash, expiry and one-time state. Traversal, symlink, replay, concurrency, signal and residual-file tests cause no project access and leave no owned live slot.
+Preparation and consumption require valid native `${CLAUDE_SESSION_ID}`, distinct session directories, canonical containment, owner, mode, a pre-created regular slot, no-follow access, matching request ID/capability, expiry, schema, computed content hash and an atomic claim. Missing session ID, A/B crossing, traversal, swap, replay, concurrency, signal and residual-file tests cause no project access and leave no owned live slot.
 
 ### AC-03: Read-only modes preserve project state
 
@@ -399,7 +401,7 @@ Current README and user docs use `/soma-run`, document broker-backed envelopes a
 
 ### AC-14: Scope stays bounded
 
-The feature adds no plugin, daemon, hook, external dependency, PATH shim, public alias, adoption-time script execution, automatic stage or historical-spec rewrite. It does not implement spec 024.
+The skill sets `disable-model-invocation: true`. The feature adds no plugin, daemon, hook, `UserPromptExpansion` transport, external dependency, PATH shim, public alias, adoption-time script execution, automatic stage or historical-spec rewrite. It does not claim resistance to user-authored prompt instructions and does not implement spec 024.
 
 ### AC-15: Structured baseline comparison is deterministic
 

@@ -4,7 +4,7 @@
 
 **Goal:** Make `/soma-run` the only public entry for new, legacy, installed and monorepo projects, with a fixed shell boundary, a one-time request broker, read-only inspection and drift-bound continuation.
 
-**Architecture:** Every slash mode becomes one `soma-entry-request/v1` envelope written through a structured tool to a CLI-prepared capability slot outside the project. Bash invokes only fixed prepare and consume forms. Handoff publishes facts without a digest; resume inspection computes `continuityDigest` after publication, and continue recomputes every input before any project lock or write. Entry returns baseline facts, while the orchestrator creates one `T-BASELINE` after `READY` and an executor runs it through dispatch records.
+**Architecture:** A fixed dynamic command prepares an owner-only slot bound to native `${CLAUDE_SESSION_ID}`. The adapter writes one `soma-entry-request/v1` containing exact `$ARGUMENTS` as `rawArguments`; a fixed consume call validates and claims it, then the CLI parser classifies the mode. No request value enters Bash. Handoff publishes facts without a digest; resume inspection computes `continuityDigest` after publication, and continue recomputes every input before any project lock or write. Entry returns baseline facts, while the orchestrator creates one `T-BASELINE` after `READY` and an executor runs it through dispatch records.
 
 **Tech Stack:** Node.js 22 CommonJS, `node:test`, built-in JUnit reporter, Git CLI through argument arrays, SHA-256 canonical JSON, existing SOMA install and sync components.
 
@@ -126,7 +126,7 @@ git add core/scripts/test/junit-failure-set.cjs core/scripts/__tests__/structure
 git commit -m "test(entry): capture structured failure identity"
 ```
 
-### Task 1: Build the capability-bound request broker
+### Task 1: Build the native-session-bound request broker
 
 **Files:**
 
@@ -139,9 +139,11 @@ git commit -m "test(entry): capture structured failure identity"
 
 - [ ] **Step 1: Write RED schema and broker tests**
 
-Cover all envelope modes and reject surplus fields, bad hashes, expiry, size and mode-specific payloads. For the broker, verify uid ownership, exact `0700` and `0600` modes, regular-file and no-follow access, canonical containment, at least 256-bit capabilities, trusted-channel derivation when the harness provides one, and a single live `unbound` lease when it does not.
+Validate the one envelope shape `{sessionId,requestId,capability,rawArguments}` and reject surplus fields, wrong types and oversize content. Verify that prepare rejects missing or malformed native session IDs, hashes the validated ID into a session directory, uses exact `0700` and `0600` modes, pre-creates an empty regular slot with no-follow plus `O_EXCL`, and emits at least 256 bits of capability.
 
-Falsify traversal, parent symlink, request symlink, hard-link substitution where detectable, wrong owner/mode, replay, two consumers, concurrent preparation, expired lease and a hostile JSON payload. Inject errors after prepare, after ready and during consume. Send SIGINT, SIGTERM and SIGHUP to a child consumer. Assert no owned capability directory remains and no project fixture was read.
+Assert the lease contains only session ID, random request ID/capability, exact path and expiry. It must not require mode or content hash before the Write. Prepare twice in one session fails or returns the same slot only while it is empty, intact and unexpired. Sessions A and B prepare concurrently into distinct directories; consume B never enumerates A.
+
+Falsify traversal, parent symlink, request symlink, slot swap, wrong owner/mode, replay, two consumers, concurrent preparation, expired lease and hostile `rawArguments`. Exactly one consume wins by atomic claim. Inject errors after prepare, after Write and during consume. Send SIGINT, SIGTERM and SIGHUP to a child consumer. Assert no owned request directory remains and no project fixture was read. Document that tests cover corruption and normal cross-session isolation, not a sandbox against a hostile same-uid process.
 
 - [ ] **Step 2: Run RED**
 
@@ -156,11 +158,11 @@ Expected: FAIL because broker modules and CLI forms are absent.
 Register only these internal forms:
 
 ```text
-entry broker-prepare
-entry broker-consume
+entry broker-prepare --session <native-session-id>
+entry broker-consume --session <native-session-id>
 ```
 
-`broker-prepare` derives broker root and trusted channel itself, or takes the exclusive `unbound` lease. It returns request path, random capability and expiry as JSON. `broker-consume` accepts no request values, derives the same channel or unique lease, atomically marks it consuming, opens one regular request with no-follow flags, validates schema and hash, and removes the owned slot in `finally`. Signal handlers enter the same cleanup path. Expired-slot cleanup skips links, unknown owners and invalid structures.
+Both forms require `--session <native-session-id>` from the fixed skill command template. Validate the bounded format before hashing or path access. Native session ID is the sole authority. Prepare creates a session directory, minimal lease and empty slot, then returns path, request ID, capability and expiry. Consume derives only the same session directory, creates an exclusive claim, opens the current slot no-follow, verifies owner/mode/type/schema/session/request/capability/expiry/size, computes the exact content hash, and removes the owned request directory in `finally`. Signal handlers enter the same cleanup path. Expired cleanup skips links, unknown owners and invalid structures.
 
 - [ ] **Step 4: Run GREEN and dispatcher regressions**
 
@@ -168,7 +170,7 @@ entry broker-consume
 node --test core/scripts/__tests__/entry-request-schema.test.cjs core/scripts/__tests__/entry-request-broker.test.cjs core/scripts/__tests__/soma-dispatcher.test.cjs
 ```
 
-Expected: PASS; two fixed command strings handle all modes and hostile payloads execute nothing.
+Expected: PASS; sessions A/B cannot cross, one same-session consumer wins, replay fails, and the lease never predicts request fields.
 
 - [ ] **Step 5: Commit**
 
@@ -182,30 +184,34 @@ git commit -m "feat(entry): add one-time request broker"
 **Files:**
 
 - Create: `core/scripts/entry/request.cjs`
+- Create: `core/scripts/entry/raw-arguments.cjs`
 - Create: `core/scripts/entry/project.cjs`
 - Create: `core/scripts/entry/git-readonly.cjs`
 - Create: `core/scripts/entry/card.cjs`
+- Create: `core/scripts/__tests__/entry-raw-arguments.test.cjs`
 - Create: `core/scripts/__tests__/entry-request-routing.test.cjs`
 - Create: `core/scripts/__tests__/entry-project.test.cjs`
 - Modify: `core/scripts/entry.cjs`
 
 - [ ] **Step 1: Write RED mode and resolver tests**
 
-Feed validated envelopes for help, status, resume, continue and start directly to the controller. Cover explicit repo and scope, Git cwd, declared workspaces, empty non-Git cwd, marker-bearing cwd and handoff generation. Reject home, root, markerless non-empty cwd, outside scope, symlink escape and ambiguous monorepo.
+Feed exact `rawArguments` strings for help, status, resume, continue and start to a pure lexer/parser. Whitespace separates outside quotes; single and double quotes group; backslash escapes outside single quotes; quoted newlines remain literal. `$()`, backticks, semicolons and pipes are ordinary characters and never execute. Cover empty quoted values, duplicate/conflicting flags, malformed quoting, run IDs and digests. Assert the original string remains byte-exact and mode classification contains no Claude interpretation.
+
+Feed parser results to the controller. Cover explicit repo and scope, Git cwd, declared workspaces, empty non-Git cwd, marker-bearing cwd and handoff generation. Reject home, root, markerless non-empty cwd, outside scope, symlink escape and ambiguous monorepo.
 
 Create a stale Git stat cache, record index bytes and nanosecond mtime, then run help, status and resume. Record project tree bytes and mtimes, run state, lock and agent records. After external broker cleanup, all project observations must remain exact. Assert `process.cwd()` never changes.
 
 - [ ] **Step 2: Run RED**
 
 ```bash
-node --test core/scripts/__tests__/entry-request-routing.test.cjs core/scripts/__tests__/entry-project.test.cjs
+node --test core/scripts/__tests__/entry-raw-arguments.test.cjs core/scripts/__tests__/entry-request-routing.test.cjs core/scripts/__tests__/entry-project.test.cjs
 ```
 
 Expected: FAIL because routing and resolution are absent.
 
 - [ ] **Step 3: Implement controller and read-only Git helper**
 
-`routeEntryRequest(request, context)` dispatches one mode and returns one JSON result. It passes literal values as function data, never shell text. `resolveProject` canonicalizes before containment checks and never calls `process.chdir()`. Route every Git inspection through:
+`parseRawArguments(raw)` returns exactly `{mode, objective, runId, project, scope, handoff, continuityDigest}` or a typed argument error. It is a data parser, not a shell parser or model prompt. `routeEntryRequest(parsed, context)` dispatches one mode and returns one JSON result. It passes literal values as function data, never shell text. `resolveProject` canonicalizes before containment checks and never calls `process.chdir()`. Route every Git inspection through:
 
 ```js
 spawnSync('git', ['--no-optional-locks', ...args], {
@@ -220,8 +226,8 @@ Help returns before project resolution. Status and resume use read-only cards. C
 - [ ] **Step 4: Run GREEN and commit**
 
 ```bash
-node --test core/scripts/__tests__/entry-request-routing.test.cjs core/scripts/__tests__/entry-project.test.cjs core/scripts/__tests__/entry-request-broker.test.cjs
-git add core/scripts/entry/request.cjs core/scripts/entry/project.cjs core/scripts/entry/git-readonly.cjs core/scripts/entry/card.cjs core/scripts/entry.cjs core/scripts/__tests__/entry-request-routing.test.cjs core/scripts/__tests__/entry-project.test.cjs
+node --test core/scripts/__tests__/entry-raw-arguments.test.cjs core/scripts/__tests__/entry-request-routing.test.cjs core/scripts/__tests__/entry-project.test.cjs core/scripts/__tests__/entry-request-broker.test.cjs
+git add core/scripts/entry/request.cjs core/scripts/entry/raw-arguments.cjs core/scripts/entry/project.cjs core/scripts/entry/git-readonly.cjs core/scripts/entry/card.cjs core/scripts/entry.cjs core/scripts/__tests__/entry-raw-arguments.test.cjs core/scripts/__tests__/entry-request-routing.test.cjs core/scripts/__tests__/entry-project.test.cjs
 git commit -m "feat(entry): route envelopes without cwd mutation"
 ```
 
@@ -460,9 +466,11 @@ Expected: PASS and drift always precedes project mutation.
 
 - [ ] **Step 1: Write RED adapter boundary and lazy-load tests**
 
-Assert the adapter contains `$ARGUMENTS`, is at most 8,000 UTF-8 bytes and contains none of the 10-step headings. Each heading must exist once in the long reference. Instrument Bash and require exact byte equality with the two fixed invocations from the design for start, help, status, resume and continue.
+Assert the adapter contains `$ARGUMENTS`, frontmatter `disable-model-invocation: true`, and the fixed dynamic prepare command with only `${CLAUDE_SESSION_ID}` substitution. It must be at most 8,000 UTF-8 bytes and contain none of the 10-step headings. Each heading must exist once in the long reference. Reject any `UserPromptExpansion` transport.
 
-Instrument structured writes. Preparation output supplies path and capability; the adapter writes one matching envelope without placing either in Bash. Exercise hostile objective, run ID, project, scope, handoff and digest strings with quotes, `$()`, backticks, newlines and a sentinel. Assert no payload executes. Use a fake home and remove any `soma` shim from `PATH`.
+Use the real skill harness to give dynamic prepare and fixed consume the same native session ID. Instrument structured writes: preparation supplies pre-created path, request ID and capability; the adapter writes `{sessionId,requestId,capability,rawArguments}` and copies `$ARGUMENTS` byte-for-byte without classifying mode or calculating a hash. Consume Bash contains only the runtime session substitution. No Bash command contains `$ARGUMENTS`, request path, capability or parsed value.
+
+Exercise raw text containing objective, run ID, project, scope, handoff and digest syntax with quotes, `$()`, backticks, newlines and a sentinel. Assert the raw string round-trips, the CLI parser produces the expected mode and the sentinel is absent. This proves shell safety, not resistance to instructions the user intentionally gives Claude. Also test missing/mismatched session ID, sessions A/B and a slot swapped after prepare. The swap must fail before project/run mutation. Use a fake home and remove any `soma` shim from `PATH`.
 
 Instrument reference reads and agent creation. Help, status, resume, broker rejection and `RESUME_DRIFT` read it zero times and create zero agents. `READY` and `CONTINUE_READY` read it exactly once. When readiness says `baselineRequired`, the first orchestration action is creation and recorded dispatch of the logical `T-BASELINE` to an executor.
 
@@ -476,7 +484,7 @@ Expected: FAIL because the adapter and install set do not implement the contract
 
 - [ ] **Step 3: Rewrite the adapter and finish the single reference**
 
-Classify slash arguments before loading the reference. Invoke fixed preparation, create canonical envelope with the structured write tool, then invoke fixed consume. Print help, status and resume results and stop. Start stops unless result is `READY`; continue stops unless result is `CONTINUE_READY`. Only those states load the long reference once.
+Add `disable-model-invocation: true`. The dynamic command prepares the session slot before Claude. The adapter copies `$ARGUMENTS` once into the structured envelope at the returned path, with matching session ID, request ID and capability. It does not classify the mode or calculate a hash. It then invokes fixed consume with the same native session ID and follows the CLI result. Print help, status and resume results and stop. Start stops unless result is `READY`; continue stops unless result is `CONTINUE_READY`. Only those states load the long reference once.
 
 Keep the state machine body only in `soma-run-orchestration.md`. Its readiness section follows Task 5 ownership and dispatch rules. Add no hook.
 
@@ -509,9 +517,9 @@ Expected: PASS, no sentinel and full rollback parity.
 
 - [ ] **Step 1: Write RED documentation and end-to-end tests**
 
-Current docs must name `/soma-run`, all public forms, external ephemeral broker effects, project read-only guarantees, post-publication digest, two-step resume, fact-only handoff, orchestrator-owned `T-BASELINE`, executor mutation and installed absolute CLI. Reject `/soma:run`, public alternate entry, caller-selected broker paths and claims that resume inspection writes project state.
+Current docs must name `/soma-run`, all public forms, native session binding, exact `rawArguments` transport, external ephemeral broker effects, project read-only guarantees, post-publication digest, two-step resume, fact-only handoff, orchestrator-owned `T-BASELINE`, executor mutation and installed absolute CLI. Document the same-uid limit and trusted user-intent model. Reject `/soma:run`, public alternate entry, inferred session identity, `UserPromptExpansion` transport, caller-selected broker paths and claims that resume inspection writes project state.
 
-The end-to-end matrix covers new non-Git, legacy dirty, installed and monorepo start; home and invalid scope rejection; hostile values in every envelope mode; traversal, symlink, replay, concurrent broker and signal cleanup; read-only byte and mtime identity; baseline-first gate; checkpoint crash recovery; fact-only handoff; pre-publication digest rejection; drift of every continuity category; zero lazy reads before readiness; one lazy read after readiness; transactional rollback and normal objective reachability.
+The end-to-end matrix covers new non-Git, legacy dirty, installed and monorepo start; home and invalid scope rejection; real skill prepare/Write/consume with one native session ID; sessions A/B isolation; exact metacharacter and newline round-trip; CLI mode parsing; missing session ID; traversal, slot swap, replay, concurrent consume and signal cleanup; read-only byte and mtime identity; baseline-first gate; checkpoint crash recovery; fact-only handoff; pre-publication digest rejection; drift of every continuity category; zero lazy reads before readiness; one lazy read after readiness; transactional rollback and normal objective reachability.
 
 - [ ] **Step 2: Run RED, update docs and wire only integration gaps**
 
@@ -524,7 +532,7 @@ Expected: initial FAIL on documentation and integration seams, then PASS after c
 - [ ] **Step 3: Run focused and install verification**
 
 ```bash
-node --test core/scripts/__tests__/entry-request-schema.test.cjs core/scripts/__tests__/entry-request-broker.test.cjs core/scripts/__tests__/entry-request-routing.test.cjs core/scripts/__tests__/entry-project.test.cjs core/scripts/__tests__/entry-adoption.test.cjs core/scripts/__tests__/run-checkpoint.test.cjs core/scripts/__tests__/run-baseline.test.cjs core/scripts/__tests__/run-handoff.test.cjs core/scripts/__tests__/entry-continuity.test.cjs core/scripts/__tests__/entry-resume-safe.test.cjs core/scripts/__tests__/universal-entry-adapter.test.cjs core/scripts/__tests__/universal-entry-docs.test.cjs core/scripts/__tests__/universal-entry-e2e.test.cjs
+node --test core/scripts/__tests__/entry-request-schema.test.cjs core/scripts/__tests__/entry-request-broker.test.cjs core/scripts/__tests__/entry-raw-arguments.test.cjs core/scripts/__tests__/entry-request-routing.test.cjs core/scripts/__tests__/entry-project.test.cjs core/scripts/__tests__/entry-adoption.test.cjs core/scripts/__tests__/run-checkpoint.test.cjs core/scripts/__tests__/run-baseline.test.cjs core/scripts/__tests__/run-handoff.test.cjs core/scripts/__tests__/entry-continuity.test.cjs core/scripts/__tests__/entry-resume-safe.test.cjs core/scripts/__tests__/universal-entry-adapter.test.cjs core/scripts/__tests__/universal-entry-docs.test.cjs core/scripts/__tests__/universal-entry-e2e.test.cjs
 node --test install/__tests__/*.test.cjs
 bash install/__tests__/synthetic-env.test.sh
 ```
@@ -543,7 +551,9 @@ git status --short
 rg -n -- '--request''-file|continue''Command' docs/superpowers/specs/2026-08-25-soma-universal-entry-resume-design.md docs/superpowers/plans/2026-08-25-soma-universal-entry-resume.md README.md docs/QUICKSTART.md docs/INSTALL.md docs/ARCHITECTURE.md
 baseline_bad='entry create''s T-BASE''LINE|adoption create''s T-BASE''LINE|T-BASE''LINE.*FOUN''DATION'
 orphan_bad='newest or''phan|select.*orphan automatic''ally'
-rg -n -i "$baseline_bad|$orphan_bad" docs/superpowers/specs/2026-08-25-soma-universal-entry-resume-design.md docs/superpowers/plans/2026-08-25-soma-universal-entry-resume.md README.md docs/QUICKSTART.md docs/INSTALL.md docs/ARCHITECTURE.md
+session_bad='un''bound|capability fall''back|channel''Binding|adapter classif''ies'
+lease_bad='lease contains mo''de|lease contains content ha''sh'
+rg -n -i "$baseline_bad|$orphan_bad|$session_bad|$lease_bad" docs/superpowers/specs/2026-08-25-soma-universal-entry-resume-design.md docs/superpowers/plans/2026-08-25-soma-universal-entry-resume.md README.md docs/QUICKSTART.md docs/INSTALL.md docs/ARCHITECTURE.md
 ```
 
 Expected: diff check passes; status lists only planned implementation and documentation files; contradiction scans return no normative match. Audit architecture, backward-compatible state, test-to-AC traceability, transaction ownership and absence of plugin, daemon, hook, shim, silent cwd, auto-stage or spec 024 implementation.
@@ -558,8 +568,11 @@ git commit -m "test(entry): prove universal continuity boundary"
 ## Completion gate
 
 - [ ] AC-01 through AC-15 each map to a passing behavioral test above.
-- [ ] All modes use one envelope; Bash contains only the two fixed internal invocations.
-- [ ] Broker traversal, symlink, replay, concurrency, hostile payload, signal and residual cleanup tests pass.
+- [ ] All modes use one raw envelope; Bash contains only fixed prepare/consume templates and native `${CLAUDE_SESSION_ID}` substitution.
+- [ ] The CLI parser alone classifies mode; `$ARGUMENTS` round-trips and never appears in Bash.
+- [ ] Native-session A/B isolation, traversal, slot swap, replay, concurrency, signal and residual cleanup tests pass.
+- [ ] The lease contains only preparation-time facts; request hashing occurs during consume.
+- [ ] The skill disables model invocation and docs state the trusted user-intent and same-uid limits without a prompt-injection guarantee.
 - [ ] Help, status and resume preserve project bytes and mtimes, Git index, run state, locks and agent records.
 - [ ] Entry returns baseline facts only; one orchestrator-created `T-BASELINE` is the first logical task and its executor uses dispatch records.
 - [ ] Checkpoint retry recovers only the equal-hash expected-sequence orphan and references it atomically.
