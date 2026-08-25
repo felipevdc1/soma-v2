@@ -22,6 +22,10 @@ BACKUP_HOME="/tmp/test-bruno-backup-home"
 BACKUP_PROJECT="${BACKUP_HOME}/project"
 TEST_BIN="/tmp/test-bruno-install-bin"
 NODE_BIN="$(command -v node)"
+DRY_HOME="/tmp/test-bruno-dry-home"
+DRY_PROJECT="/tmp/test-bruno-dry-project"
+DRY_BEFORE="/tmp/test-bruno-dry-before.tar"
+DRY_AFTER="/tmp/test-bruno-dry-after.tar"
 
 PASS=0
 FAIL=0
@@ -36,6 +40,8 @@ cleanup() {
   rm -rf "${TERM_HOME}" 2>/dev/null || true
   rm -rf "${BACKUP_HOME}" 2>/dev/null || true
   rm -rf "${TEST_BIN}" 2>/dev/null || true
+  rm -rf "${DRY_HOME}" "${DRY_PROJECT}" 2>/dev/null || true
+  rm -f "${DRY_BEFORE}" "${DRY_AFTER}" 2>/dev/null || true
 }
 trap cleanup EXIT
 
@@ -43,6 +49,24 @@ trap cleanup EXIT
 echo ""
 echo "[TEST] Setup synthetic env at ${SYNTH_HOME}"
 cleanup
+
+# ── Test -1: dry-run must not mutate an empty HOME ───────────────────────────
+echo ""
+echo "[TEST -1] --dry-run keeps an empty HOME byte-identical..."
+mkdir -p "${DRY_HOME}" "${DRY_PROJECT}"
+tar -cf "${DRY_BEFORE}" -C "${DRY_HOME}" .
+(
+  cd "${DRY_PROJECT}"
+  HOME="${DRY_HOME}" FORCE_OVERWRITE=1 NO_CODEX=1 SOMA_NO_PHASE9=1 \
+    bash "${REPO_ROOT}/install.sh" --dry-run
+) > "${DRY_PROJECT}/dry-run-output.log" 2>&1
+tar -cf "${DRY_AFTER}" -C "${DRY_HOME}" .
+if cmp -s "${DRY_BEFORE}" "${DRY_AFTER}"; then
+  pass "-1/R-08: --dry-run left the empty HOME filesystem byte-identical"
+else
+  fail "-1/R-08: --dry-run mutated the empty HOME filesystem"
+fi
+
 mkdir -p "${SYNTH_HOME}/.claude"
 mkdir -p "${SYNTH_PROJECT}/.soma"
 # Simulate an upgrade ledger from before soma-run became a whole-file target:
