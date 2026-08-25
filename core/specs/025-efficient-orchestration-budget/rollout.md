@@ -20,6 +20,7 @@
 - **R-04:** o bloco STSD declara precedência sobre Recovery unmanaged anterior e continua dentro dos limites 8 KB/4 KB, duas tentativas e uma correção.
 - **R-05:** canary em HOME temporário prova bloco, comando e doctor/sync sem tocar o ambiente live.
 - **R-06:** ativação live só ocorre depois das revisões e deixa prova de snapshot, hashes pós-aplicação e doctor verde.
+- **R-07 (amenda pós-revisão):** `sync` é o único writer de `soma-run.md` e de sua entry em `installedFiles`; `install.sh` protege o pre-state, delega a escrita ao sync e restaura automaticamente se ele falhar. Esta garantia substitui o detalhe anterior de R-03 que atribuía a cópia ao rsync genérico.
 
 ## Execução eficiente
 
