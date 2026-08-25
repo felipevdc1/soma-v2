@@ -1,7 +1,7 @@
 # Spec: Instalação global transacional
 
 **Feature ID:** 026-global-install-transaction  
-**Status:** REVIEW_REQUIRED  
+**Status:** APPROVED — decisão do usuário em 2026-08-24
 **Design aprovado em conversa:** 2026-08-24  
 **Incidente de origem:** `run-260824-efficiency-live`
 
