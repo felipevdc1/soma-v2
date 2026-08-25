@@ -459,3 +459,165 @@ test('T-01-36: isFileEntry is true only for kind:"file", false for block/absent'
   assert.equal(files.isFileEntry({ kind: 'block' }), false);
   assert.equal(files.isFileEntry({}), false);
 });
+
+// ── Global ownership adoption (Spec 026 AC-03/AC-04/AC-05) ────────────────
+
+function adoptionEntry(sourcePath, targetPath) {
+  return { kind: 'file', source_path: sourcePath, target_path: targetPath };
+}
+
+test('026 AC-03: an old target identical to its old source is adopted under the verbatim target_path key', () => {
+  withTmp('soma-adoption-candidate-', (candidateRoot) => {
+    withTmp('soma-adoption-previous-', (previousRoot) => {
+      withTmp('soma-adoption-target-', (targetRoot) => {
+        const targetPath = path.join(targetRoot, 'hook.cjs');
+        makeRepoWithFiles(candidateRoot, { 'hooks/hook.cjs': 'candidate bytes\n' });
+        makeRepoWithFiles(previousRoot, { 'hooks/hook.cjs': 'old bytes\n' });
+        fs.writeFileSync(targetPath, 'old bytes\n');
+
+        const result = files.planFileAdoption(
+          [adoptionEntry('hooks/hook.cjs', targetPath)],
+          {
+            candidateRoot,
+            previousRoot,
+            previousEntries: [adoptionEntry('hooks/hook.cjs', targetPath)],
+          }
+        );
+
+        assert.equal(result.ok, true);
+        assert.deepEqual(result.conflicts, []);
+        assert.deepEqual(Object.keys(result.ledgerEntries), [targetPath]);
+        assert.equal(result.ledgerEntries[targetPath].sha256, files.sha256OfContent('old bytes\n'));
+        assert.equal(fs.readFileSync(targetPath, 'utf8'), 'old bytes\n');
+      });
+    });
+  });
+});
+
+test('026 adoption matrix: absent old and absent new targets are skipped without ledger entries', () => {
+  withTmp('soma-adoption-candidate-', (candidateRoot) => {
+    withTmp('soma-adoption-previous-', (previousRoot) => {
+      withTmp('soma-adoption-target-', (targetRoot) => {
+        const oldTarget = path.join(targetRoot, 'old-absent.cjs');
+        const newTarget = path.join(targetRoot, 'new-absent.cjs');
+        makeRepoWithFiles(candidateRoot, {
+          'hooks/old.cjs': 'new old\n',
+          'hooks/new.cjs': 'new target\n',
+        });
+        makeRepoWithFiles(previousRoot, { 'hooks/old.cjs': 'old old\n' });
+
+        const result = files.planFileAdoption(
+          [adoptionEntry('hooks/old.cjs', oldTarget), adoptionEntry('hooks/new.cjs', newTarget)],
+          {
+            candidateRoot,
+            previousRoot,
+            previousEntries: [adoptionEntry('hooks/old.cjs', oldTarget)],
+          }
+        );
+
+        assert.equal(result.ok, true);
+        assert.deepEqual(result.conflicts, []);
+        assert.deepEqual(result.ledgerEntries, {});
+      });
+    });
+  });
+});
+
+test('026 AC-04: divergent, symlinked and unreadable old targets are all reported with zero adoption', () => {
+  withTmp('soma-adoption-candidate-', (candidateRoot) => {
+    withTmp('soma-adoption-previous-', (previousRoot) => {
+      withTmp('soma-adoption-target-', (targetRoot) => {
+        const divergent = path.join(targetRoot, 'divergent.cjs');
+        const symlinked = path.join(targetRoot, 'symlinked.cjs');
+        const unreadable = path.join(targetRoot, 'unreadable');
+        const symlinkDestination = path.join(targetRoot, 'outside.cjs');
+        makeRepoWithFiles(candidateRoot, {
+          'hooks/a.cjs': 'candidate a\n',
+          'hooks/b.cjs': 'candidate b\n',
+          'hooks/c.cjs': 'candidate c\n',
+        });
+        makeRepoWithFiles(previousRoot, {
+          'hooks/a.cjs': 'old a\n',
+          'hooks/b.cjs': 'old b\n',
+          'hooks/c.cjs': 'old c\n',
+        });
+        fs.writeFileSync(divergent, 'user edit\n');
+        fs.writeFileSync(symlinkDestination, 'old b\n');
+        fs.symlinkSync(symlinkDestination, symlinked);
+        fs.mkdirSync(unreadable);
+
+        const entries = [
+          adoptionEntry('hooks/a.cjs', divergent),
+          adoptionEntry('hooks/b.cjs', symlinked),
+          adoptionEntry('hooks/c.cjs', unreadable),
+        ];
+        const result = files.planFileAdoption(entries, {
+          candidateRoot,
+          previousRoot,
+          previousEntries: entries,
+        });
+
+        assert.equal(result.ok, false);
+        assert.deepEqual(result.conflicts.sort(), [divergent, symlinked, unreadable].sort());
+        assert.deepEqual(result.ledgerEntries, {});
+      });
+    });
+  });
+});
+
+test('026 AC-05: a present new target conflicts by default and adopts its live hash only when authorized', () => {
+  withTmp('soma-adoption-candidate-', (candidateRoot) => {
+    withTmp('soma-adoption-previous-', (previousRoot) => {
+      withTmp('soma-adoption-target-', (targetRoot) => {
+        const targetPath = path.join(targetRoot, 'new-target.cjs');
+        makeRepoWithFiles(candidateRoot, { 'hooks/new.cjs': 'candidate bytes\n' });
+        fs.writeFileSync(targetPath, 'live bytes preserved by journal\n');
+        const entries = [adoptionEntry('hooks/new.cjs', targetPath)];
+
+        const denied = files.planFileAdoption(entries, {
+          candidateRoot,
+          previousRoot,
+          previousEntries: [],
+        });
+        assert.equal(denied.ok, false);
+        assert.deepEqual(denied.conflicts, [targetPath]);
+        assert.deepEqual(denied.ledgerEntries, {});
+
+        let authorizationContext;
+        const allowed = files.planFileAdoption(entries, {
+          candidateRoot,
+          previousRoot,
+          previousEntries: [],
+          allowNewTargets: true,
+          authorizeNewTarget(entry, context) {
+            authorizationContext = { entry, context };
+            return true;
+          },
+        });
+        assert.equal(allowed.ok, true);
+        assert.equal(
+          allowed.ledgerEntries[targetPath].sha256,
+          files.sha256OfContent('live bytes preserved by journal\n')
+        );
+        assert.equal(authorizationContext.entry.target_path, targetPath);
+        assert.equal(authorizationContext.context.targetPathAbs, targetPath);
+        assert.equal(authorizationContext.context.sha256, allowed.ledgerEntries[targetPath].sha256);
+      });
+    });
+  });
+});
+
+test('026 adoption planner validates every candidate before returning any ledger mutation plan', () => {
+  withTmp('soma-adoption-candidate-', (candidateRoot) => {
+    withTmp('soma-adoption-previous-', (previousRoot) => {
+      makeRepoWithFiles(candidateRoot, { 'hooks/good.cjs': 'good\n' });
+      assert.throws(
+        () => files.planFileAdoption([
+          adoptionEntry('hooks/good.cjs', '/tmp/good.cjs'),
+          { kind: 'file', source_path: '../escape.cjs', target_path: '/tmp/bad.cjs' },
+        ], { candidateRoot, previousRoot, previousEntries: [] }),
+        /\.\./
+      );
+    });
+  });
+});

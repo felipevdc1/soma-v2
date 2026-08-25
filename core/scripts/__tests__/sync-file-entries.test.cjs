@@ -42,6 +42,8 @@ const os = require('node:os');
 const crypto = require('node:crypto');
 
 const SYNC_CJS = path.resolve(__dirname, '..', 'sync.cjs');
+const TRANSACTION_CJS = path.resolve(__dirname, '..', '..', '..', 'install', 'global-transaction.cjs');
+const transaction = require(TRANSACTION_CJS);
 const FIXTURE_BASE = `/tmp/soma-test-file-entries-${process.pid}`;
 
 function sha256(content) {
@@ -561,4 +563,242 @@ test('--targets-file mode: no warning is emitted when there are no kind:"file" e
   assert.equal(dry.stderr.includes('FILE_ENTRY_UNSUPPORTED_IN_TARGETS_FILE_MODE'), false, `no file entries present -> no warning expected. stderr: ${dry.stderr}`);
   const out = JSON.parse(dry.stdout);
   assert.equal(out.tool, 'sync');
+});
+
+// ── Spec 026: transaction-gated global adoption ───────────────────────────
+
+function writeInstallTargets(root, entries) {
+  const adapterDir = path.join(root, 'adapters', 'claude');
+  fs.mkdirSync(adapterDir, { recursive: true });
+  fs.writeFileSync(path.join(adapterDir, 'install-targets.json'), JSON.stringify({
+    schema: 'soma-install-targets/v1',
+    tool: 'claude',
+    entries,
+  }, null, 2));
+}
+
+function writeSourceFiles(root, sourceFiles) {
+  for (const [relative, content] of sourceFiles) {
+    const absolute = path.join(root, relative);
+    fs.mkdirSync(path.dirname(absolute), { recursive: true });
+    fs.writeFileSync(absolute, content);
+  }
+}
+
+function createAdoptionFixture(name, { previousEntries, candidateEntries, previousSources, candidateSources }) {
+  const fixtureDir = path.join(FIXTURE_BASE, `adoption-${name}`);
+  const repoRoot = path.join(fixtureDir, 'repo');
+  const candidateRoot = path.join(repoRoot, 'core');
+  const home = path.join(fixtureDir, 'home');
+  const previousLiveRoot = path.join(home, '.soma-v2');
+  const ledgerRoot = previousLiveRoot;
+  const backupRoot = path.join(home, '.soma-v2-backups');
+  fs.mkdirSync(candidateRoot, { recursive: true });
+  fs.mkdirSync(previousLiveRoot, { recursive: true });
+  fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(candidateRoot, 'manifest.json'), JSON.stringify({ schema: 'soma-manifest/v1', version: '2.1.0', files: [] }));
+  fs.writeFileSync(path.join(previousLiveRoot, 'manifest.json'), JSON.stringify({ schema: 'soma-manifest/v1', version: '2.0.0', files: [] }));
+  writeInstallTargets(candidateRoot, candidateEntries);
+  writeInstallTargets(previousLiveRoot, previousEntries);
+  writeSourceFiles(candidateRoot, candidateSources);
+  writeSourceFiles(previousLiveRoot, previousSources);
+
+  const prepared = transaction.prepareTransaction({
+    repoRoot,
+    home,
+    backupRoot,
+    sourceSha: 'e96e59f92d883f52c4b137b74fb27ea912c26bce',
+    noCodex: true,
+  });
+  const journal = JSON.parse(fs.readFileSync(prepared.journal_path, 'utf8'));
+  const previousRoot = journal.snapshots.find((snapshot) => snapshot.target_path === previousLiveRoot).snapshot_path;
+  const ledgerPath = path.join(ledgerRoot, '.soma', 'install-state.json');
+  return { fixtureDir, repoRoot, candidateRoot, home, previousRoot, ledgerRoot, ledgerPath, backupRoot, prepared };
+}
+
+function adoptionArgs(fx, extra = []) {
+  return [
+    '--apply',
+    '--json',
+    '--tool=claude',
+    `--soma-home=${fx.candidateRoot}`,
+    `--ledger-root=${fx.ledgerRoot}`,
+    `--adopt-from=${fx.previousRoot}`,
+    `--transaction-journal=${fx.prepared.journal_path}`,
+    ...extra,
+  ];
+}
+
+test('026 AC-03: adoption records proven old ownership without touching targets or blocks', () => {
+  const fixtureDir = path.join(FIXTURE_BASE, 'adoption-old-identical');
+  const target = path.join(fixtureDir, 'home', '.claude', 'hooks', 'old.cjs');
+  const blockTarget = path.join(fixtureDir, 'home', '.claude', 'CLAUDE.md');
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(target, 'old bytes\n');
+  fs.writeFileSync(blockTarget, 'user block file stays byte-identical\n');
+  const oldFile = fileEntry('hooks/old.cjs', target);
+  const blockEntry = {
+    block_id: 'block.claude.CLAUDE_md.cbm',
+    source_doc: 'docs/cbm.md',
+    target_path: blockTarget,
+    target_anchor_id: 'block.claude.CLAUDE_md.cbm',
+  };
+  const fx = createAdoptionFixture('old-identical', {
+    previousEntries: [oldFile, blockEntry],
+    candidateEntries: [oldFile, blockEntry],
+    previousSources: [['hooks/old.cjs', 'old bytes\n'], ['docs/cbm.md', '# old block\n']],
+    candidateSources: [['hooks/old.cjs', 'candidate bytes\n'], ['docs/cbm.md', '# candidate block\n']],
+  });
+  const targetBefore = fs.readFileSync(target);
+  const blockBefore = fs.readFileSync(blockTarget);
+
+  const result = runSync(adoptionArgs(fx), { HOME: fx.home }, { cwd: fx.repoRoot });
+
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  const output = JSON.parse(result.stdout);
+  assert.equal(output.mode, 'adopt');
+  assert.deepEqual(output.summary.adopted, [target]);
+  assert.deepEqual(fs.readFileSync(target), targetBefore, 'adoption must not write the whole-file target');
+  assert.deepEqual(fs.readFileSync(blockTarget), blockBefore, 'adoption must not enter the block pipeline');
+  const ledger = JSON.parse(fs.readFileSync(fx.ledgerPath, 'utf8'));
+  assert.equal(ledger.installedFiles[target].sha256, sha256('old bytes\n'));
+});
+
+test('026 AC-04: adoption names every old ownership conflict and writes no ledger or target', () => {
+  const fixtureDir = path.join(FIXTURE_BASE, 'adoption-conflicts');
+  const home = path.join(fixtureDir, 'home');
+  const divergent = path.join(home, '.claude', 'hooks', 'divergent.cjs');
+  const symlinked = path.join(home, '.claude', 'hooks', 'symlinked.cjs');
+  const unreadable = path.join(home, '.claude', 'hooks', 'unreadable.cjs');
+  const symlinkDestination = path.join(home, '.claude', 'hooks', 'destination.cjs');
+  fs.mkdirSync(path.dirname(divergent), { recursive: true });
+  fs.writeFileSync(divergent, 'user edit\n');
+  fs.writeFileSync(symlinkDestination, 'old b\n');
+  fs.writeFileSync(symlinked, 'old b\n');
+  fs.writeFileSync(unreadable, 'old c\n');
+  const entries = [
+    fileEntry('hooks/a.cjs', divergent),
+    fileEntry('hooks/b.cjs', symlinked),
+    fileEntry('hooks/c.cjs', unreadable),
+  ];
+  const fx = createAdoptionFixture('conflicts', {
+    previousEntries: entries,
+    candidateEntries: entries,
+    previousSources: [['hooks/a.cjs', 'old a\n'], ['hooks/b.cjs', 'old b\n'], ['hooks/c.cjs', 'old c\n']],
+    candidateSources: [['hooks/a.cjs', 'new a\n'], ['hooks/b.cjs', 'new b\n'], ['hooks/c.cjs', 'new c\n']],
+  });
+  fs.unlinkSync(symlinked);
+  fs.symlinkSync(symlinkDestination, symlinked);
+  fs.unlinkSync(unreadable);
+  fs.mkdirSync(unreadable);
+  const divergentBefore = fs.readFileSync(divergent);
+  const destinationBefore = fs.readFileSync(symlinkDestination);
+
+  const result = runSync(adoptionArgs(fx), { HOME: fx.home }, { cwd: fx.repoRoot });
+
+  assert.equal(result.status, 2, `${result.stdout}\n${result.stderr}`);
+  const output = JSON.parse(result.stdout);
+  assert.equal(output.error.code, 'GLOBAL_OWNERSHIP_CONFLICT');
+  assert.deepEqual(output.error.details.conflicts.sort(), [divergent, symlinked, unreadable].sort());
+  assert.equal(fs.existsSync(fx.ledgerPath), false);
+  assert.deepEqual(fs.readFileSync(divergent), divergentBefore);
+  assert.deepEqual(fs.readFileSync(symlinkDestination), destinationBefore);
+  assert.equal(fs.lstatSync(symlinked).isSymbolicLink(), true);
+});
+
+test('026 AC-05: a present new target needs force plus an exact PREPARED snapshot', () => {
+  const fixtureDir = path.join(FIXTURE_BASE, 'adoption-new-target');
+  const target = path.join(fixtureDir, 'home', '.claude', 'commands', 'new.md');
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(target, 'foreign bytes captured before adoption\n');
+  const fx = createAdoptionFixture('new-target', {
+    previousEntries: [],
+    candidateEntries: [fileEntry('commands/new.md', target)],
+    previousSources: [],
+    candidateSources: [['commands/new.md', 'candidate bytes\n']],
+  });
+  const before = fs.readFileSync(target);
+
+  const denied = runSync(adoptionArgs(fx), { HOME: fx.home }, { cwd: fx.repoRoot });
+  assert.equal(denied.status, 2, `${denied.stdout}\n${denied.stderr}`);
+  assert.equal(JSON.parse(denied.stdout).error.code, 'GLOBAL_OWNERSHIP_CONFLICT');
+  assert.equal(fs.existsSync(fx.ledgerPath), false);
+  assert.deepEqual(fs.readFileSync(target), before);
+
+  const allowed = runSync(adoptionArgs(fx, ['--allow-new-target-overwrite']), { HOME: fx.home }, { cwd: fx.repoRoot });
+  assert.equal(allowed.status, 0, `${allowed.stdout}\n${allowed.stderr}`);
+  const ledger = JSON.parse(fs.readFileSync(fx.ledgerPath, 'utf8'));
+  assert.equal(ledger.installedFiles[target].sha256, sha256(before));
+  assert.deepEqual(fs.readFileSync(target), before, 'authorized adoption records current bytes but never overwrites them');
+});
+
+test('026 AC-05: force fails RECOVERY_BLOCKED if live bytes no longer match the PREPARED snapshot', () => {
+  const fixtureDir = path.join(FIXTURE_BASE, 'adoption-snapshot-mismatch');
+  const target = path.join(fixtureDir, 'home', '.claude', 'commands', 'new.md');
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(target, 'snapshotted bytes\n');
+  const fx = createAdoptionFixture('snapshot-mismatch', {
+    previousEntries: [],
+    candidateEntries: [fileEntry('commands/new.md', target)],
+    previousSources: [],
+    candidateSources: [['commands/new.md', 'candidate bytes\n']],
+  });
+  fs.writeFileSync(target, 'changed after PREPARED\n');
+
+  const result = runSync(adoptionArgs(fx, ['--allow-new-target-overwrite']), { HOME: fx.home }, { cwd: fx.repoRoot });
+
+  assert.equal(result.status, 3, `${result.stdout}\n${result.stderr}`);
+  const output = JSON.parse(result.stdout);
+  assert.equal(output.error.code, 'RECOVERY_BLOCKED');
+  assert.match(output.error.message, /snapshot|hash/i);
+  assert.equal(fs.existsSync(fx.ledgerPath), false);
+  assert.equal(fs.readFileSync(target, 'utf8'), 'changed after PREPARED\n');
+});
+
+test('026 adoption requires --apply, --tool, --ledger-root and absolute journal paths', () => {
+  const { somaHome, projectDir } = createFixture('adoption-invalid-cli', { entries: [] });
+  const cases = [
+    [['--dry-run', '--tool=claude', '--ledger-root=/tmp/ledger', '--adopt-from=/tmp/old', '--transaction-journal=/tmp/journal'], /--apply/],
+    [['--apply', '--ledger-root=/tmp/ledger', '--adopt-from=/tmp/old', '--transaction-journal=/tmp/journal'], /--tool/],
+    [['--apply', '--tool=claude', '--adopt-from=/tmp/old', '--transaction-journal=/tmp/journal'], /--ledger-root/],
+    [['--apply', '--tool=claude', '--ledger-root=/tmp/ledger', '--adopt-from=relative', '--transaction-journal=/tmp/journal'], /adopt-from.*absolute/i],
+    [['--apply', '--tool=claude', '--ledger-root=/tmp/ledger', '--adopt-from=/tmp/old', '--transaction-journal=relative'], /transaction-journal.*absolute/i],
+  ];
+  for (const [args, expectedMessage] of cases) {
+    const result = runSync([...args, '--json', `--soma-home=${somaHome}`], {}, { cwd: projectDir });
+    assert.equal(result.status, 2, `${args.join(' ')}\n${result.stdout}\n${result.stderr}`);
+    const output = JSON.parse(result.stdout);
+    assert.equal(output.error.code, 'INVALID_ARGS');
+    assert.doesNotMatch(output.error.message, /Unknown flag/);
+    assert.match(output.error.message, expectedMessage);
+  }
+});
+
+test('026 --files-only applies whole files without writing block targets', () => {
+  const fixtureDir = path.join(FIXTURE_BASE, 'files-only');
+  const fileTarget = path.join(fixtureDir, 'targets', 'hook.cjs');
+  const blockTarget = path.join(fixtureDir, 'targets', 'CLAUDE.md');
+  const blockEntry = {
+    block_id: 'block.claude.CLAUDE_md.cbm',
+    source_doc: 'docs/cbm.md',
+    target_path: blockTarget,
+    target_anchor_id: 'block.claude.CLAUDE_md.cbm',
+  };
+  const { somaHome, projectDir } = createFixture('files-only', {
+    entries: [fileEntry('hooks/hook.cjs', fileTarget), blockEntry],
+    sourceFiles: [
+      ['hooks/hook.cjs', 'file bytes\n'],
+      ['docs/cbm.md', '<!-- soma-v2:start id=block.claude.CLAUDE_md.cbm version=1.0 -->\n# block\n<!-- soma-v2:end id=block.claude.CLAUDE_md.cbm -->\n'],
+    ],
+  });
+
+  const result = runSync(
+    ['--apply', '--json', '--tool=claude', '--files-only', `--soma-home=${somaHome}`],
+    {},
+    { cwd: projectDir }
+  );
+
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  assert.equal(fs.readFileSync(fileTarget, 'utf8'), 'file bytes\n');
+  assert.equal(fs.existsSync(blockTarget), false, '--files-only must not create or modify a block target');
 });
