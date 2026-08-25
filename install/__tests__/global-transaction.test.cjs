@@ -164,6 +164,18 @@ function pointerMatches(pointerPath) {
   return pointer;
 }
 
+function rewriteJournalAndPointer(journalPath, mutate) {
+  const journal = readJson(journalPath);
+  mutate(journal);
+  fs.writeFileSync(journalPath, `${JSON.stringify(journal, null, 2)}\n`);
+  const pointerPath = path.join(journal.backup_root, '.active-transaction.json');
+  writeJson(pointerPath, {
+    schema: 'soma-global-install-transaction-pointer/v1',
+    transaction_path: journalPath,
+    journal_sha256: crypto.createHash('sha256').update(fs.readFileSync(journalPath)).digest('hex'),
+  });
+}
+
 function advanceTo(journalPath, state) {
   const targetIndex = FORWARD_STATES.indexOf(state);
   assert.notEqual(targetIndex, -1);
@@ -232,7 +244,8 @@ test('advance enforces the exact forward state machine and refreshes pointer has
   for (const state of FORWARD_STATES.slice(1)) {
     const journal = transaction.advanceTransaction(prepared.journal_path, state);
     assert.equal(journal.state, state);
-    pointerMatches(fx.pointerPath);
+    if (state === 'COMMITTED') assert.equal(fs.existsSync(fx.pointerPath), false);
+    else pointerMatches(fx.pointerPath);
   }
   assert.equal(fs.existsSync(fx.pointerPath), false);
 });
@@ -245,6 +258,19 @@ test('prepare rejects symlinks, HOME escapes, duplicate file targets and unsafe 
       const outside = path.join(fx.root, 'outside');
       fs.mkdirSync(outside);
       fs.symlinkSync(outside, path.join(fx.home, '.claude', 'hooks'));
+      assert.throws(() => fx.prepare(), (error) => error && error.code === 'UNSAFE_PATH');
+      assert.equal(fs.existsSync(fx.pointerPath), false);
+    } finally {
+      fx.cleanup();
+    }
+  });
+
+  await t.test('dangling target symlink', () => {
+    const fx = makeFixture({ withOld: false });
+    try {
+      const target = path.join(fx.home, '.claude', 'commands', 'new-command.md');
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.symlinkSync(path.join(fx.root, 'missing-outside'), target);
       assert.throws(() => fx.prepare(), (error) => error && error.code === 'UNSAFE_PATH');
       assert.equal(fs.existsSync(fx.pointerPath), false);
     } finally {
@@ -327,6 +353,29 @@ test('rollback restores bytes, modes, absences and ~/.soma-v2 while preserving q
   assert.equal(readMode(hookPath), 0o700);
 });
 
+test('rollback restores a fresh ~/.soma-v2 absence and quarantines a dangling partial target safely', (t) => {
+  const fx = makeFixture({ withOld: false });
+  t.after(() => fx.cleanup());
+  const prepared = fx.prepare();
+  const hookPath = path.join(fx.home, '.claude', 'hooks', 'soma-hook.cjs');
+  const outside = path.join(fx.root, 'outside-must-not-change');
+  fs.rmSync(hookPath);
+  fs.symlinkSync(outside, hookPath);
+  writeFile(path.join(fx.home, '.soma-v2', 'partial.txt'), 'partial tree\n');
+
+  const result = transaction.rollbackTransaction(prepared.journal_path);
+  assert.equal(result.state, 'ROLLED_BACK');
+  assert.equal(fs.existsSync(path.join(fx.home, '.soma-v2')), false);
+  assert.equal(fs.existsSync(outside), false);
+  assert.equal(fs.lstatSync(hookPath).isFile(), true);
+  assert.equal(fs.readFileSync(hookPath, 'utf8'), 'old hook\n');
+  const quarantine = path.join(path.dirname(prepared.journal_path), 'quarantine');
+  const quarantined = fs.readdirSync(quarantine, { recursive: true })
+    .map(String)
+    .some((name) => name.includes('soma-hook'));
+  assert.equal(quarantined, true);
+});
+
 test('startup recovery rolls back every nonterminal forward state in another call', async (t) => {
   for (const state of FORWARD_STATES.slice(0, -1)) {
     await t.test(state, () => {
@@ -346,6 +395,43 @@ test('startup recovery rolls back every nonterminal forward state in another cal
       }
     });
   }
+});
+
+test('startup recovery resumes ROLLING_BACK and ROLLBACK_VERIFIED journals', async (t) => {
+  await t.test('ROLLING_BACK repeats restoration idempotently', () => {
+    const fx = makeFixture();
+    try {
+      const prepared = fx.prepare();
+      const hookPath = path.join(fx.home, '.claude', 'hooks', 'soma-hook.cjs');
+      writeFile(hookPath, 'partial rollback\n');
+      rewriteJournalAndPointer(prepared.journal_path, (journal) => {
+        journal.state = 'ROLLING_BACK';
+        journal.phases.push({ state: 'ROLLING_BACK', at: new Date().toISOString() });
+      });
+      const result = transaction.recoverActiveTransaction(fx.backupRoot);
+      assert.equal(result.status, 'ROLLED_BACK');
+      assert.equal(fs.readFileSync(hookPath, 'utf8'), 'old hook\n');
+    } finally {
+      fx.cleanup();
+    }
+  });
+
+  await t.test('ROLLBACK_VERIFIED publishes ROLLED_BACK before releasing the pointer', () => {
+    const fx = makeFixture();
+    try {
+      const prepared = fx.prepare();
+      rewriteJournalAndPointer(prepared.journal_path, (journal) => {
+        journal.state = 'ROLLBACK_VERIFIED';
+        journal.phases.push({ state: 'ROLLBACK_VERIFIED', at: new Date().toISOString() });
+      });
+      const result = transaction.recoverActiveTransaction(fx.backupRoot);
+      assert.equal(result.status, 'ROLLED_BACK');
+      assert.equal(readJson(prepared.journal_path).state, 'ROLLED_BACK');
+      assert.equal(fs.existsSync(fx.pointerPath), false);
+    } finally {
+      fx.cleanup();
+    }
+  });
 });
 
 test('dry-run recovery only reports, while corruption returns RECOVERY_BLOCKED', async (t) => {
@@ -380,6 +466,49 @@ test('dry-run recovery only reports, while corruption returns RECOVERY_BLOCKED',
       assert.equal(result.status, 'RECOVERY_BLOCKED');
       assert.equal(fs.readFileSync(hookPath, 'utf8'), 'must stay untouched\n');
       assert.deepEqual(fs.readFileSync(fx.pointerPath), pointerBefore);
+    } finally {
+      fx.cleanup();
+    }
+  });
+
+  await t.test('semantically corrupt allowlist is blocked even with a matching pointer hash', () => {
+    const fx = makeFixture();
+    try {
+      const prepared = fx.prepare();
+      const outside = path.join(fx.root, 'outside.txt');
+      rewriteJournalAndPointer(prepared.journal_path, (journal) => {
+        journal.snapshots.push({
+          target_path: outside,
+          kind: 'file',
+          origins: ['corrupt'],
+          existed: false,
+          mode: null,
+          sha256: null,
+          snapshot_path: null,
+          missing_ancestors: [],
+        });
+      });
+      const result = transaction.recoverActiveTransaction(fx.backupRoot, { dryRun: true });
+      assert.equal(result.status, 'RECOVERY_BLOCKED');
+      assert.equal(fs.existsSync(outside), false);
+    } finally {
+      fx.cleanup();
+    }
+  });
+
+  await t.test('corrupt snapshot bytes block recovery before any live mutation', () => {
+    const fx = makeFixture();
+    try {
+      const prepared = fx.prepare();
+      const hookPath = path.join(fx.home, '.claude', 'hooks', 'soma-hook.cjs');
+      writeFile(hookPath, 'partial must remain\n');
+      const journal = readJson(prepared.journal_path);
+      const hookSnapshot = journal.snapshots.find((snapshot) => snapshot.target_path === hookPath);
+      fs.writeFileSync(hookSnapshot.snapshot_path, 'corrupt backup\n');
+      const result = transaction.recoverActiveTransaction(fx.backupRoot);
+      assert.equal(result.status, 'RECOVERY_BLOCKED');
+      assert.equal(fs.readFileSync(hookPath, 'utf8'), 'partial must remain\n');
+      assert.equal(fs.existsSync(fx.pointerPath), true);
     } finally {
       fx.cleanup();
     }
