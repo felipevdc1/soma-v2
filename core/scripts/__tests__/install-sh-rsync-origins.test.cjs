@@ -35,12 +35,9 @@ const REPO_ROOT = path.resolve(__dirname, '..', '..', '..');
 const INSTALL_SH = path.join(REPO_ROOT, 'install.sh');
 const CLAUDE_TARGETS = path.join(REPO_ROOT, 'core', 'adapters', 'claude', 'install-targets.json');
 
-// Matches a full `rsync -a [--exclude=X ]*"${REPO_ROOT}/<origin>/" "${HOME}/<target>/"`
-// line exactly as it appears inside install.sh's `run "..."` wrapper — the
-// whole invocation is one shell-quoted string argument to the `run()`
-// helper (see install.sh's own `run() { ... eval "$@" ... }`), so the
-// inner quotes are backslash-escaped in the source text.
-const RSYNC_LINE_RE = /rsync -a ([^\\"]*)\\"\$\{REPO_ROOT\}\/([^\\"]+)\/\\" \\"\$\{HOME\}\/([^\\"]+)\/\\"/g;
+// Matches direct rsync calls from a repo asset root into HOME. The core is
+// staged inside the durable transaction first, so it is checked separately.
+const RSYNC_LINE_RE = /rsync -a ([^\n"]*)"\$\{REPO_ROOT\}\/([^"]+)\/" "\$\{HOME\}\/([^"]+)\/"/g;
 
 function readRsyncLines(text) {
   const lines = [];
@@ -57,14 +54,11 @@ test('install.sh: toda origem rsync "${REPO_ROOT}/X/" existe no repo como diret�
   const text = fs.readFileSync(INSTALL_SH, 'utf8');
   const lines = readRsyncLines(text);
 
-  // Vacuity guard — se a regex parar de casar (reformatação do arquivo,
-  // por exemplo), este teste passaria vazio sem checar nada. 5 é o número
-  // medido hoje: core/, core/hooks/, core/adapters/claude/commands/,
-  // templates/, output-styles/.
+  // Spec 026: somente assets fora dos adapters usam repo -> HOME direto.
   assert.equal(
     lines.length,
-    5,
-    `esperava 5 linhas de rsync com origem em \${REPO_ROOT}, achou ${lines.length}: ${JSON.stringify(lines.map((l) => l.origin))}`
+    2,
+    `esperava 2 linhas de rsync com origem em \${REPO_ROOT}, achou ${lines.length}: ${JSON.stringify(lines.map((l) => l.origin))}`
   );
 
   for (const { origin, raw } of lines) {
@@ -74,17 +68,18 @@ test('install.sh: toda origem rsync "${REPO_ROOT}/X/" existe no repo como diret�
       `origem "${origin}" (linha: ${raw}) não existe como diretório em ${REPO_ROOT} — 3a ocorrência desta classe de bug (rsync apontando pra diretório que uma migração anterior moveu ou apagou)`
     );
   }
+
+  assert.match(text, /rsync -a "\$\{REPO_ROOT\}\/core\/" "\$\{STAGED_CORE\}\/"/);
+  assert.match(text, /rsync -a --checksum --no-times "\$\{STAGED_CORE\}\/" "\$\{HOME\}\/\.soma-v2\/"/);
 });
 
-test('R-07: install.sh deixa soma-run.md exclusivamente para sync, que também atualiza o ledger', () => {
+test('026 AC-06: install.sh deixa todos os whole-files exclusivamente para sync', () => {
   const targets = JSON.parse(fs.readFileSync(CLAUDE_TARGETS, 'utf8'));
   const somaRun = targets.entries.find((entry) => entry.source_path === 'adapters/claude/commands/soma-run.md');
   assert.deepEqual(somaRun, { kind: 'file', source_path: 'adapters/claude/commands/soma-run.md', target_path: '~/.claude/commands/soma-run.md' });
 
   const text = fs.readFileSync(INSTALL_SH, 'utf8');
   const lines = readRsyncLines(text);
-  const commandsLine = lines.find((l) => l.target.endsWith('commands'));
-  assert.ok(commandsLine, 'não achei, em install.sh, a linha de rsync cujo destino termina em "commands" (a sincronização de .claude/commands)');
-
-  assert.equal(commandsLine.excludes.includes('soma-run.md'), true, commandsLine.raw);
+  assert.equal(lines.some((line) => line.target.endsWith('hooks') || line.target.endsWith('commands')), false);
+  assert.match(text, /sync --apply --files-only --tool=claude[^\n]*--ledger-root="\$\{HOME\}\/\.soma-v2"/);
 });

@@ -42,13 +42,11 @@ test('R-02: soma-run.md é um alvo whole-file Claude, sem exclusão legada', () 
   assert.equal((targets.excluded || []).some((entry) => entry.source_path === sourcePath), false);
 });
 
-test('R-07: install.sh reserva soma-run.md para o sync que também registra o ledger', () => {
+test('026 AC-06: install.sh reserva todos os whole-files para sync com ledger global', () => {
   const install = fs.readFileSync(path.join(ROOT, 'install.sh'), 'utf8');
-  const commandRsync = install.split('\n').find((line) => line.includes('core/adapters/claude/commands/'));
-  assert.ok(commandRsync);
-  assert.match(commandRsync, /--exclude=soma-run\.md/);
-  assert.match(install, /sync --apply --tool=claude/);
-  assert.doesNotMatch(install, /sync --apply --tool=claude[^\n]*\|\|/);
+  assert.doesNotMatch(install, /rsync[^\n]*(?:core\/hooks|adapters\/claude\/commands)/);
+  assert.match(install, /sync --apply --files-only --tool=claude[^\n]*--ledger-root="\$\{HOME\}\/\.soma-v2"/);
+  assert.doesNotMatch(install, /sync[^\n]*\|\|/);
 });
 
 test('R-04: bloco canônico declara precedência do Recovery eficiente posterior', () => {
