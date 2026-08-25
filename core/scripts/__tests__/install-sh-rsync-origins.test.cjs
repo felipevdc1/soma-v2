@@ -76,7 +76,7 @@ test('install.sh: toda origem rsync "${REPO_ROOT}/X/" existe no repo como diret�
   }
 });
 
-test('rollout vale para os dois mecanismos: install.sh instala soma-run.md declarado no install-targets', () => {
+test('R-07: install.sh deixa soma-run.md exclusivamente para sync, que também atualiza o ledger', () => {
   const targets = JSON.parse(fs.readFileSync(CLAUDE_TARGETS, 'utf8'));
   const somaRun = targets.entries.find((entry) => entry.source_path === 'adapters/claude/commands/soma-run.md');
   assert.deepEqual(somaRun, { kind: 'file', source_path: 'adapters/claude/commands/soma-run.md', target_path: '~/.claude/commands/soma-run.md' });
@@ -86,5 +86,5 @@ test('rollout vale para os dois mecanismos: install.sh instala soma-run.md decla
   const commandsLine = lines.find((l) => l.target.endsWith('commands'));
   assert.ok(commandsLine, 'não achei, em install.sh, a linha de rsync cujo destino termina em "commands" (a sincronização de .claude/commands)');
 
-  assert.equal(commandsLine.excludes.includes('soma-run.md'), false, commandsLine.raw);
+  assert.equal(commandsLine.excludes.includes('soma-run.md'), true, commandsLine.raw);
 });

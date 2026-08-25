@@ -11,6 +11,11 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 SYNTH_HOME="/tmp/test-bruno-home"
+SYNTH_PROJECT="${SYNTH_HOME}/project"
+ROLLBACK_HOME="/tmp/test-bruno-rollback-home"
+ROLLBACK_PROJECT="${ROLLBACK_HOME}/project"
+NO_CLAUDE_HOME="/tmp/test-bruno-no-claude-home"
+NO_CLAUDE_PROJECT="${NO_CLAUDE_HOME}/project"
 
 PASS=0
 FAIL=0
@@ -20,6 +25,8 @@ fail() { echo "[FAIL] $*" >&2; FAIL=$((FAIL + 1)); }
 
 cleanup() {
   rm -rf "${SYNTH_HOME}" 2>/dev/null || true
+  rm -rf "${ROLLBACK_HOME}" 2>/dev/null || true
+  rm -rf "${NO_CLAUDE_HOME}" 2>/dev/null || true
 }
 trap cleanup EXIT
 
@@ -28,6 +35,23 @@ echo ""
 echo "[TEST] Setup synthetic env at ${SYNTH_HOME}"
 cleanup
 mkdir -p "${SYNTH_HOME}/.claude"
+mkdir -p "${SYNTH_PROJECT}/.soma"
+# Simulate an upgrade ledger from before soma-run became a whole-file target:
+# every older managed file is recorded, but soma-run is intentionally absent.
+node -e "
+const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
+const [repo, project] = process.argv.slice(1);
+const targets = JSON.parse(fs.readFileSync(path.join(repo, 'core/adapters/claude/install-targets.json'), 'utf8'));
+const installedFiles = Object.fromEntries(targets.entries
+  .filter((entry) => entry.kind === 'file' && entry.source_path !== 'adapters/claude/commands/soma-run.md')
+  .map((entry) => [entry.target_path, {
+    sha256: crypto.createHash('sha256').update(fs.readFileSync(path.join(repo, 'core', entry.source_path))).digest('hex'),
+    installedAt: '2026-01-01T00:00:00Z',
+  }]));
+fs.writeFileSync(path.join(project, '.soma/install-state.json'), JSON.stringify({ installedFiles }) + '\\n');
+" "${REPO_ROOT}" "${SYNTH_PROJECT}"
 
 # Seed: unmanaged command that the rollout will replace. Keep an exact
 # pre-state outside the target so the canary can prove Phase 1 backed it up.
@@ -64,12 +88,37 @@ echo "# Bruno's existing CLAUDE.md (placeholder)" > "${SYNTH_HOME}/.claude/CLAUD
 
 echo "[TEST] Baseline seeded."
 
+# ── Test 0: --no-claude-md leaves the whole-file command untouched ──────────
+echo ""
+echo "[TEST 0] --no-claude-md preserves soma-run..."
+mkdir -p "${NO_CLAUDE_HOME}/.claude/commands" "${NO_CLAUDE_PROJECT}/.soma"
+cat > "${NO_CLAUDE_HOME}/.claude/commands/soma-run.md" <<'NO_CLAUDE_COMMAND_EOF'
+# Custom command that --no-claude-md must not alter
+NO_CLAUDE_COMMAND_EOF
+cp "${NO_CLAUDE_HOME}/.claude/commands/soma-run.md" "${NO_CLAUDE_HOME}/pre-no-claude-soma-run.md"
+printf '{"installedFiles":{}}\n' > "${NO_CLAUDE_PROJECT}/.soma/install-state.json"
+
+(
+  cd "${NO_CLAUDE_PROJECT}"
+  HOME="${NO_CLAUDE_HOME}" FORCE_OVERWRITE=1 NO_CODEX=1 SOMA_NO_PHASE9=1 \
+    bash "${REPO_ROOT}/install.sh" --no-claude-md
+)
+
+if cmp -s "${NO_CLAUDE_HOME}/.claude/commands/soma-run.md" "${NO_CLAUDE_HOME}/pre-no-claude-soma-run.md"; then
+  pass "0/R-07: --no-claude-md did not move or alter soma-run.md"
+else
+  fail "0/R-07: --no-claude-md changed soma-run.md before sync could own it"
+fi
+
 # ── Test 1: Fresh install ────────────────────────────────────────────────────
 echo ""
 echo "[TEST 1] Fresh install..."
 
-HOME="${SYNTH_HOME}" FORCE_OVERWRITE=1 NO_CODEX=1 NO_CLAUDE_MD=1 \
-  bash "${REPO_ROOT}/install.sh" 2>&1 | grep -v "^\[DRY-RUN\]" | tail -30
+(
+  cd "${SYNTH_PROJECT}"
+  HOME="${SYNTH_HOME}" FORCE_OVERWRITE=1 NO_CODEX=1 SOMA_NO_PHASE9=1 \
+    bash "${REPO_ROOT}/install.sh"
+) 2>&1 | grep -v "^\[DRY-RUN\]" | tail -30
 
 # 1a: .soma-v2 created
 if [[ -d "${SYNTH_HOME}/.soma-v2" ]]; then
@@ -135,7 +184,7 @@ fi
 
 # 1g / R-06: soma-run rollout installs canonical bytes AND retains a
 # recoverable byte-identical pre-state in the Phase 1 backup tree.
-CANONICAL_SOMA_RUN="${REPO_ROOT}/core/adapters/claude/commands/soma-run.md"
+CANONICAL_SOMA_RUN="${SYNTH_HOME}/.soma-v2/adapters/claude/commands/soma-run.md"
 BACKED_UP_SOMA_RUN=$(find "${SYNTH_HOME}/.soma-v2-backups" -path '*/claude/commands/soma-run.md' -type f -print -quit)
 if cmp -s "${SYNTH_HOME}/.claude/commands/soma-run.md" "${CANONICAL_SOMA_RUN}" && \
    [[ -n "${BACKED_UP_SOMA_RUN}" ]] && \
@@ -145,14 +194,38 @@ else
   fail "1g/R-06: soma-run rollout did not preserve custom pre-state while installing canonical bytes"
 fi
 
+LEDGER_OK=$(node -e "
+const fs = require('fs');
+const crypto = require('crypto');
+const state = JSON.parse(fs.readFileSync('${SYNTH_PROJECT}/.soma/install-state.json', 'utf8'));
+const actual = crypto.createHash('sha256').update(fs.readFileSync('${SYNTH_HOME}/.claude/commands/soma-run.md')).digest('hex');
+const entry = state.installedFiles && state.installedFiles['~/.claude/commands/soma-run.md'];
+if (entry && entry.sha256 === actual) process.stdout.write('ok'); else process.exit(1);
+" 2>&1)
+if [[ "${LEDGER_OK}" == "ok" ]]; then
+  pass "1h/R-07: sync registered soma-run.md with its installed hash"
+else
+  fail "1h/R-07: soma-run.md is canonical but absent or wrong in installedFiles"
+fi
+
+SYNC_SECOND=$(cd "${SYNTH_PROJECT}" && HOME="${SYNTH_HOME}" node "${SYNTH_HOME}/.soma-v2/scripts/soma.cjs" sync --apply --tool=claude 2>&1)
+if [[ $? -eq 0 ]]; then
+  pass "1i/R-07: second sync exits 0 after installer-owned rollout"
+else
+  fail "1i/R-07: second sync failed after installer rollout — ${SYNC_SECOND}"
+fi
+
 # ── Test 2: Re-install idempotency ───────────────────────────────────────────
 echo ""
 echo "[TEST 2] Re-install (idempotency check)..."
 
 SHA_PRE=$(shasum -a 256 "${SYNTH_HOME}/.claude/settings.json" | awk '{print $1}')
 
-HOME="${SYNTH_HOME}" FORCE_OVERWRITE=1 NO_CODEX=1 NO_CLAUDE_MD=1 \
-  bash "${REPO_ROOT}/install.sh" 2>&1 | tail -5
+(
+  cd "${SYNTH_PROJECT}"
+  HOME="${SYNTH_HOME}" FORCE_OVERWRITE=1 NO_CODEX=1 SOMA_NO_PHASE9=1 \
+    bash "${REPO_ROOT}/install.sh" --no-claude-md
+) 2>&1 | tail -5
 
 SHA_POST=$(shasum -a 256 "${SYNTH_HOME}/.claude/settings.json" | awk '{print $1}')
 
@@ -162,6 +235,53 @@ else
   fail "2: settings.json sha changed on 2nd install — idempotency broken"
   echo "  pre:  ${SHA_PRE}"
   echo "  post: ${SHA_POST}"
+fi
+
+# ── Test 2b: a Phase 7 failure restores the protected command ───────────────
+echo ""
+echo "[TEST 2b] Phase 7 rollback..."
+mkdir -p "${ROLLBACK_HOME}/.claude/commands" "${ROLLBACK_PROJECT}/.soma"
+cat > "${ROLLBACK_HOME}/.claude/commands/soma-run.md" <<'ROLLBACK_COMMAND_EOF'
+# Custom command that must survive a failed Phase 7 sync
+ROLLBACK_COMMAND_EOF
+cp "${ROLLBACK_HOME}/.claude/commands/soma-run.md" "${ROLLBACK_HOME}/pre-failure-soma-run.md"
+node -e "
+const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
+const [repo, project] = process.argv.slice(1);
+const targets = JSON.parse(fs.readFileSync(path.join(repo, 'core/adapters/claude/install-targets.json'), 'utf8'));
+const installedFiles = Object.fromEntries(targets.entries
+  .filter((entry) => entry.kind === 'file' && entry.source_path !== 'adapters/claude/commands/soma-run.md')
+  .map((entry) => [entry.target_path, {
+    sha256: crypto.createHash('sha256').update(fs.readFileSync(path.join(repo, 'core', entry.source_path))).digest('hex'),
+    installedAt: '2026-01-01T00:00:00Z',
+  }]));
+fs.writeFileSync(path.join(project, '.soma/install-state.json'), JSON.stringify({ installedFiles }) + '\\n');
+" "${REPO_ROOT}" "${ROLLBACK_PROJECT}"
+cat > "${ROLLBACK_HOME}/.claude/CLAUDE.md" <<'CONFLICT_EOF'
+<!-- soma-v2:start id=block.claude.CLAUDE_md.hyd-v2 version=1.0 sha256=deadbeef -->
+tampered block that forces Phase 7 to fail
+<!-- soma-v2:end id=block.claude.CLAUDE_md.hyd-v2 -->
+CONFLICT_EOF
+
+set +e
+(
+  cd "${ROLLBACK_PROJECT}"
+  HOME="${ROLLBACK_HOME}" FORCE_OVERWRITE=1 NO_CODEX=1 SOMA_NO_PHASE9=1 \
+    bash "${REPO_ROOT}/install.sh"
+) > "${ROLLBACK_HOME}/install-output.log" 2>&1
+ROLLBACK_STATUS=$?
+set -e
+ROLLBACK_BACKUP=$(find "${ROLLBACK_HOME}/.soma-v2-backups" -path '*/claude/commands/soma-run.md' -type f -print -quit)
+if [[ "${ROLLBACK_STATUS}" -ne 0 ]] && \
+   cmp -s "${ROLLBACK_HOME}/.claude/commands/soma-run.md" "${ROLLBACK_HOME}/pre-failure-soma-run.md" && \
+   [[ -n "${ROLLBACK_BACKUP}" ]] && \
+   cmp -s "${ROLLBACK_BACKUP}" "${ROLLBACK_HOME}/pre-failure-soma-run.md"; then
+  pass "2b/R-07: failed Phase 7 exits non-zero, restores live bytes, and preserves backup"
+else
+  fail "2b/R-07: rollback failed (status=${ROLLBACK_STATUS}, backup=${ROLLBACK_BACKUP:-missing})"
+  tail -30 "${ROLLBACK_HOME}/install-output.log" >&2
 fi
 
 # ── Test 3: Uninstall ────────────────────────────────────────────────────────

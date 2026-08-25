@@ -17,6 +17,8 @@ trap '' PIPE
 REPO_ROOT="$(cd "$(dirname "$0")" && pwd)"
 TS=$(date +%s)
 BACKUP_DIR="${HOME}/.soma-v2-backups/${TS}"
+SOMA_RUN_TARGET="${HOME}/.claude/commands/soma-run.md"
+SOMA_RUN_BACKUP="${BACKUP_DIR}/claude/commands/soma-run.md"
 
 # ── Parse flags ─────────────────────────────────────────────────────────────
 DRY_RUN=0
@@ -106,9 +108,9 @@ run "mkdir -p \"${BACKUP_DIR}\""
 [[ -f "${HOME}/.claude/settings.json" ]] && run "cp \"${HOME}/.claude/settings.json\" \"${BACKUP_DIR}/\""
 [[ -f "${HOME}/.claude/CLAUDE.md" ]]     && run "cp \"${HOME}/.claude/CLAUDE.md\" \"${BACKUP_DIR}/\""
 [[ -f "${HOME}/.codex/AGENTS.md" ]]      && run "cp \"${HOME}/.codex/AGENTS.md\" \"${BACKUP_DIR}/\""
-if [[ -f "${HOME}/.claude/commands/soma-run.md" ]]; then
+if [[ -f "${SOMA_RUN_TARGET}" ]]; then
   run "mkdir -p \"${BACKUP_DIR}/claude/commands\""
-  run "cp \"${HOME}/.claude/commands/soma-run.md\" \"${BACKUP_DIR}/claude/commands/soma-run.md\""
+  run "cp \"${SOMA_RUN_TARGET}\" \"${SOMA_RUN_BACKUP}\""
 fi
 if [[ -d "${HOME}/.soma-v2" ]]; then
   run "tar czf \"${BACKUP_DIR}/dot-soma-v2.tgz\" -C \"${HOME}\" .soma-v2"
@@ -191,7 +193,7 @@ fi
 echo "[SOMA] Phase 3-5: Copy hooks / commands / templates / output-styles..."
 run "mkdir -p \"${HOME}/.claude/hooks/lib\" \"${HOME}/.claude/commands\" \"${HOME}/.claude/templates\" \"${HOME}/.claude/output-styles\""
 run "rsync -a \"${REPO_ROOT}/core/hooks/\" \"${HOME}/.claude/hooks/\""
-run "rsync -a \"${REPO_ROOT}/core/adapters/claude/commands/\" \"${HOME}/.claude/commands/\""
+run "rsync -a --exclude=soma-run.md \"${REPO_ROOT}/core/adapters/claude/commands/\" \"${HOME}/.claude/commands/\""
 run "rsync -a \"${REPO_ROOT}/templates/\" \"${HOME}/.claude/templates/\""
 run "rsync -a \"${REPO_ROOT}/output-styles/\" \"${HOME}/.claude/output-styles/\""
 
@@ -211,8 +213,20 @@ fi
 # ── Phase 7: CLAUDE.md bootloader injection ──────────────────────────────────
 if [[ "${NO_CLAUDE_MD}" != "1" && "${DRY_RUN}" != "1" ]]; then
   echo "[SOMA] Phase 7: CLAUDE.md bootloader injection..."
-  node "${HOME}/.soma-v2/scripts/soma.cjs" sync --apply --tool=claude 2>/dev/null || \
-    echo "[WARN] soma sync --tool=claude had non-zero exit (may be expected on fresh install)"
+  # sync owns both the canonical command write and its installedFiles ledger
+  # entry. Stage an unmanaged pre-state out of its conflict guard; if sync
+  # fails, restore that exact protected state and preserve the backup.
+  rm -f "${SOMA_RUN_TARGET}"
+  if node "${HOME}/.soma-v2/scripts/soma.cjs" sync --apply --tool=claude; then
+    :
+  else
+    SYNC_STATUS=$?
+    if [[ -f "${SOMA_RUN_BACKUP}" ]]; then
+      mkdir -p "$(dirname "${SOMA_RUN_TARGET}")"
+      cp "${SOMA_RUN_BACKUP}" "${SOMA_RUN_TARGET}"
+    fi
+    exit "${SYNC_STATUS}"
+  fi
 fi
 
 # ── Phase 8: AGENTS.md (Codex) ──────────────────────────────────────────────
