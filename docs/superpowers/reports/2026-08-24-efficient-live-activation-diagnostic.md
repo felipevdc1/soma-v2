@@ -1,6 +1,8 @@
 # Diagnóstico da ativação live eficiente
 
-Status: `ROLLED_BACK / PAUSED_DIAGNOSTIC`
+Status original: `ROLLED_BACK / PAUSED_DIAGNOSTIC`
+
+Status atual: `RESOLVED / INSTALLED_VERIFIED` em 2026-08-25
 
 Data: 2026-08-24
 
@@ -64,3 +66,17 @@ Verificação independente confirmou:
 - ledger do worktree ausente e tracked diff limpo.
 
 O ambiente live voltou ao estado anterior. A correção do ledger global e da atomicidade continua pendente em uma nova run. Nenhuma nova ativação está autorizada por este receipt.
+
+## Resolução transacional em 2026-08-25
+
+A run `run-260824-global-install-transaction` corrigiu as duas causas acima antes de uma nova ativação. O ledger de arquivos passou a usar `~/.soma-v2/.soma/install-state.json`, independente do worktree, e o instalador passou a preparar snapshot, journal autenticado, ponteiro ativo e rollback antes da primeira mutação.
+
+Os reviews independentes R1-SPEC e R2-CRASH, ambos na terceira tentativa, aprovaram o candidato `0e2c48e2228296a9b8011853ab836b238f6d3cfd`. Os gates isolados passaram com 72/72 e 35/35 testes. Não havia processo Claude ativo.
+
+A ativação autorizada ocorreu uma única vez com `bash install.sh --force-overwrite`. O comando saiu com código 0 e publicou `VERIFIED` e `COMMITTED`. A transação e seu backup estão em:
+
+`/Users/felipevdc1/.soma-v2-backups/1787630804278-91966-0151ec12d8b528e8`
+
+Depois do commit transacional, o ponteiro ativo ficou ausente, recovery retornou `NONE`, os 32 arquivos inteiros declarados ficaram idênticos entre candidato, instalação global, alvos e ledger, e o ledger deste worktree continuou ausente. Os dry-runs Claude e Codex não propuseram ações. O doctor saiu com código 0, sem errors, warnings, drift ou missing.
+
+O relatório completo da resolução está em `docs/superpowers/reports/2026-08-25-global-install-transaction-result.md`.
