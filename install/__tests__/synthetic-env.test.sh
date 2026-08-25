@@ -16,6 +16,12 @@ ROLLBACK_HOME="/tmp/test-bruno-rollback-home"
 ROLLBACK_PROJECT="${ROLLBACK_HOME}/project"
 NO_CLAUDE_HOME="/tmp/test-bruno-no-claude-home"
 NO_CLAUDE_PROJECT="${NO_CLAUDE_HOME}/project"
+TERM_HOME="/tmp/test-bruno-term-home"
+TERM_PROJECT="${TERM_HOME}/project"
+BACKUP_HOME="/tmp/test-bruno-backup-home"
+BACKUP_PROJECT="${BACKUP_HOME}/project"
+TEST_BIN="/tmp/test-bruno-install-bin"
+NODE_BIN="$(command -v node)"
 
 PASS=0
 FAIL=0
@@ -27,6 +33,9 @@ cleanup() {
   rm -rf "${SYNTH_HOME}" 2>/dev/null || true
   rm -rf "${ROLLBACK_HOME}" 2>/dev/null || true
   rm -rf "${NO_CLAUDE_HOME}" 2>/dev/null || true
+  rm -rf "${TERM_HOME}" 2>/dev/null || true
+  rm -rf "${BACKUP_HOME}" 2>/dev/null || true
+  rm -rf "${TEST_BIN}" 2>/dev/null || true
 }
 trap cleanup EXIT
 
@@ -259,6 +268,7 @@ const installedFiles = Object.fromEntries(targets.entries
   }]));
 fs.writeFileSync(path.join(project, '.soma/install-state.json'), JSON.stringify({ installedFiles }) + '\\n');
 " "${REPO_ROOT}" "${ROLLBACK_PROJECT}"
+cp "${ROLLBACK_PROJECT}/.soma/install-state.json" "${ROLLBACK_PROJECT}/pre-failure-install-state.json"
 cat > "${ROLLBACK_HOME}/.claude/CLAUDE.md" <<'CONFLICT_EOF'
 <!-- soma-v2:start id=block.claude.CLAUDE_md.hyd-v2 version=1.0 sha256=deadbeef -->
 tampered block that forces Phase 7 to fail
@@ -276,12 +286,106 @@ set -e
 ROLLBACK_BACKUP=$(find "${ROLLBACK_HOME}/.soma-v2-backups" -path '*/claude/commands/soma-run.md' -type f -print -quit)
 if [[ "${ROLLBACK_STATUS}" -ne 0 ]] && \
    cmp -s "${ROLLBACK_HOME}/.claude/commands/soma-run.md" "${ROLLBACK_HOME}/pre-failure-soma-run.md" && \
+   cmp -s "${ROLLBACK_PROJECT}/.soma/install-state.json" "${ROLLBACK_PROJECT}/pre-failure-install-state.json" && \
    [[ -n "${ROLLBACK_BACKUP}" ]] && \
    cmp -s "${ROLLBACK_BACKUP}" "${ROLLBACK_HOME}/pre-failure-soma-run.md"; then
-  pass "2b/R-07: failed Phase 7 exits non-zero, restores live bytes, and preserves backup"
+  pass "2b/R-08: late Phase 7 conflict restores command and ledger bytes, and preserves backup"
 else
-  fail "2b/R-07: rollback failed (status=${ROLLBACK_STATUS}, backup=${ROLLBACK_BACKUP:-missing})"
+  fail "2b/R-08: late-conflict rollback failed (status=${ROLLBACK_STATUS}, backup=${ROLLBACK_BACKUP:-missing})"
   tail -30 "${ROLLBACK_HOME}/install-output.log" >&2
+fi
+
+# ── Test 2c: SIGTERM during Phase 7 restores command + ledger ──────────────
+echo ""
+echo "[TEST 2c] Phase 7 SIGTERM rollback..."
+mkdir -p "${TERM_HOME}/.claude/commands" "${TERM_PROJECT}/.soma" "${TEST_BIN}"
+printf '# Command before SIGTERM\n' > "${TERM_HOME}/.claude/commands/soma-run.md"
+node -e "
+const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
+const [repo, project] = process.argv.slice(1);
+const targets = JSON.parse(fs.readFileSync(path.join(repo, 'core/adapters/claude/install-targets.json'), 'utf8'));
+const installedFiles = Object.fromEntries(targets.entries
+  .filter((entry) => entry.kind === 'file' && entry.source_path !== 'adapters/claude/commands/soma-run.md')
+  .map((entry) => [entry.target_path, {
+    sha256: crypto.createHash('sha256').update(fs.readFileSync(path.join(repo, 'core', entry.source_path))).digest('hex'),
+    installedAt: '2026-01-01T00:00:00Z',
+  }]));
+fs.writeFileSync(path.join(project, '.soma/install-state.json'), JSON.stringify({ installedFiles }) + '\\n');
+" "${REPO_ROOT}" "${TERM_PROJECT}"
+cp "${TERM_HOME}/.claude/commands/soma-run.md" "${TERM_HOME}/pre-term-soma-run.md"
+cp "${TERM_PROJECT}/.soma/install-state.json" "${TERM_PROJECT}/pre-term-install-state.json"
+cat > "${TEST_BIN}/node" <<NODE_WRAPPER_EOF
+#!/usr/bin/env bash
+if [[ "\${1:-}" == */.soma-v2/scripts/soma.cjs && "\${2:-}" == "sync" ]]; then
+  "${NODE_BIN}" "\$@"
+  status=\$?
+  printf '%s\\n' "\${PPID}" > "${TERM_HOME}/phase7-sync-parent"
+  touch "${TERM_HOME}/phase7-sync-finished"
+  sleep 5
+  exit "\${status}"
+fi
+exec "${NODE_BIN}" "\$@"
+NODE_WRAPPER_EOF
+chmod +x "${TEST_BIN}/node"
+
+set +e
+(
+  cd "${TERM_PROJECT}"
+  PATH="${TEST_BIN}:${PATH}" HOME="${TERM_HOME}" FORCE_OVERWRITE=1 NO_CODEX=1 SOMA_NO_PHASE9=1 \
+    bash "${REPO_ROOT}/install.sh"
+) > "${TERM_HOME}/install-output.log" 2>&1 &
+TERM_JOB=$!
+for _ in $(seq 1 500); do
+  [[ -f "${TERM_HOME}/phase7-sync-finished" ]] && break
+  sleep 0.01
+done
+if [[ -f "${TERM_HOME}/phase7-sync-parent" ]]; then
+  kill -TERM "$(< "${TERM_HOME}/phase7-sync-parent")"
+fi
+wait "${TERM_JOB}"
+TERM_STATUS=$?
+set -e
+if [[ "${TERM_STATUS}" -ne 0 ]] && [[ -f "${TERM_HOME}/phase7-sync-finished" ]] && \
+   cmp -s "${TERM_HOME}/.claude/commands/soma-run.md" "${TERM_HOME}/pre-term-soma-run.md" && \
+   cmp -s "${TERM_PROJECT}/.soma/install-state.json" "${TERM_PROJECT}/pre-term-install-state.json"; then
+  pass "2c/R-08: SIGTERM during Phase 7 exits non-zero and restores command + ledger bytes"
+else
+  fail "2c/R-08: SIGTERM rollback failed (status=${TERM_STATUS})"
+  tail -30 "${TERM_HOME}/install-output.log" >&2
+fi
+
+# ── Test 2d: same-second installations keep independent backups ────────────
+echo ""
+echo "[TEST 2d] Same-second backup uniqueness..."
+mkdir -p "${BACKUP_HOME}/.claude/commands" "${BACKUP_PROJECT}/.soma"
+printf '{"installedFiles":{}}\n' > "${BACKUP_PROJECT}/.soma/install-state.json"
+printf '# First backup bytes\n' > "${BACKUP_HOME}/.claude/commands/soma-run.md"
+cat > "${TEST_BIN}/date" <<'DATE_WRAPPER_EOF'
+#!/usr/bin/env bash
+printf '1724457600\n'
+DATE_WRAPPER_EOF
+chmod +x "${TEST_BIN}/date"
+(
+  cd "${BACKUP_PROJECT}"
+  PATH="${TEST_BIN}:${PATH}" HOME="${BACKUP_HOME}" FORCE_OVERWRITE=1 NO_CODEX=1 SOMA_NO_PHASE9=1 \
+    bash "${REPO_ROOT}/install.sh" --no-claude-md
+) > "${BACKUP_HOME}/first-install.log" 2>&1
+FIRST_BACKUP=$(find "${BACKUP_HOME}/.soma-v2-backups" -path '*/claude/commands/soma-run.md' -type f -print -quit)
+printf '# Second backup bytes\n' > "${BACKUP_HOME}/.claude/commands/soma-run.md"
+(
+  cd "${BACKUP_PROJECT}"
+  PATH="${TEST_BIN}:${PATH}" HOME="${BACKUP_HOME}" FORCE_OVERWRITE=1 NO_CODEX=1 SOMA_NO_PHASE9=1 \
+    bash "${REPO_ROOT}/install.sh" --no-claude-md
+) > "${BACKUP_HOME}/second-install.log" 2>&1
+BACKUP_DIRS=( $(find "${BACKUP_HOME}/.soma-v2-backups" -mindepth 1 -maxdepth 1 -type d | sort) )
+if [[ "${#BACKUP_DIRS[@]}" -eq 2 ]] && \
+   cmp -s "${FIRST_BACKUP}" <(printf '# First backup bytes\n') && \
+   find "${BACKUP_HOME}/.soma-v2-backups" -path '*/claude/commands/soma-run.md' ! -path "${FIRST_BACKUP}" -exec cmp -s {} <(printf '# Second backup bytes\n') \; -print -quit | grep -q .; then
+  pass "2d/R-08: same-second installs create distinct backups without clobbering the first"
+else
+  fail "2d/R-08: same-second backup collision or clobber detected"
 fi
 
 # ── Test 3: Uninstall ────────────────────────────────────────────────────────
