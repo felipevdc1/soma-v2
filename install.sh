@@ -16,9 +16,10 @@ trap '' PIPE
 
 REPO_ROOT="$(cd "$(dirname "$0")" && pwd)"
 TS=$(date +%s)
-BACKUP_DIR="${HOME}/.soma-v2-backups/${TS}"
+BACKUP_ROOT="${HOME}/.soma-v2-backups"
+BACKUP_DIR=""
 SOMA_RUN_TARGET="${HOME}/.claude/commands/soma-run.md"
-SOMA_RUN_BACKUP="${BACKUP_DIR}/claude/commands/soma-run.md"
+SOMA_RUN_BACKUP=""
 
 # ── Parse flags ─────────────────────────────────────────────────────────────
 DRY_RUN=0
@@ -104,7 +105,14 @@ fi
 
 # ── Phase 1: Backup ──────────────────────────────────────────────────────────
 echo "[SOMA] Phase 1: Backup..."
-run "mkdir -p \"${BACKUP_DIR}\""
+if [[ "${DRY_RUN}" == "1" ]]; then
+  BACKUP_DIR="${BACKUP_ROOT}/${TS}"
+  run "mkdir -p \"${BACKUP_DIR}\""
+else
+  mkdir -p "${BACKUP_ROOT}"
+  BACKUP_DIR="$(mktemp -d "${BACKUP_ROOT}/${TS}.XXXXXX")"
+fi
+SOMA_RUN_BACKUP="${BACKUP_DIR}/claude/commands/soma-run.md"
 [[ -f "${HOME}/.claude/settings.json" ]] && run "cp \"${HOME}/.claude/settings.json\" \"${BACKUP_DIR}/\""
 [[ -f "${HOME}/.claude/CLAUDE.md" ]]     && run "cp \"${HOME}/.claude/CLAUDE.md\" \"${BACKUP_DIR}/\""
 [[ -f "${HOME}/.codex/AGENTS.md" ]]      && run "cp \"${HOME}/.codex/AGENTS.md\" \"${BACKUP_DIR}/\""
@@ -213,20 +221,64 @@ fi
 # ── Phase 7: CLAUDE.md bootloader injection ──────────────────────────────────
 if [[ "${NO_CLAUDE_MD}" != "1" && "${DRY_RUN}" != "1" ]]; then
   echo "[SOMA] Phase 7: CLAUDE.md bootloader injection..."
-  # sync owns both the canonical command write and its installedFiles ledger
-  # entry. Stage an unmanaged pre-state out of its conflict guard; if sync
-  # fails, restore that exact protected state and preserve the backup.
-  rm -f "${SOMA_RUN_TARGET}"
-  if node "${HOME}/.soma-v2/scripts/soma.cjs" sync --apply --tool=claude; then
-    :
-  else
-    SYNC_STATUS=$?
-    if [[ -f "${SOMA_RUN_BACKUP}" ]]; then
-      mkdir -p "$(dirname "${SOMA_RUN_TARGET}")"
-      cp "${SOMA_RUN_BACKUP}" "${SOMA_RUN_TARGET}"
-    fi
-    exit "${SYNC_STATUS}"
+  # sync remains the canonical writer for both files. Keep exact pre-states
+  # outside its conflict guard until both postconditions are confirmed.
+  INSTALL_STATE_TARGET="${PWD}/.soma/install-state.json"
+  PHASE7_TARGET_SNAPSHOT="${BACKUP_DIR}/phase7-soma-run.md"
+  PHASE7_LEDGER_SNAPSHOT="${BACKUP_DIR}/phase7-install-state.json"
+  PHASE7_TARGET_EXISTED=0
+  PHASE7_LEDGER_EXISTED=0
+  PHASE7_ACTIVE=1
+  PHASE7_COMMITTED=0
+
+  if [[ -e "${SOMA_RUN_TARGET}" ]]; then
+    PHASE7_TARGET_EXISTED=1
+    cp "${SOMA_RUN_TARGET}" "${PHASE7_TARGET_SNAPSHOT}"
   fi
+  if [[ -e "${INSTALL_STATE_TARGET}" ]]; then
+    PHASE7_LEDGER_EXISTED=1
+    cp "${INSTALL_STATE_TARGET}" "${PHASE7_LEDGER_SNAPSHOT}"
+  fi
+
+  phase7_restore() {
+    [[ "${PHASE7_ACTIVE}" == "1" && "${PHASE7_COMMITTED}" != "1" ]] || return 0
+    if [[ "${PHASE7_TARGET_EXISTED}" == "1" ]]; then
+      mkdir -p "$(dirname "${SOMA_RUN_TARGET}")"
+      cp "${PHASE7_TARGET_SNAPSHOT}" "${SOMA_RUN_TARGET}"
+    else
+      rm -f "${SOMA_RUN_TARGET}"
+    fi
+    if [[ "${PHASE7_LEDGER_EXISTED}" == "1" ]]; then
+      mkdir -p "$(dirname "${INSTALL_STATE_TARGET}")"
+      cp "${PHASE7_LEDGER_SNAPSHOT}" "${INSTALL_STATE_TARGET}"
+    else
+      rm -f "${INSTALL_STATE_TARGET}"
+    fi
+  }
+  phase7_abort() {
+    local status="$1"
+    trap - EXIT INT TERM
+    phase7_restore
+    exit "${status}"
+  }
+  trap 'phase7_abort $?' EXIT
+  trap 'phase7_abort 130' INT
+  trap 'phase7_abort 143' TERM
+
+  rm -f "${SOMA_RUN_TARGET}"
+  node "${HOME}/.soma-v2/scripts/soma.cjs" sync --apply --tool=claude
+  node -e '
+const crypto = require("crypto");
+const fs = require("fs");
+const [target, canonical, ledger] = process.argv.slice(1);
+const hash = (file) => crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
+const state = JSON.parse(fs.readFileSync(ledger, "utf8"));
+const entry = state.installedFiles && state.installedFiles["~/.claude/commands/soma-run.md"];
+if (!entry || hash(target) !== hash(canonical) || entry.sha256 !== hash(canonical)) process.exit(1);
+' "${SOMA_RUN_TARGET}" "${HOME}/.soma-v2/adapters/claude/commands/soma-run.md" "${INSTALL_STATE_TARGET}"
+  PHASE7_COMMITTED=1
+  PHASE7_ACTIVE=0
+  trap - EXIT INT TERM
 fi
 
 # ── Phase 8: AGENTS.md (Codex) ──────────────────────────────────────────────
