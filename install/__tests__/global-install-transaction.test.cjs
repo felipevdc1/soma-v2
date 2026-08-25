@@ -121,7 +121,7 @@ test('026 AC-06/07/11: install.sh declares one transactional writer and a read-o
   const preflight = source.slice(source.indexOf('Phase 0:'), source.indexOf('prepare --repo-root'));
   assert.doesNotMatch(preflight, /\b(?:mkdir|touch|rm|mv|cp|rsync|sed)\b/);
   assert.match(source, /global-transaction\.cjs" recover/);
-  assert.match(source, /global-transaction\.cjs" prepare/);
+  assert.match(source, /PREPARE_ARGS=\(prepare --repo-root/);
   assert.match(source, /global-transaction\.cjs" advance/);
   assert.match(source, /global-transaction\.cjs" rollback/);
   assert.match(source, /trap .*EXIT/);
