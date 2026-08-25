@@ -49,6 +49,53 @@ function fsyncDirectory(directoryPath) {
   }
 }
 
+function fsyncRegularFile(filePath) {
+  const stat = fs.lstatSync(filePath);
+  if (!stat.isFile() || stat.isSymbolicLink()) {
+    throw codedError('UNSAFE_PATH', `durability barrier requires a regular file: ${filePath}`);
+  }
+  const fd = fs.openSync(filePath, 'r');
+  try {
+    fs.fsyncSync(fd);
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+function fsyncPathTree(targetPath) {
+  const stat = fs.lstatSync(targetPath);
+  if (stat.isSymbolicLink()) throw codedError('UNSAFE_PATH', `symlink is not durable transaction state: ${targetPath}`);
+  if (stat.isFile()) {
+    fsyncRegularFile(targetPath);
+    return;
+  }
+  if (!stat.isDirectory()) throw codedError('UNSAFE_PATH', `special path is not durable transaction state: ${targetPath}`);
+  for (const name of fs.readdirSync(targetPath).sort()) {
+    fsyncPathTree(path.join(targetPath, name));
+  }
+  fsyncDirectory(targetPath);
+}
+
+function fsyncParentChain(startPath, stopPath) {
+  let current = startPath;
+  while (isWithin(stopPath, current)) {
+    const stat = lstatIfPresent(current);
+    if (stat) {
+      if (!stat.isDirectory() || stat.isSymbolicLink()) {
+        throw codedError('UNSAFE_PATH', `durability parent is not a real directory: ${current}`);
+      }
+      fsyncDirectory(current);
+    }
+    if (current === stopPath) break;
+    current = path.dirname(current);
+  }
+}
+
+function fsyncPathAndParents(targetPath, stopPath) {
+  fsyncPathTree(targetPath);
+  fsyncParentChain(path.dirname(targetPath), stopPath);
+}
+
 function atomicWriteJson(filePath, value) {
   const directoryPath = path.dirname(filePath);
   fs.mkdirSync(directoryPath, { recursive: true });
@@ -90,6 +137,12 @@ function writeJsonNoClobber(filePath, value) {
 }
 
 function maybeTransactionFault(state, boundary) {
+  if (
+    process.env.SOMA_INSTALL_TESTING === '1' &&
+    process.env.SOMA_TRANSACTION_CRASH_AFTER === `${state}:${boundary}`
+  ) {
+    process.kill(process.pid, 'SIGKILL');
+  }
   if (
     process.env.SOMA_INSTALL_TESTING === '1' &&
     process.env.SOMA_TRANSACTION_FAULT_AFTER === `${state}:${boundary}`
@@ -350,7 +403,7 @@ function missingAncestors(home, targetPath) {
 function snapshotAllowlist(allowlist, transactionDirectory, home) {
   const snapshotRoot = path.join(transactionDirectory, 'snapshots');
   fs.mkdirSync(snapshotRoot, { recursive: true });
-  return allowlist.map((entry, index) => {
+  const snapshots = allowlist.map((entry, index) => {
     const targetPath = entry.targetPath;
     const existingStat = lstatIfPresent(targetPath);
     const existed = existingStat !== null;
@@ -386,6 +439,13 @@ function snapshotAllowlist(allowlist, transactionDirectory, home) {
     }
     return snapshot;
   });
+  for (const snapshot of snapshots) {
+    if (snapshot.existed) fsyncPathTree(snapshot.snapshot_path);
+  }
+  fsyncDirectory(snapshotRoot);
+  fsyncDirectory(transactionDirectory);
+  fsyncDirectory(path.dirname(transactionDirectory));
+  return snapshots;
 }
 
 function pointerPathForBackupRoot(backupRoot) {
@@ -556,11 +616,12 @@ function loadAuthenticatedJournal(journalPath) {
   } catch (error) {
     throw codedError('RECOVERY_BLOCKED', `cannot read active transaction pointer: ${error.message}`);
   }
-  const selectedPath = pointer.generation_path || pointer.transaction_path;
+  const selectedPath = pointer.generation_path;
   if (
     pointer.schema !== POINTER_SCHEMA ||
     pointer.transaction_path !== canonicalPath ||
     !path.isAbsolute(selectedPath) ||
+    selectedPath === canonicalPath ||
     path.dirname(selectedPath) !== transactionDirectory
   ) {
     throw codedError('RECOVERY_BLOCKED', 'active transaction pointer does not authenticate the current journal bytes');
@@ -579,7 +640,7 @@ function loadAuthenticatedJournal(journalPath) {
   }
 }
 
-function removePointer(backupRoot, expectedJournalPath) {
+function removePointer(backupRoot, expectedJournalPath, terminalState = 'UNKNOWN') {
   const pointerPath = pointerPathForBackupRoot(backupRoot);
   const pointerStat = lstatIfPresent(pointerPath);
   if (!pointerStat) return;
@@ -599,16 +660,7 @@ function removePointer(backupRoot, expectedJournalPath) {
   }
   fs.unlinkSync(pointerPath);
   fsyncDirectory(backupRoot);
-  let state = 'UNKNOWN';
-  if (expectedJournalPath) {
-    try {
-      state = readJournal(expectedJournalPath).state;
-    } catch (_error) {
-      // The pointer is already durably absent. Fault injection still uses the
-      // caller's terminal state when the compatibility view is unavailable.
-    }
-  }
-  maybeTransactionFault(state, 'unlink');
+  maybeTransactionFault(terminalState, 'unlink');
 }
 
 function prepareTransaction(options) {
@@ -663,10 +715,35 @@ function prepareTransaction(options) {
     persistJournal(journal, true);
     return JSON.parse(JSON.stringify(journal));
   } catch (error) {
-    if (lstatIfPresent(pointerPath)) fs.rmSync(pointerPath, { force: true });
+    if (lstatIfPresent(pointerPath)) {
+      fs.unlinkSync(pointerPath);
+      fsyncDirectory(backupRoot);
+    }
     fs.rmSync(transactionDirectory, { recursive: true, force: true });
     throw error;
   }
+}
+
+function fsyncForwardTargets(journal) {
+  for (const snapshot of journal.snapshots) {
+    const stat = lstatIfPresent(snapshot.target_path);
+    if (!stat) {
+      fsyncParentChain(path.dirname(snapshot.target_path), journal.home);
+      continue;
+    }
+    if (stat.isSymbolicLink()) {
+      throw codedError('UNSAFE_PATH', `forward target became a symlink: ${snapshot.target_path}`);
+    }
+    if (snapshot.kind === 'file' && !stat.isFile()) {
+      throw codedError('UNSAFE_PATH', `forward file target has the wrong type: ${snapshot.target_path}`);
+    }
+    if (snapshot.kind === 'directory' && !stat.isDirectory()) {
+      throw codedError('UNSAFE_PATH', `forward directory target has the wrong type: ${snapshot.target_path}`);
+    }
+    fsyncPathAndParents(snapshot.target_path, journal.home);
+  }
+  const ledgerPath = path.join(journal.home, '.soma-v2', '.soma', 'install-state.json');
+  if (lstatIfPresent(ledgerPath)) fsyncPathAndParents(ledgerPath, journal.home);
 }
 
 function advanceTransaction(journalPath, toState) {
@@ -676,10 +753,11 @@ function advanceTransaction(journalPath, toState) {
   if (currentIndex < 0 || targetIndex !== currentIndex + 1) {
     throw codedError('INVALID_TRANSITION', `invalid transition ${journal.state} -> ${toState}`);
   }
+  if (toState === 'VERIFIED' || toState === 'COMMITTED') fsyncForwardTargets(journal);
   journal.state = toState;
   journal.phases.push({ state: toState, at: new Date().toISOString() });
   persistJournal(journal, true);
-  if (toState === 'COMMITTED') removePointer(journal.backup_root, journal.journal_path);
+  if (toState === 'COMMITTED') removePointer(journal.backup_root, journal.journal_path, journal.state);
   return JSON.parse(JSON.stringify(journal));
 }
 
@@ -688,11 +766,13 @@ function verifyPreparedAuthorization(journalPath, targetPath) {
   if (journal.state !== 'PREPARED') {
     throw codedError('RECOVERY_BLOCKED', `authorization requires PREPARED, found ${journal.state}`);
   }
+  if (targetPath === undefined) return null;
   const absoluteTarget = assertAbsolute('targetPath', targetPath);
-  if (!journal.snapshots.some((snapshot) => snapshot.target_path === absoluteTarget)) {
+  const snapshot = journal.snapshots.find((entry) => entry.target_path === absoluteTarget);
+  if (!snapshot) {
     throw codedError('UNAUTHORIZED_TARGET', `target is not in the prepared allowlist: ${absoluteTarget}`);
   }
-  return true;
+  return JSON.parse(JSON.stringify(snapshot));
 }
 
 function snapshotMatches(snapshot) {
@@ -756,7 +836,27 @@ function cleanupMissingAncestors(journal) {
     const stat = lstatIfPresent(ancestor);
     if (!stat) continue;
     if (stat.isSymbolicLink()) throw codedError('RECOVERY_BLOCKED', `missing ancestor became a symlink: ${ancestor}`);
-    if (stat.isDirectory() && fs.readdirSync(ancestor).length === 0) fs.rmdirSync(ancestor);
+    if (stat.isDirectory() && fs.readdirSync(ancestor).length === 0) {
+      fs.rmdirSync(ancestor);
+      fsyncDirectory(path.dirname(ancestor));
+    }
+  }
+}
+
+function fsyncRestoredTargets(journal) {
+  for (const snapshot of journal.snapshots) {
+    const stat = lstatIfPresent(snapshot.target_path);
+    if (stat) {
+      if (snapshot.kind === 'file' && !stat.isFile()) {
+        throw codedError('RECOVERY_BLOCKED', `restored file has the wrong type: ${snapshot.target_path}`);
+      }
+      if (snapshot.kind === 'directory' && !stat.isDirectory()) {
+        throw codedError('RECOVERY_BLOCKED', `restored directory has the wrong type: ${snapshot.target_path}`);
+      }
+      fsyncPathAndParents(snapshot.target_path, journal.home);
+      continue;
+    }
+    fsyncParentChain(path.dirname(snapshot.target_path), journal.home);
   }
 }
 
@@ -764,17 +864,23 @@ function finalizeRolledBack(journal) {
   journal.state = 'ROLLED_BACK';
   journal.phases.push({ state: 'ROLLED_BACK', at: new Date().toISOString() });
   persistJournal(journal, true);
-  removePointer(journal.backup_root, journal.journal_path);
+  removePointer(journal.backup_root, journal.journal_path, journal.state);
   return JSON.parse(JSON.stringify(journal));
 }
 
 function rollbackTransaction(journalPath) {
-  let journal = readJournal(journalPath);
+  const requestedPath = assertAbsolute('transaction', journalPath);
+  const pointerPath = pointerPathForBackupRoot(path.dirname(path.dirname(requestedPath)));
+  let journal = lstatIfPresent(pointerPath)
+    ? loadAuthenticatedJournal(requestedPath)
+    : readJournal(requestedPath);
   if (journal.state === 'ROLLED_BACK') return JSON.parse(JSON.stringify(journal));
   if (journal.state === 'COMMITTED') {
     throw codedError('INVALID_TRANSITION', 'a committed transaction cannot be rolled back');
   }
-  journal = loadAuthenticatedJournal(journalPath);
+  if (!lstatIfPresent(pointerPath)) {
+    throw codedError('RECOVERY_BLOCKED', 'nonterminal rollback requires an active authenticated pointer');
+  }
   if (journal.state === 'ROLLBACK_VERIFIED') return finalizeRolledBack(journal);
   if (journal.state !== 'ROLLING_BACK') {
     journal.state = 'ROLLING_BACK';
@@ -784,6 +890,7 @@ function rollbackTransaction(journalPath) {
   const snapshots = [...journal.snapshots].sort((a, b) => b.target_path.length - a.target_path.length);
   for (const snapshot of snapshots) restoreSnapshot(journal, snapshot);
   cleanupMissingAncestors(journal);
+  fsyncRestoredTargets(journal);
   for (const snapshot of journal.snapshots) {
     if (!snapshotMatches(snapshot)) {
       throw codedError('RECOVERY_BLOCKED', `rollback verification failed for ${snapshot.target_path}`);
@@ -828,11 +935,11 @@ function recoverActiveTransaction(backupRootInput, options = {}) {
       return { status: TERMINAL_STATES.has(journal.state) ? journal.state : 'PENDING', state: journal.state };
     }
     if (journal.state === 'COMMITTED') {
-      removePointer(backupRoot, journal.journal_path);
+      removePointer(backupRoot, journal.journal_path, journal.state);
       return { status: 'COMMITTED', state: journal.state };
     }
     if (journal.state === 'ROLLED_BACK') {
-      removePointer(backupRoot, journal.journal_path);
+      removePointer(backupRoot, journal.journal_path, journal.state);
       return { status: 'ROLLED_BACK', state: journal.state };
     }
     const result = rollbackTransaction(journal.journal_path);

@@ -169,11 +169,17 @@ function rewriteJournalAndPointer(journalPath, mutate) {
   const journal = readJson(journalPath);
   mutate(journal);
   fs.writeFileSync(journalPath, `${JSON.stringify(journal, null, 2)}\n`);
+  const generationPath = path.join(
+    path.dirname(journalPath),
+    `transaction.test-rewrite-${crypto.randomBytes(8).toString('hex')}.json`
+  );
+  fs.writeFileSync(generationPath, `${JSON.stringify(journal, null, 2)}\n`);
   const pointerPath = path.join(journal.backup_root, '.active-transaction.json');
   writeJson(pointerPath, {
     schema: 'soma-global-install-transaction-pointer/v1',
     transaction_path: journalPath,
-    journal_sha256: crypto.createHash('sha256').update(fs.readFileSync(journalPath)).digest('hex'),
+    generation_path: generationPath,
+    journal_sha256: crypto.createHash('sha256').update(fs.readFileSync(generationPath)).digest('hex'),
   });
 }
 
@@ -751,7 +757,7 @@ test('dry-run recovery only reports, while corruption returns RECOVERY_BLOCKED',
     }
   });
 
-  await t.test('corrupt journal blocks recovery without touching live bytes', () => {
+  await t.test('corrupt compatibility view cannot block authenticated recovery', () => {
     const fx = makeFixture();
     try {
       const prepared = fx.prepare();
@@ -760,9 +766,10 @@ test('dry-run recovery only reports, while corruption returns RECOVERY_BLOCKED',
       fs.writeFileSync(prepared.journal_path, '{broken');
       const pointerBefore = fs.readFileSync(fx.pointerPath);
       const result = transaction.recoverActiveTransaction(fx.backupRoot);
-      assert.equal(result.status, 'RECOVERY_BLOCKED');
-      assert.equal(fs.readFileSync(hookPath, 'utf8'), 'must stay untouched\n');
-      assert.deepEqual(fs.readFileSync(fx.pointerPath), pointerBefore);
+      assert.equal(result.status, 'ROLLED_BACK');
+      assert.equal(fs.readFileSync(hookPath, 'utf8'), 'old hook\n');
+      assert.equal(fs.existsSync(fx.pointerPath), false);
+      assert.notEqual(pointerBefore.length, 0);
     } finally {
       fx.cleanup();
     }

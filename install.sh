@@ -213,14 +213,17 @@ advance_state() {
 
 maybe_fault PREPARED
 
-PREVIOUS_ROOT="$(node -e '
-const fs = require("fs");
+PREVIOUS_ROOT="$(printf '%s' "${TRANSACTION_JSON}" | node -e '
 const path = require("path");
-const journal = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
-const target = path.join(journal.home, ".soma-v2");
-const snapshot = journal.snapshots.find((entry) => entry.target_path === target);
-if (snapshot && snapshot.existed) process.stdout.write(snapshot.snapshot_path);
-' "${TRANSACTION_JOURNAL}")"
+let input = "";
+process.stdin.on("data", (chunk) => { input += chunk; });
+process.stdin.on("end", () => {
+  const journal = JSON.parse(input);
+  const target = path.join(journal.home, ".soma-v2");
+  const snapshot = journal.snapshots.find((entry) => entry.target_path === target);
+  if (snapshot && snapshot.existed) process.stdout.write(snapshot.snapshot_path);
+});
+')"
 
 if [[ ! -e "${GLOBAL_LEDGER}" ]]; then
   if [[ -z "${PREVIOUS_ROOT}" ]]; then

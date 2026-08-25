@@ -951,21 +951,12 @@ function emitAdoptionError(error, useJson) {
 
 function loadAuthenticatedPreparedJournal(journalPath, targetPaths) {
   const transactionModule = require(path.resolve(__dirname, '..', '..', 'install', 'global-transaction.cjs'));
-  let journal;
+  const snapshotsByTarget = new Map();
   try {
-    journal = JSON.parse(fs.readFileSync(journalPath, 'utf8'));
-  } catch (error) {
-    throw adoptionError('RECOVERY_BLOCKED', `cannot read transaction journal: ${error.message}`);
-  }
-  const verificationTargets = targetPaths.length > 0
-    ? targetPaths
-    : [journal && Array.isArray(journal.snapshots) && journal.snapshots[0] && journal.snapshots[0].target_path].filter(Boolean);
-  if (verificationTargets.length === 0) {
-    throw adoptionError('RECOVERY_BLOCKED', 'transaction journal has no target that can authenticate PREPARED state');
-  }
-  try {
-    for (const targetPath of verificationTargets) {
-      transactionModule.verifyPreparedAuthorization(journalPath, targetPath);
+    if (targetPaths.length === 0) transactionModule.verifyPreparedAuthorization(journalPath);
+    for (const targetPath of targetPaths) {
+      const snapshot = transactionModule.verifyPreparedAuthorization(journalPath, targetPath);
+      snapshotsByTarget.set(snapshot.target_path, snapshot);
     }
   } catch (error) {
     throw adoptionError(
@@ -973,20 +964,14 @@ function loadAuthenticatedPreparedJournal(journalPath, targetPaths) {
       `transaction journal does not authorize adoption: ${error.message}`
     );
   }
-  return { journal, transactionModule };
+  return { snapshotsByTarget };
 }
 
 function runFileAdoptionMode(entries, previousEntries, flags, somaHome, ledgerRoot, useJson) {
   const targetPaths = entries.map((entry) => filesModule.expandHome(entry.target_path));
-  const { journal, transactionModule } = loadAuthenticatedPreparedJournal(flags.transactionJournal, targetPaths);
-  const snapshotsByTarget = new Map(journal.snapshots.map((snapshot) => [snapshot.target_path, snapshot]));
+  const { snapshotsByTarget } = loadAuthenticatedPreparedJournal(flags.transactionJournal, targetPaths);
 
   const authorizeNewTarget = (_entry, context) => {
-    try {
-      transactionModule.verifyPreparedAuthorization(flags.transactionJournal, context.targetPathAbs);
-    } catch (error) {
-      throw adoptionError('RECOVERY_BLOCKED', `new target lacks active PREPARED authorization: ${error.message}`);
-    }
     const snapshot = snapshotsByTarget.get(context.targetPathAbs);
     if (
       !snapshot ||
