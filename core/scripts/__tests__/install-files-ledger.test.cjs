@@ -214,7 +214,7 @@ test('T-05-05: install.cjs writeInstallState and files.cjs writeLedger/readLedge
 // install.cjs's own `writeInstallState` the way orchestrate()'s Step 4
 // does, without mentioning installedFiles, and proves the ledger sync.cjs
 // wrote survives.
-test('T-05-06 @spec AC-06: install.cjs (writeInstallState) and sync.cjs (the real kind:"file" producer, spawned exactly as install.cjs invokes it) target the SAME ledger file', () => {
+test('T-05-06 @spec AC-02 AC-06: without --ledger-root, install.cjs and sync.cjs target the SAME project ledger file', () => {
   withTmp('t05-encounter-soma-home-', (somaHome) => {
     withTmp('t05-encounter-project-', (project) => {
       // somaHome and project MUST be different directories — that was
@@ -259,6 +259,10 @@ test('T-05-06 @spec AC-06: install.cjs (writeInstallState) and sync.cjs (the rea
       assert.equal(
         fs.existsSync(path.join(somaHome, '.soma')), false,
         'somaHome must receive no .soma/ at all — the ledger must never land there'
+      );
+      assert.equal(
+        fs.existsSync(path.join(project, '.soma', 'install-state.json')), true,
+        'Spec 026 must preserve the Spec 018 default at <cwd>/.soma/install-state.json when --ledger-root is absent'
       );
       assert.equal(files.ledgerFilePath(project), path.join(project, '.soma', 'install-state.json'));
 

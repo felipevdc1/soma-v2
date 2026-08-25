@@ -373,6 +373,99 @@ test('ledger root: install-state.json for kind:"file" entries lands at process.c
   );
 });
 
+test('ledger root: an explicit absolute root is shared by apply and dry-run across two cwd values', () => {
+  const content = 'module.exports = { global: true };\n';
+  const targetPath = path.join(FIXTURE_BASE, 'explicit-ledger-root-target', 'hook.cjs');
+  const { somaHome, fixtureDir } = createFixture('explicit-ledger-root', {
+    sourceFiles: [['hooks/hook.cjs', content]],
+    entries: [fileEntry('hooks/hook.cjs', targetPath)],
+  });
+  const projectA = path.join(fixtureDir, 'project-a');
+  const projectB = path.join(fixtureDir, 'project-b');
+  const globalRoot = path.join(fixtureDir, 'global-root');
+  const fakeHome = path.join(fixtureDir, 'fake-home');
+  fs.mkdirSync(projectA, { recursive: true });
+  fs.mkdirSync(projectB, { recursive: true });
+  fs.mkdirSync(globalRoot, { recursive: true });
+  fs.mkdirSync(fakeHome, { recursive: true });
+
+  const first = runSync(
+    ['--apply', '--json', '--tool=claude', '--allow-local-edits', `--soma-home=${somaHome}`, `--ledger-root=${globalRoot}`],
+    { HOME: fakeHome },
+    { cwd: projectA }
+  );
+  assert.equal(first.status, 0, `${first.stdout}\n${first.stderr}`);
+
+  const dry = runSync(
+    ['--dry-run', '--json', '--tool=claude', `--soma-home=${somaHome}`, '--ledger-root', globalRoot],
+    { HOME: fakeHome },
+    { cwd: projectB }
+  );
+  assert.equal(dry.status, 0, `${dry.stdout}\n${dry.stderr}`);
+  const dryFinding = JSON.parse(dry.stdout).findings.find((finding) => finding.kind === 'file');
+  assert.equal(dryFinding.action, 'skip', 'dry-run in project B must read the ownership written by apply in project A');
+
+  const second = runSync(
+    ['--apply', '--json', '--tool=claude', '--allow-local-edits', `--soma-home=${somaHome}`, '--ledger-root', globalRoot],
+    { HOME: fakeHome },
+    { cwd: projectB }
+  );
+  assert.equal(second.status, 0, `${second.stdout}\n${second.stderr}`);
+  assert.equal(fs.existsSync(path.join(globalRoot, '.soma', 'install-state.json')), true);
+  assert.equal(fs.existsSync(path.join(projectA, '.soma', 'install-state.json')), false);
+  assert.equal(fs.existsSync(path.join(projectB, '.soma', 'install-state.json')), false);
+});
+
+test('ledger root: a relative path returns INVALID_ARGS and writes nothing', () => {
+  const targetPath = path.join(FIXTURE_BASE, 'relative-ledger-root-target', 'hook.cjs');
+  const { somaHome, projectDir, fixtureDir } = createFixture('relative-ledger-root', {
+    sourceFiles: [['hooks/hook.cjs', 'module.exports = {};\n']],
+    entries: [fileEntry('hooks/hook.cjs', targetPath)],
+  });
+  const fakeHome = path.join(fixtureDir, 'fake-home');
+  fs.mkdirSync(fakeHome, { recursive: true });
+
+  const apply = runSync(
+    ['--apply', '--json', '--tool=claude', '--allow-local-edits', `--soma-home=${somaHome}`, '--ledger-root=relative-root'],
+    { HOME: fakeHome },
+    { cwd: projectDir }
+  );
+  assert.equal(apply.status, 2, `${apply.stdout}\n${apply.stderr}`);
+  const out = JSON.parse(apply.stdout);
+  assert.equal(out.error.code, 'INVALID_ARGS');
+  assert.match(out.error.message, /ledger root must be absolute/);
+  assert.equal(fs.existsSync(targetPath), false);
+  assert.equal(fs.existsSync(path.join(projectDir, 'relative-root')), false);
+  assert.equal(fs.existsSync(path.join(projectDir, '.soma')), false);
+});
+
+test('ledger root: an existing symlink returns INVALID_ARGS and writes nothing', () => {
+  const targetPath = path.join(FIXTURE_BASE, 'symlink-ledger-root-target', 'hook.cjs');
+  const { somaHome, projectDir, fixtureDir } = createFixture('symlink-ledger-root', {
+    sourceFiles: [['hooks/hook.cjs', 'module.exports = {};\n']],
+    entries: [fileEntry('hooks/hook.cjs', targetPath)],
+  });
+  const fakeHome = path.join(fixtureDir, 'fake-home');
+  const realRoot = path.join(fixtureDir, 'real-root');
+  const symlinkRoot = path.join(fixtureDir, 'root-link');
+  fs.mkdirSync(fakeHome, { recursive: true });
+  fs.mkdirSync(realRoot, { recursive: true });
+  fs.symlinkSync(realRoot, symlinkRoot);
+
+  const apply = runSync(
+    ['--apply', '--json', '--tool=claude', '--allow-local-edits', `--soma-home=${somaHome}`, `--ledger-root=${symlinkRoot}`],
+    { HOME: fakeHome },
+    { cwd: projectDir }
+  );
+  assert.equal(apply.status, 2, `${apply.stdout}\n${apply.stderr}`);
+  const out = JSON.parse(apply.stdout);
+  assert.equal(out.error.code, 'INVALID_ARGS');
+  assert.match(out.error.message, /ledger root must not be a symlink/);
+  assert.equal(fs.existsSync(targetPath), false);
+  assert.equal(fs.existsSync(path.join(realRoot, '.soma')), false);
+  assert.equal(fs.existsSync(path.join(projectDir, '.soma')), false);
+});
+
 // ── Ledger key stays verbatim (~-prefixed), never expanded ────────────────
 
 test('ledger key: a ~-prefixed target_path is recorded verbatim in the ledger, not expanded', () => {
