@@ -10,6 +10,7 @@
  * Usage:
  *   node ~/.soma-v2/scripts/sync.cjs --dry-run [--json] [--verbose] [--soma-home=PATH] [--ledger-root=ABS] [--tool=ADAPTER]
  *   node ~/.soma-v2/scripts/sync.cjs --apply --tool=<codex|claude> [--json] [--soma-home=PATH] [--ledger-root=ABS] [--allow-local-edits]
+ *   node core/scripts/sync.cjs --apply --tool=TOOL --ledger-root=ABS --adopt-from=ABS --transaction-journal=ABS [--allow-new-target-overwrite]
  *
  * Note: --tool is REQUIRED when --apply is used. Optional for --dry-run (scans all adapters when omitted).
  *
@@ -64,6 +65,10 @@ function parseArgs(argv) {
     verbose: false,
     somaHome: null,
     ledgerRoot: null,
+    adoptFrom: null,
+    transactionJournal: null,
+    allowNewTargetOverwrite: false,
+    filesOnly: false,
     tool: null,
     allowLocalEdits: false,  // BF-06: opt-in to warn-and-write; default OFF = abort on conflict
     targetsFile: null        // --targets-file=<path>: load adapter from explicit path, resolve relative target_path vs cwd
@@ -84,6 +89,16 @@ function parseArgs(argv) {
     else if (arg === '--ledger-root' && i + 1 < argv.length && !argv[i + 1].startsWith('--')) {
       flags.ledgerRoot = argv[++i];
     }
+    else if (arg.startsWith('--adopt-from=')) flags.adoptFrom = arg.slice('--adopt-from='.length);
+    else if (arg === '--adopt-from' && i + 1 < argv.length && !argv[i + 1].startsWith('--')) {
+      flags.adoptFrom = argv[++i];
+    }
+    else if (arg.startsWith('--transaction-journal=')) flags.transactionJournal = arg.slice('--transaction-journal='.length);
+    else if (arg === '--transaction-journal' && i + 1 < argv.length && !argv[i + 1].startsWith('--')) {
+      flags.transactionJournal = argv[++i];
+    }
+    else if (arg === '--allow-new-target-overwrite') flags.allowNewTargetOverwrite = true;
+    else if (arg === '--files-only') flags.filesOnly = true;
     else if (arg.startsWith('--tool=')) flags.tool = arg.slice('--tool='.length);
     else if (arg === '--tool' && i + 1 < argv.length) flags.tool = argv[++i];
     else if (arg === '--allow-local-edits') flags.allowLocalEdits = true;  // BF-06 opt-in
@@ -117,6 +132,20 @@ function parseArgs(argv) {
 
   if (flags.json && flags.verbose) {
     errors.push('--json and --verbose are mutually exclusive (--json always emits all findings)');
+  }
+
+  const adoptionRequested = !!(flags.adoptFrom || flags.transactionJournal || flags.allowNewTargetOverwrite);
+  if (adoptionRequested) {
+    if (!flags.apply) errors.push('--adopt-from requires --apply');
+    if (!flags.tool) errors.push('--adopt-from requires --tool');
+    if (!flags.ledgerRoot) errors.push('--adopt-from requires --ledger-root');
+    if (!flags.adoptFrom) errors.push('--adopt-from is required for adoption mode');
+    if (!flags.transactionJournal) errors.push('--transaction-journal is required for adoption mode');
+    if (flags.adoptFrom && !path.isAbsolute(flags.adoptFrom)) errors.push('--adopt-from must be absolute');
+    if (flags.transactionJournal && !path.isAbsolute(flags.transactionJournal)) {
+      errors.push('--transaction-journal must be absolute');
+    }
+    if (flags.targetsFile) errors.push('--adopt-from cannot be combined with --targets-file');
   }
 
   return { flags, errors };
@@ -899,6 +928,113 @@ function runFileApplyMode(entries, somaHome, ledgerRoot, useJson) {
   return { aborted: false, written: toWrite.length };
 }
 
+function adoptionError(code, message) {
+  return Object.assign(new Error(message), { code });
+}
+
+function emitAdoptionError(error, useJson) {
+  const code = error.code || 'ADOPTION_FAILED';
+  const exitCode = code === 'RECOVERY_BLOCKED' ? 3 : 2;
+  if (useJson) {
+    process.exitCode = exitCode;
+    process.stdout.write(JSON.stringify({
+      schema: 'soma-sync-adoption/v1',
+      mode: 'adopt',
+      summary: null,
+      error: { code, message: error.message, details: error.details || null },
+    }, null, 2) + '\n');
+  } else {
+    process.stderr.write(`${code}: ${error.message}\n`);
+    process.exitCode = exitCode;
+  }
+}
+
+function loadAuthenticatedPreparedJournal(journalPath, targetPaths) {
+  const transactionModule = require(path.resolve(__dirname, '..', '..', 'install', 'global-transaction.cjs'));
+  let journal;
+  try {
+    journal = JSON.parse(fs.readFileSync(journalPath, 'utf8'));
+  } catch (error) {
+    throw adoptionError('RECOVERY_BLOCKED', `cannot read transaction journal: ${error.message}`);
+  }
+  const verificationTargets = targetPaths.length > 0
+    ? targetPaths
+    : [journal && Array.isArray(journal.snapshots) && journal.snapshots[0] && journal.snapshots[0].target_path].filter(Boolean);
+  if (verificationTargets.length === 0) {
+    throw adoptionError('RECOVERY_BLOCKED', 'transaction journal has no target that can authenticate PREPARED state');
+  }
+  try {
+    for (const targetPath of verificationTargets) {
+      transactionModule.verifyPreparedAuthorization(journalPath, targetPath);
+    }
+  } catch (error) {
+    throw adoptionError(
+      'RECOVERY_BLOCKED',
+      `transaction journal does not authorize adoption: ${error.message}`
+    );
+  }
+  return { journal, transactionModule };
+}
+
+function runFileAdoptionMode(entries, previousEntries, flags, somaHome, ledgerRoot, useJson) {
+  const targetPaths = entries.map((entry) => filesModule.expandHome(entry.target_path));
+  const { journal, transactionModule } = loadAuthenticatedPreparedJournal(flags.transactionJournal, targetPaths);
+  const snapshotsByTarget = new Map(journal.snapshots.map((snapshot) => [snapshot.target_path, snapshot]));
+
+  const authorizeNewTarget = (_entry, context) => {
+    try {
+      transactionModule.verifyPreparedAuthorization(flags.transactionJournal, context.targetPathAbs);
+    } catch (error) {
+      throw adoptionError('RECOVERY_BLOCKED', `new target lacks active PREPARED authorization: ${error.message}`);
+    }
+    const snapshot = snapshotsByTarget.get(context.targetPathAbs);
+    if (
+      !snapshot ||
+      snapshot.kind !== 'file' ||
+      snapshot.existed !== true ||
+      snapshot.sha256 !== context.sha256
+    ) {
+      throw adoptionError(
+        'RECOVERY_BLOCKED',
+        `new target does not match its exact PREPARED snapshot/hash: ${context.targetPathAbs}`
+      );
+    }
+    return true;
+  };
+
+  const result = filesModule.planFileAdoption(entries, {
+    candidateRoot: somaHome,
+    previousRoot: flags.adoptFrom,
+    previousEntries,
+    allowNewTargets: flags.allowNewTargetOverwrite,
+    authorizeNewTarget,
+  });
+  if (!result.ok) {
+    const error = adoptionError(
+      'GLOBAL_OWNERSHIP_CONFLICT',
+      `global file ownership conflicts: ${result.conflicts.join(', ')}`
+    );
+    error.details = { conflicts: result.conflicts };
+    throw error;
+  }
+
+  const adopted = Object.keys(result.ledgerEntries);
+  if (adopted.length > 0) {
+    const { installedFiles } = filesModule.readLedger(ledgerRoot);
+    filesModule.writeLedger(ledgerRoot, { ...installedFiles, ...result.ledgerEntries });
+  }
+  if (useJson) {
+    process.stdout.write(JSON.stringify({
+      schema: 'soma-sync-adoption/v1',
+      mode: 'adopt',
+      summary: { adopted },
+      error: null,
+    }, null, 2) + '\n');
+  } else {
+    process.stdout.write(`Adopted ${adopted.length} proven whole-file target(s).\n`);
+  }
+}
+
 // ---- Apply mode ----
 
 // SANDBOX_VIOLATION safe-path prefix (Article III enforcement — SOMA_SAFE_PATHS_ONLY=1)
@@ -1431,12 +1567,19 @@ function main() {
         // via manifest.cjs's own (unmodified) validateInstallTargetsSchema.
         targetsData = loadInstallTargetsWithKinds(somaHome, adapter);
       } catch (err) {
+        if (flags.adoptFrom) {
+          emitAdoptionError(adoptionError(err.code || 'MANIFEST_INVALID', err.message), useJson);
+          return;
+        }
         continue;
       }
 
-      totalEntries += targetsData.entries.length;
+      const selectedEntries = (flags.filesOnly || flags.adoptFrom)
+        ? targetsData.entries.filter((entry) => filesModule.isFileEntry(entry))
+        : targetsData.entries;
+      totalEntries += selectedEntries.length;
 
-      for (const entry of targetsData.entries) {
+      for (const entry of selectedEntries) {
         // Spec 018 (T-07): kind:"file" entries are not block entries —
         // computeEntryAction assumes target_anchor_id/source_doc, both of
         // which CONTRACT-FILE-ENTRY-01 forbids on a file entry. Route them
@@ -1457,7 +1600,7 @@ function main() {
   }
 
   // ---- Auto-detect cbm/legacy markers and invoke migration if found (Spec 013, AC-12) ----
-  if (flags.apply) {
+  if (flags.apply && !flags.filesOnly && !flags.adoptFrom) {
     const migrate = require('./lib/migrate.cjs');
     const target = {
       claudeMd: path.join(os.homedir(), '.claude', 'CLAUDE.md'),
@@ -1477,6 +1620,28 @@ function main() {
 
   // ---- APPLY mode ----
   if (flags.apply) {
+    if (flags.adoptFrom) {
+      let previousTargets;
+      try {
+        previousTargets = loadInstallTargetsWithKinds(flags.adoptFrom, flags.tool);
+      } catch (error) {
+        emitAdoptionError(adoptionError(error.code || 'MANIFEST_INVALID', error.message), useJson);
+        return;
+      }
+      try {
+        runFileAdoptionMode(
+          fileEntries,
+          previousTargets.entries,
+          flags,
+          somaHome,
+          ledgerRoot,
+          useJson
+        );
+      } catch (error) {
+        emitAdoptionError(error, useJson);
+      }
+      return;
+    }
     // Spec 018 (T-07): file entries are applied by a fully separate
     // function, BEFORE runApplyMode is even called, and runApplyMode's
     // arguments (allFindings, totalEntries, adapters) are exactly what
@@ -1486,6 +1651,31 @@ function main() {
     if (fileEntries.length > 0) {
       const fileResult = runFileApplyMode(fileEntries, somaHome, ledgerRoot, useJson);
       if (fileResult.aborted) return;
+      if (flags.filesOnly) {
+        if (useJson) {
+          process.stdout.write(JSON.stringify({
+            schema: 'soma-sync-files/v1',
+            mode: 'apply',
+            summary: { files_written: fileResult.written },
+            error: null,
+          }, null, 2) + '\n');
+        } else {
+          process.stdout.write(`Files-only apply complete. ${fileResult.written} file(s) written.\n`);
+        }
+        return;
+      }
+    } else if (flags.filesOnly) {
+      if (useJson) {
+        process.stdout.write(JSON.stringify({
+          schema: 'soma-sync-files/v1',
+          mode: 'apply',
+          summary: { files_written: 0 },
+          error: null,
+        }, null, 2) + '\n');
+      } else {
+        process.stdout.write('Files-only apply complete. 0 file(s) written.\n');
+      }
+      return;
     }
     runApplyMode(flags, somaHome, allFindings, totalEntries, adapters, useJson);
     return;

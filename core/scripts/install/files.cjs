@@ -335,6 +335,121 @@ function planFileInstall(entries, opts = {}) {
   return { ok: diverged.length === 0, diverged, plan };
 }
 
+/**
+ * Plan adoption of whole-file ownership from a previous framework tree.
+ * This function never writes a target or ledger. It validates the complete
+ * candidate and previous entry sets before it returns any ledger entries.
+ *
+ * A target declared by the previous adapter is adoptable only when its live
+ * bytes still equal the previous source bytes. A target new to the candidate
+ * adapter is foreign unless the caller explicitly enables new targets and
+ * authorizes that exact live hash from a durable transaction snapshot.
+ *
+ * @param {object[]} candidateEntries
+ * @param {{
+ *   candidateRoot: string,
+ *   previousRoot: string,
+ *   previousEntries: object[],
+ *   allowNewTargets?: boolean,
+ *   authorizeNewTarget?: Function,
+ * }} opts
+ * @returns {{ok: boolean, conflicts: string[], ledgerEntries: object}}
+ */
+function planFileAdoption(candidateEntries, {
+  candidateRoot,
+  previousRoot,
+  previousEntries,
+  allowNewTargets = false,
+  authorizeNewTarget = () => false,
+} = {}) {
+  if (!candidateRoot || !previousRoot || !Array.isArray(previousEntries)) {
+    throw new Error('planFileAdoption: candidateRoot, previousRoot and previousEntries are required');
+  }
+  if (typeof authorizeNewTarget !== 'function') {
+    throw new Error('planFileAdoption: authorizeNewTarget must be a function');
+  }
+
+  const candidateRootAbs = path.resolve(candidateRoot);
+  const previousRootAbs = path.resolve(previousRoot);
+  const candidates = [];
+  const candidateTargets = new Set();
+  for (const rawEntry of candidateEntries || []) {
+    const entry = validateFileEntry(rawEntry, { repoRoot: candidateRootAbs });
+    if (entry.kind !== 'file') continue;
+    if (candidateTargets.has(entry.target_path)) {
+      throw new Error(`planFileAdoption: duplicate candidate target_path: ${entry.target_path}`);
+    }
+    candidateTargets.add(entry.target_path);
+    candidates.push(entry);
+  }
+
+  const previousByTarget = new Map();
+  for (const rawEntry of previousEntries) {
+    const entry = validateFileEntry(rawEntry, { repoRoot: previousRootAbs });
+    if (entry.kind !== 'file') continue;
+    if (previousByTarget.has(entry.target_path)) {
+      throw new Error(`planFileAdoption: duplicate previous target_path: ${entry.target_path}`);
+    }
+    previousByTarget.set(entry.target_path, entry);
+  }
+
+  const conflicts = [];
+  const plannedLedgerEntries = {};
+  for (const entry of candidates) {
+    const targetPathAbs = expandHome(entry.target_path);
+    let targetStat;
+    try {
+      targetStat = fs.lstatSync(targetPathAbs);
+    } catch (error) {
+      if (error && error.code === 'ENOENT') continue;
+      conflicts.push(entry.target_path);
+      continue;
+    }
+    if (targetStat.isSymbolicLink() || !targetStat.isFile()) {
+      conflicts.push(entry.target_path);
+      continue;
+    }
+
+    let currentSha256;
+    try {
+      currentSha256 = sha256OfFile(targetPathAbs);
+    } catch (_error) {
+      conflicts.push(entry.target_path);
+      continue;
+    }
+
+    const previousEntry = previousByTarget.get(entry.target_path);
+    if (previousEntry) {
+      const previousSource = path.resolve(previousRootAbs, previousEntry.source_path);
+      let previousSha256;
+      try {
+        previousSha256 = sha256OfFile(previousSource);
+      } catch (_error) {
+        conflicts.push(entry.target_path);
+        continue;
+      }
+      if (currentSha256 !== previousSha256) {
+        conflicts.push(entry.target_path);
+        continue;
+      }
+      plannedLedgerEntries[entry.target_path] = buildLedgerEntry(previousSha256);
+      continue;
+    }
+
+    if (!allowNewTargets || !authorizeNewTarget(entry, { targetPathAbs, sha256: currentSha256 })) {
+      conflicts.push(entry.target_path);
+      continue;
+    }
+    plannedLedgerEntries[entry.target_path] = buildLedgerEntry(currentSha256);
+  }
+
+  return {
+    ok: conflicts.length === 0,
+    conflicts,
+    ledgerEntries: conflicts.length === 0 ? plannedLedgerEntries : {},
+  };
+}
+
 // ── Ledger read/write (CONTRACT-FILES-LEDGER-02) ───────────────────────────
 
 /**
@@ -469,6 +584,7 @@ module.exports = {
   sha256OfFile,
   classifyFileState,
   planFileInstall,
+  planFileAdoption,
   nowIsoUtc,
   buildLedgerEntry,
   ledgerFilePath,

@@ -755,6 +755,29 @@ test('026 AC-05: force fails RECOVERY_BLOCKED if live bytes no longer match the 
   assert.equal(fs.readFileSync(target, 'utf8'), 'changed after PREPARED\n');
 });
 
+test('026 AC-05: force fails RECOVERY_BLOCKED after the active journal leaves PREPARED', () => {
+  const fixtureDir = path.join(FIXTURE_BASE, 'adoption-expired-prepared');
+  const target = path.join(fixtureDir, 'home', '.claude', 'commands', 'new.md');
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(target, 'snapshotted bytes\n');
+  const fx = createAdoptionFixture('expired-prepared', {
+    previousEntries: [],
+    candidateEntries: [fileEntry('commands/new.md', target)],
+    previousSources: [],
+    candidateSources: [['commands/new.md', 'candidate bytes\n']],
+  });
+  transaction.advanceTransaction(fx.prepared.journal_path, 'ADOPTED');
+
+  const result = runSync(adoptionArgs(fx, ['--allow-new-target-overwrite']), { HOME: fx.home }, { cwd: fx.repoRoot });
+
+  assert.equal(result.status, 3, `${result.stdout}\n${result.stderr}`);
+  const output = JSON.parse(result.stdout);
+  assert.equal(output.error.code, 'RECOVERY_BLOCKED');
+  assert.match(output.error.message, /PREPARED/);
+  assert.equal(fs.existsSync(fx.ledgerPath), false);
+  assert.equal(fs.readFileSync(target, 'utf8'), 'snapshotted bytes\n');
+});
+
 test('026 adoption requires --apply, --tool, --ledger-root and absolute journal paths', () => {
   const { somaHome, projectDir } = createFixture('adoption-invalid-cli', { entries: [] });
   const cases = [
