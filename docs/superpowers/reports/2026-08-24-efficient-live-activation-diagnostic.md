@@ -1,6 +1,6 @@
 # Diagnóstico da ativação live eficiente
 
-Status: `PAUSED_DIAGNOSTIC`
+Status: `ROLLED_BACK / PAUSED_DIAGNOSTIC`
 
 Data: 2026-08-24
 
@@ -48,3 +48,19 @@ A opção segura imediata é restaurar settings, os três arquivos alterados e `
 2. o instalador precisa validar ownership e preparar rollback antes de qualquer cópia ou merge live, não apenas na Phase 7.
 
 Não criar ledger manual nem adotar arquivos por hash sem um contrato explícito. Isso esconderia o defeito que a run acabou de provar.
+
+## Rollback concluído
+
+O usuário autorizou a restauração. A run `run-260824-efficiency-rollback` restaurou o pre-state do backup e preservou o estado parcial em:
+
+`/Users/felipevdc1/.soma-v2-backups/1787619716.udXQh2/failed-attempt-dot-soma-v2-a2`
+
+Verificação independente confirmou:
+
+- zero processo Claude;
+- zero entry `_soma_managed` em settings;
+- os sete hashes de settings, anchors, comando e arquivos alterados iguais ao backup ou à `.soma-v2` antiga;
+- `.soma-v2` byte-idêntica a uma extração fresca de `dot-soma-v2.tgz`;
+- ledger do worktree ausente e tracked diff limpo.
+
+O ambiente live voltou ao estado anterior. A correção do ledger global e da atomicidade continua pendente em uma nova run. Nenhuma nova ativação está autorizada por este receipt.
