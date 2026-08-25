@@ -2,11 +2,11 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make `/soma-run` the reliable public entry for new, legacy and installed projects, with read-only status/resume inspection, exact resume confirmation and durable structured handoff.
+**Goal:** Make `/soma-run` the reliable public entry for new, legacy and installed projects, with read-only inspection, snapshot-bound continuation and durable handoff.
 
-**Architecture:** Keep `/soma-run` below 8,000 bytes as a thin Claude adapter and add an internal `soma entry` preflight. Move the long state machine to one installed reference that loads only after `READY` or `CONTINUE_READY`. Reuse existing `soma run` primitives, adding a handoff verb and backward-compatible run context. Resolve repo and scope explicitly, adopt through existing project installation components, and invoke the installed CLI by absolute path.
+**Architecture:** Keep `/soma-run` below 8,000 UTF-8 bytes as a thin Claude adapter. Start requests cross the shell boundary only as a validated request file; inspection emits a complete second slash command whose locator and canonical snapshot are rechecked before mutation. The 10-step orchestration body has one installed reference and loads only after `READY` or `CONTINUE_READY`. Existing `soma run` primitives remain internal, with baseline, checkpoint and handoff added as evidence-backed verbs.
 
-**Tech Stack:** Node.js 22 CommonJS, `node:test`, Git CLI through `spawnSync` argument arrays, existing SOMA install/sync primitives, JSON and Markdown artifacts.
+**Tech Stack:** Node.js 22 CommonJS, `node:test`, Git CLI through `spawnSync` argument arrays, existing SOMA install/sync components, JSON and Markdown artifacts.
 
 ---
 
@@ -14,108 +14,109 @@
 
 | Unit | Responsibility | Acceptance criteria |
 |---|---|---|
-| `core/scripts/entry/args.cjs` | Parse the public grammar without project access | AC-01 |
-| `core/scripts/entry/project.cjs` | Resolve repo/scope and monorepo boundaries without `chdir` | AC-02, AC-07 |
-| `core/scripts/entry/adoption.cjs` | Inspect and adopt absent `.soma` idempotently | AC-05, AC-06 |
-| `core/scripts/entry/card.cjs` | Build status and resume cards from durable evidence | AC-02, AC-03, AC-04 |
-| `core/scripts/entry.cjs` | Coordinate modes and emit one JSON envelope | AC-01 through AC-07, AC-10 |
-| `core/scripts/run/handoff.cjs` | Validate and publish JSON plus Markdown continuity | AC-08 |
-| Claude adapter, orchestration reference and install targets | Route `$ARGUMENTS`, exact confirmation, lazy load and absolute CLI | AC-01, AC-03, AC-09, AC-10, AC-13 |
-| Current README/docs | Publish only `/soma-run` and current state paths | AC-11, AC-12 |
+| `core/scripts/entry/args.cjs`, `request.cjs` | Parse flags and validate request-file envelopes before project access | AC-01 |
+| `core/scripts/entry/project.cjs` | Resolve repo/scope without `chdir`; make read-only Git truly read-only | AC-02, AC-05, AC-07 |
+| `core/scripts/entry/adoption.cjs` | Inspect and adopt absent `.soma` without executing repository scripts | AC-05, AC-06 |
+| `core/scripts/run/baseline.cjs`, `checkpoint.cjs`, dispatch gate | Enforce `T-BASELINE`, bounded evidence and append-only pause facts | AC-14, AC-15 |
+| `core/scripts/entry/card.cjs`, `snapshot.cjs`, `entry.cjs` | Build cards and validate continuation before lock/write | AC-02, AC-03, AC-04 |
+| `core/scripts/run/handoff.cjs`, schema and `/handoff` adapter | Derive durable continuity only from persisted facts | AC-08, AC-15 |
+| Claude adapter, orchestration reference and install targets | Safe request routing, absolute CLI, lazy load and transactional install | AC-09, AC-10, AC-13 |
+| Current README/docs | Publish only the canonical command and current artifact paths | AC-11, AC-12 |
 
-Do not add a plugin, daemon, dependency, PATH shim or alternate public command. Do not edit historical files under `core/specs/` or snapshots.
+Do not add a plugin, daemon, hook, dependency, PATH shim or alternate public command. Do not edit historical files under `core/specs/` or snapshots.
 
-### Task 1: Lock the public grammar and internal dispatcher
+### Task 0: Capture the immutable pre-implementation failure baseline
+
+**Files:**
+
+- Create at runtime only: `.soma/baselines/universal-entry-npm.json`
+- Create at runtime only: `.soma/baselines/universal-entry-npm.log`
+
+- [ ] **Step 1: Pin the baseline candidate**
+
+Use the exact `8d2b395` candidate, or the later docs-only correction HEAD. Prove every commit after `8d2b395` changes only these two documents:
+
+```bash
+candidate_sha="$(git rev-parse HEAD)"
+git merge-base --is-ancestor 1cbebb4 "$candidate_sha"
+git merge-base --is-ancestor b3a4997 "$candidate_sha"
+git diff --name-only 8d2b395.."$candidate_sha" | rg -v '^docs/superpowers/(specs/2026-08-25-soma-universal-entry-resume-design|plans/2026-08-25-soma-universal-entry-resume)\.md$' > /tmp/soma-universal-entry-nondoc-delta
+test ! -s /tmp/soma-universal-entry-nondoc-delta
+```
+
+Expected: exit 0 and no non-doc delta.
+
+- [ ] **Step 2: Capture the full suite from a detached worktree**
+
+Create a detached worktree at `candidate_sha`, run `npm test` there, and save stdout/stderr in the project worktree. Parse every `not ok` record into `soma-test-baseline/v1` with `candidateSha`, `command`, `exitCode`, `failures` and `logSha256`. Remove the detached worktree after capture.
+
+```bash
+repo_root="$(pwd -P)"
+baseline_dir="$(mktemp -d)"
+mkdir -p "$repo_root/.soma/baselines"
+git worktree add --detach "$baseline_dir" "$candidate_sha"
+set +e; (cd "$baseline_dir" && npm test) > "$repo_root/.soma/baselines/universal-entry-npm.log" 2>&1; baseline_exit=$?; set -e
+git worktree remove "$baseline_dir"
+node -e 'const fs=require("fs"),crypto=require("crypto"); const [logFile,outFile,sha,code]=process.argv.slice(1); const log=fs.readFileSync(logFile,"utf8"); const failures=log.split(/\r?\n/).filter(line=>/^not ok\b/.test(line)); const record={$schema:"soma-test-baseline/v1",candidateSha:sha,command:["npm","test"],exitCode:Number(code),failures,logSha256:crypto.createHash("sha256").update(log).digest("hex")}; fs.writeFileSync(outFile,JSON.stringify(record,null,2)+"\n");' "$repo_root/.soma/baselines/universal-entry-npm.log" "$repo_root/.soma/baselines/universal-entry-npm.json" "$candidate_sha" "$baseline_exit"
+```
+
+Expected: the structured failure list includes the inherited planned spec 024 RED for absent `operator-gate.cjs`. Do not implement spec 024 or require exit 0.
+
+- [ ] **Step 3: Validate and freeze the baseline**
+
+```bash
+node -e 'const fs=require("fs"),crypto=require("crypto"); const p=JSON.parse(fs.readFileSync(".soma/baselines/universal-entry-npm.json","utf8")); const log=fs.readFileSync(".soma/baselines/universal-entry-npm.log"); if(p.$schema!=="soma-test-baseline/v1"||p.candidateSha!==process.argv[1]||p.logSha256!==crypto.createHash("sha256").update(log).digest("hex")||!Array.isArray(p.failures)) process.exit(1);' "$candidate_sha"
+```
+
+Expected: exit 0. No later task may replace either baseline file.
+
+### Task 1: Lock the public grammar and safe request boundary
 
 **Files:**
 
 - Create: `core/scripts/entry/args.cjs`
+- Create: `core/scripts/entry/request.cjs`
 - Create: `core/scripts/entry.cjs`
 - Create: `core/scripts/__tests__/entry-args.test.cjs`
+- Create: `core/scripts/__tests__/entry-request.test.cjs`
 - Modify: `core/scripts/soma.cjs`
 
-- [ ] **Step 1: Write RED parser tests**
+- [ ] **Step 1: Write RED parser and request tests**
 
-Cover the five modes and fail-before-discovery behavior:
+Assert these modes: `--help`, `--status`, `--resume [runId]`, `--continue <runId> --project <repo> --scope <scope> --snapshot <sha256> [--handoff <path>]`, and start through `--request-file <path>`. Continue rejects a missing locator or snapshot, uppercase/non-64-hex snapshots, duplicate/conflicting flags and unknown tokens before project discovery. Normal shell whitespace between argv tokens is accepted; every value remains byte-exact.
 
-```js
-test('AC-01 parses a normal objective as one start request', () => {
-  assert.deepEqual(parseEntryArgs(['fix login retries']), {
-    mode: 'start', objective: 'fix login retries', project: null,
-    scope: null, handoff: null, runId: null
-  });
-});
-
-test('AC-01 parses optional resume id and project', () => {
-  assert.deepEqual(parseEntryArgs(['--resume', 'run-260825-1200-a1b2c3', '--project', '/repo', '--scope', '/repo/app']), {
-    mode: 'resume_inspect', objective: null, project: '/repo',
-    scope: '/repo/app', handoff: null, runId: 'run-260825-1200-a1b2c3'
-  });
-});
-
-for (const args of [['--help', 'x'], ['--status', '--resume'], ['--wat'], []]) {
-  test(`AC-01 rejects ${JSON.stringify(args)}`, () => {
-    assert.throws(() => parseEntryArgs(args), /INVALID_ENTRY_ARGS/);
-  });
-}
-```
-
-Also assert `--continue` requires `--run`, run IDs match `^run-[a-z0-9-]+$`, and flag values are not treated as objectives. Prove `--project` and `--scope` work consistently with start, status and resume.
+Create `soma-entry-request/v1` fixtures whose objectives contain spaces, both quote styles, `$()`, backticks and a newline. Put a shell-writing sentinel inside the payload and assert it is never created. Reject schema, content hash, session binding, locator and size mismatches.
 
 - [ ] **Step 2: Run RED tests**
 
-Run:
+```bash
+node --test core/scripts/__tests__/entry-args.test.cjs core/scripts/__tests__/entry-request.test.cjs
+```
+
+Expected: FAIL because the entry modules do not exist.
+
+- [ ] **Step 3: Implement the narrow interfaces**
+
+`parseEntryArgs(argv)` returns exactly `{mode, requestFile, project, scope, handoff, runId, snapshot}`. Start accepts only `--request-file`; objective text is never an argv value. `validateEntryRequest(path, {sessionId})` reads a regular session-scoped file, validates `soma-entry-request/v1`, canonical `contentSha256`, a bounded size and exact locator, then returns the literal objective. `entry.cjs` dispatches by mode, prints one JSON envelope, maps argument errors to exit 2 and never calls `process.chdir()`.
+
+Register `{ name: 'entry', script: 'entry.cjs' }` in `core/scripts/soma.cjs` without changing existing forms.
+
+- [ ] **Step 4: Run GREEN and dispatcher regression tests**
 
 ```bash
-node --test core/scripts/__tests__/entry-args.test.cjs
+node --test core/scripts/__tests__/entry-args.test.cjs core/scripts/__tests__/entry-request.test.cjs core/scripts/__tests__/run.test.cjs
 ```
 
-Expected: FAIL because `entry/args.cjs` and `entry.cjs` do not exist.
-
-- [ ] **Step 3: Implement the parser and dispatcher**
-
-Export this contract from `args.cjs`:
-
-```js
-class EntryArgsError extends Error {
-  constructor(message) {
-    super(`INVALID_ENTRY_ARGS: ${message}`);
-    this.code = 'INVALID_ENTRY_ARGS';
-  }
-}
-
-function parseEntryArgs(argv) {
-  // Return exactly {mode, objective, project, scope, handoff, runId}.
-  // Accept one mode only. Consume --project, --scope, --handoff and --run once.
-  // Treat the optional token immediately after --resume as runId unless it begins with "--".
-  // Reject empty objective, duplicate flags, unknown flags and conflicting modes.
-}
-
-module.exports = { EntryArgsError, parseEntryArgs };
-```
-
-`entry.cjs` must call `parseEntryArgs(process.argv.slice(2))`, dispatch through a mode-to-function table, print one JSON object to stdout and map contract errors to exit 2. Do not call `process.chdir()`.
-
-Add `{ name: 'entry', script: 'entry.cjs', desc: 'Internal preflight for the /soma-run adapter' }` to `SUBCOMMANDS` in `soma.cjs`. Keep every existing subcommand unchanged.
-
-- [ ] **Step 4: Run GREEN tests and the legacy dispatcher test**
-
-Run:
-
-```bash
-node --test core/scripts/__tests__/entry-args.test.cjs core/scripts/__tests__/run.test.cjs
-```
-
-Expected: PASS. `soma run --help` still lists state, report, gate, resume and dispatch-record.
+Expected: PASS; hostile objectives round-trip literally and no sentinel exists.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add core/scripts/entry/args.cjs core/scripts/entry.cjs core/scripts/soma.cjs core/scripts/__tests__/entry-args.test.cjs
-git commit -m "feat(entry): add deterministic universal entry parser"
+git add core/scripts/entry/args.cjs core/scripts/entry/request.cjs core/scripts/entry.cjs core/scripts/soma.cjs core/scripts/__tests__/entry-args.test.cjs core/scripts/__tests__/entry-request.test.cjs
+git commit -m "feat(entry): add safe universal entry grammar"
 ```
 
-### Task 2: Resolve project and monorepo scope without silent cwd changes
+### Task 2: Resolve project and scope without silent cwd or Git writes
 
 **Files:**
 
@@ -125,27 +126,11 @@ git commit -m "feat(entry): add deterministic universal entry parser"
 
 - [ ] **Step 1: Write RED resolver tests with real repositories**
 
-Build temporary Git repos with `package.json` workspaces and assert this API:
+Cover explicit repo/scope, a declared workspace, handoff locator, current Git root, non-Git empty cwd and marker-bearing non-Git cwd. Reject home, filesystem root, non-empty markerless cwd, symlink escape, undeclared nested scope and ambiguous locator. Snapshot `process.cwd()` around every call.
 
-```js
-const resolved = resolveProject({
-  cwd: '/tmp/repo/packages/web/src',
-  project: '/tmp/repo',
-  scope: '/tmp/repo/packages/web',
-  handoff: null,
-  runId: null,
-  homeDir: '/tmp/home'
-});
-assert.equal(resolved.repoRoot, '/tmp/repo');
-assert.equal(resolved.scopeRoot, '/tmp/repo/packages/web');
-assert.equal(resolved.monorepo, true);
-```
+For read-only Git, create a stale stat cache by setting the index mtime to an older fixed timestamp. Record index bytes and `mtimeNs`, run help/status/resume resolution, then assert both remain exact.
 
-Add a non-Git empty directory and a non-Git marker-bearing directory as known-good new projects. Add known-bad cases for home as implicit project, filesystem root, a non-empty markerless directory, symlink escape, undeclared nested scope, ambiguous resume locator and cwd outside any recognized project. Snapshot `process.cwd()` before and after every call and assert equality.
-
-- [ ] **Step 2: Run RED tests**
-
-Run:
+- [ ] **Step 2: Run RED**
 
 ```bash
 node --test core/scripts/__tests__/entry-project.test.cjs
@@ -155,270 +140,134 @@ Expected: FAIL because the resolver is absent.
 
 - [ ] **Step 3: Implement canonical resolution**
 
-Export:
+Export `resolveProject({cwd, project, scope, handoff, runId, homeDir})` and `discoverWorkspaces(repoRoot)`. Canonicalize with real paths before containment checks. A non-Git cwd is a valid `new` project only when it is a real directory, is neither home nor root, and is empty or has a recognized marker. Return `{repoRoot, scopeRoot, monorepo, workspaceRoots, source}`.
+
+Route every Git inspection through one helper with both controls:
 
 ```js
-function resolveProject({ cwd, project, scope, handoff, runId, homeDir }) {
-  // Priority: explicit project, validated handoff repo.root, current Git top-level,
-  // recognized non-Git cwd, validated run handoff locator.
-  // A non-Git cwd is recognized only when non-home/non-root and empty or marker-bearing.
-  // Resolve real paths before containment checks.
-  // Return {repoRoot, scopeRoot, monorepo, workspaceRoots, source}.
-}
-
-function discoverWorkspaces(repoRoot) {
-  // Read package.json workspaces, pnpm-workspace.yaml and lerna.json when present.
-  // Expand only paths contained by repoRoot and return canonical directories.
-}
-
-module.exports = { resolveProject, discoverWorkspaces };
+spawnSync('git', ['--no-optional-locks', ...args], {
+  cwd,
+  encoding: 'utf8',
+  env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' }
+});
 ```
 
-Run Git through `spawnSync('git', args, { cwd, encoding: 'utf8' })`. Never interpolate paths into a shell command. A root-level monorepo invocation uses `scopeRoot === repoRoot`; a nested scope must match a discovered workspace or explicit valid `--scope`.
-
-- [ ] **Step 4: Wire the resolver and verify zero mutation**
-
-`entry.cjs` must resolve only after argument parsing. `help` returns before resolution. `status` and `resume_inspect` may read resolved files but cannot create directories, locks or locator files.
-
-Run:
+- [ ] **Step 4: Run GREEN and commit**
 
 ```bash
 node --test core/scripts/__tests__/entry-project.test.cjs core/scripts/__tests__/entry-args.test.cjs
-```
-
-Expected: PASS, including unchanged cwd and filesystem snapshots.
-
-- [ ] **Step 5: Commit**
-
-```bash
 git add core/scripts/entry/project.cjs core/scripts/entry.cjs core/scripts/__tests__/entry-project.test.cjs
-git commit -m "feat(entry): resolve project and monorepo scope safely"
+git commit -m "feat(entry): resolve projects without cwd or index mutation"
 ```
 
-### Task 3: Add safe and idempotent adoption
+Expected: PASS, including stale index bytes and mtime.
+
+### Task 3: Adopt safely, checkpoint pauses and gate the baseline
 
 **Files:**
 
 - Create: `core/scripts/entry/adoption.cjs`
-- Create: `core/scripts/__tests__/entry-adoption.test.cjs`
 - Create: `core/scripts/run/baseline.cjs`
+- Create: `core/scripts/run/checkpoint.cjs`
+- Create: `core/scripts/__tests__/entry-adoption.test.cjs`
 - Create: `core/scripts/__tests__/run-baseline.test.cjs`
+- Create: `core/scripts/__tests__/run-checkpoint.test.cjs`
 - Modify: `core/scripts/entry.cjs`
 - Modify: `core/scripts/install.cjs`
 - Modify: `core/scripts/run.cjs`
 - Modify: `core/scripts/run/state.cjs`
+- Modify: `core/scripts/run/dispatch-record.cjs`
 
-- [ ] **Step 1: Write RED adoption tests**
+- [ ] **Step 1: Write RED adoption, checkpoint and gate tests**
 
-Use real temporary projects and the existing fake-home helper. Cover non-Git empty and marker-bearing projects, legacy Git repo, workspace monorepo, complete install, partial/corrupt install state, a safe declared baseline and one rejected by budget policy. Make the safe baseline script write a sentinel if executed; assert adoption leaves the sentinel absent. In `run-baseline.test.cjs`, prove the command runs only through an active dispatch, caps time/output, writes a hashed proof and appends it to continuity.
+Assert adoption classifies new non-Git and legacy Git projects, records branch/HEAD/dirty/existing artifacts, remains byte and mtime stable on repeat, and preserves application files. A detected safe command records `pending` plus `{timeoutMs:120000,maxOutputBytesPerStream:262144}` but leaves an execution sentinel absent. Unsafe or unavailable commands record `not_run_budget` or `not_available`, never pass.
 
-The central assertions are:
+For every `pending` run, assert synthetic `T-BASELINE` exists before any user task, even when there is no FOUNDATION task. `dispatch-record begin` permits only `T-BASELINE` until `.soma/evidence/<runId>/baseline.json` validates and its hash appears in proofs. Other attempts return `BASELINE_REQUIRED` without a dispatch record.
 
-```js
-assert.equal(record.$schema, 'soma-adoption/v1');
-assert.equal(record.project.repoRoot, fs.realpathSync(repo));
-assert.equal(record.project.previousState, 'legacy');
-assert.equal(record.git.headSha, git(repo, ['rev-parse', 'HEAD']).trim());
-assert.deepEqual(record.existingArtifacts, ['docs/spec.md']);
-assert.equal(record.baseline.status, 'pending');
-assert.deepEqual(record.baseline.budget, {
-  timeoutMs: 120_000,
-  maxOutputBytesPerStream: 262_144
-});
-assert.equal(fs.existsSync(path.join(repo, 'baseline-executed')), false);
-assert.equal(fs.readFileSync(path.join(repo, 'src/app.js'), 'utf8'), sourceBefore);
-```
+Checkpoint tests validate a bounded regular `soma-checkpoint/v1` input, reject symlink/path escape/schema/run mismatch before mutation, publish `.soma/checkpoints/<runId>/<sequence>-<sha256>.json`, append `{path,sha256}` to `continuity.checkpoints[]`, never overwrite, and preserve the prior checkpoint under injected failure.
 
-Run adoption twice without changing the repo and assert `.soma/adoption.json` is byte-identical and its mtime is unchanged.
-
-- [ ] **Step 2: Run RED tests**
-
-Run:
+- [ ] **Step 2: Run RED**
 
 ```bash
-node --test core/scripts/__tests__/entry-adoption.test.cjs core/scripts/__tests__/run-baseline.test.cjs
+node --test core/scripts/__tests__/entry-adoption.test.cjs core/scripts/__tests__/run-baseline.test.cjs core/scripts/__tests__/run-checkpoint.test.cjs
 ```
 
-Expected: FAIL because adoption and the executor-only baseline primitive are absent.
+Expected: FAIL because adoption and the new run verbs are absent.
 
-- [ ] **Step 3: Extract a callable project-install function**
+- [ ] **Step 3: Implement adoption without script execution**
 
-Keep the current CLI behavior in `install.cjs` and export a function used by adoption:
+Extract `installProject({projectPath, tool, mergeClaudeMd, allowLocalEdits, env})` from the existing installer while preserving CLI behavior. Implement `inspectProject` and `adoptProject`; publish `soma-adoption/v1` by sibling temp plus rename. Entry may call adoption but must never import or run `baseline.cjs`.
 
-```js
-function installProject({ projectPath, tool, mergeClaudeMd, allowLocalEdits, env }) {
-  // Execute the existing init, manifest and sync stages with projectPath explicit.
-  // Return {status, installStatePath, changedFiles}; preserve current exit semantics in main().
-}
+- [ ] **Step 4: Implement checkpoint, baseline and the global dispatch gate**
 
-if (require.main === module) main();
-module.exports = { installProject };
-```
+Add `soma run checkpoint --run <id> --input-file <json>` and `soma run baseline --run <id> --dispatch <dispatchId>`. Baseline requires the active `T-BASELINE` dispatch, executes the stored argv in explicit scope cwd, stops at 120 seconds or 256 KiB on either stream, publishes a hashed proof and appends it to run proofs. `pass` unlocks later dispatches. `fail` or `timeout` appends a diagnostic checkpoint, transitions to `PAUSED_DIAGNOSTIC`, and never cleans the worktree.
 
-Do not change global `install.sh`, global ledger selection or transactional ownership.
-
-- [ ] **Step 4: Implement inspect, baseline and atomic adoption**
-
-Export:
-
-```js
-function inspectProject({ repoRoot, scopeRoot }) {
-  // Return classification reasons, Git branch/HEAD/dirty hashes,
-  // inferred test command and pre-existing artifact paths.
-}
-
-function adoptProject({ repoRoot, scopeRoot, tool = 'claude', env = process.env }) {
-  // If install-state is complete, return existing adoption data read-only.
-  // If .soma is absent, inspect and classify the baseline without executing it,
-  // call installProject,
-  // validate soma-adoption/v1 and publish adoption.json via sibling temp + rename.
-  // Refuse partial, corrupt or drift-detected state.
-}
-```
-
-Supported baseline discovery order is the repository's declared test script, then ecosystem-specific commands already represented in project files. Reject as `not_run_budget` scripts that declare watch/dev/serve mode, Docker, browser E2E, integration infrastructure, or fan-out across more than eight workspaces. Record an argv array, `pending` and `{timeoutMs:120000,maxOutputBytesPerStream:262144}` for an accepted command; record `not_available` when no command is proven. Do not spawn the command during adoption.
-
-After `READY`, the orchestration reference makes this pending baseline the first FOUNDATION executor action. Add `baseline` to the internal `soma run` verbs. It accepts only `--run <runId> --dispatch <dispatchId>`, verifies `dispatchId` in `activeDispatchIds` and executes the recorded argv with `spawnSync` argument arrays, explicit scope cwd, `timeout` and `maxBuffer` from the stored budget. It writes `.soma/evidence/<runId>/baseline.json`, hashes it, and calls a new `appendProof()` export in `state.cjs` to append the proof to `continuity.proofs`. `entry.cjs` must never import, spawn or call `run/baseline.cjs`.
-
-Persist `pass`, `fail` or `timeout` without coercion. Only a baseline that changes tracked application files blocks further mutation. The primitive never cleans those changes automatically.
-
-- [ ] **Step 5: Run focused install and adoption tests**
-
-Run:
+- [ ] **Step 5: Run GREEN and commit**
 
 ```bash
-node --test core/scripts/__tests__/entry-adoption.test.cjs core/scripts/__tests__/run-baseline.test.cjs core/scripts/__tests__/install-e2e.test.cjs core/scripts/__tests__/init-existing.e2e-smoke.test.cjs
+node --test core/scripts/__tests__/entry-adoption.test.cjs core/scripts/__tests__/run-baseline.test.cjs core/scripts/__tests__/run-checkpoint.test.cjs core/scripts/__tests__/run-dispatch-record.test.cjs core/scripts/__tests__/install-e2e.test.cjs
+git add core/scripts/entry/adoption.cjs core/scripts/entry.cjs core/scripts/install.cjs core/scripts/run.cjs core/scripts/run/baseline.cjs core/scripts/run/checkpoint.cjs core/scripts/run/state.cjs core/scripts/run/dispatch-record.cjs core/scripts/__tests__/entry-adoption.test.cjs core/scripts/__tests__/run-baseline.test.cjs core/scripts/__tests__/run-checkpoint.test.cjs core/scripts/__tests__/run-dispatch-record.test.cjs
+git commit -m "feat(run): gate work on bounded baseline evidence"
 ```
 
-Expected: PASS. A second adoption reports no changes and does not rewrite application source.
+Expected: PASS; baseline remains executor-owned and no adoption-time sentinel exists.
 
-- [ ] **Step 6: Commit**
-
-```bash
-git add core/scripts/entry/adoption.cjs core/scripts/entry.cjs core/scripts/install.cjs core/scripts/run.cjs core/scripts/run/baseline.cjs core/scripts/run/state.cjs core/scripts/__tests__/entry-adoption.test.cjs core/scripts/__tests__/run-baseline.test.cjs
-git commit -m "feat(entry): adopt new and legacy projects safely"
-```
-
-### Task 4: Build read-only status, resume cards and exact continuation
+### Task 4: Build read-only cards and snapshot-bound continuation
 
 **Files:**
 
 - Create: `core/scripts/entry/card.cjs`
+- Create: `core/scripts/entry/snapshot.cjs`
 - Create: `core/scripts/__tests__/entry-resume-safe.test.cjs`
-- Create: `core/hooks/resume-confirmation-gate.cjs`
-- Create: `core/hooks/__tests__/resume-confirmation-gate.test.cjs`
 - Modify: `core/scripts/entry.cjs`
 - Modify: `core/scripts/run/resume.cjs`
 - Modify: `core/scripts/run/state.cjs`
-- Modify: `core/hooks/hooks.json`
-- Modify: `install/soma-hooks-map.json`
-- Modify: `core/adapters/claude/install-targets.json`
 - Modify: `core/scripts/__tests__/run-resume.test.cjs`
 - Modify: `core/scripts/__tests__/run-state.test.cjs`
 
-- [ ] **Step 1: Write RED zero-mutation and handshake tests**
+- [ ] **Step 1: Write RED inspection and continuation tests**
 
-Create a real run state, report files and dirty working tree. Snapshot recursive file hashes, mtimes, Git index hash and process list-visible lock files before calls.
+Create a real run and dirty worktree. `--resume` must return `AWAITING_CONTINUE` plus the exact full command:
 
-```js
-const inspected = runEntry(['--resume', runId, '--project', repo], { cwd: home });
-assert.equal(inspected.status, 0);
-const card = JSON.parse(inspected.stdout);
-assert.equal(card.state, 'AWAITING_CONTINUE');
-assert.equal(card.confirmation, `CONTINUAR ${runId}`);
-assert.deepEqual(snapshot(repo), before);
-assert.equal(fs.existsSync(path.join(repo, '.soma.lock')), false);
-
-const wrong = runEntry(['--continue', '--run', `${runId}x`, '--project', repo]);
-assert.notEqual(wrong.status, 0);
-assert.deepEqual(snapshot(repo), before);
+```text
+/soma-run --continue <runId> --project "<repo>" --scope "<scope>" --snapshot <sha256>
 ```
 
-Add status on missing `.soma`, omitted resume ID with zero, one and two non-terminal candidates, v2 state without optional fields, state/report mismatch and branch/SHA/dirty drift after inspection. Feed hook JSON with `prompt` values `CONTINUAR <runId>`, leading/trailing text and near-matches. Only the exact complete trimmed prompt may invoke the CLI.
+Append resolved `--handoff "<path>"` when applicable. Assert recursive hashes, mtimes, index bytes/mtime, locks and agent records remain unchanged. Cover missing/ambiguous run, old v2 state, state/report mismatch, normal whitespace between flags, malformed snapshot, locator change, branch/HEAD/dirty/proof drift, and invocation from home.
 
-- [ ] **Step 2: Run RED tests**
-
-Run:
+- [ ] **Step 2: Run RED**
 
 ```bash
 node --test core/scripts/__tests__/entry-resume-safe.test.cjs
 ```
 
-Expected: FAIL because cards and safe continuation do not exist.
+Expected: FAIL because cards and snapshot validation are absent.
 
-- [ ] **Step 3: Export the existing pure resume computation**
+- [ ] **Step 3: Implement canonical snapshot and continuation ordering**
 
-Refactor `run/resume.cjs` without changing its CLI output:
+Export pure `inspectResume`, card builders and canonical JSON hashing. Hash exactly `{run,locator,branch,headSha,dirty,proofs}` with recursively sorted object keys, preserved array order, UTF-8 and no newline. Old state normalization stays in memory.
 
-```js
-function inspectResume({ projectRoot, runId, sessionId }) {
-  // Read and validate state, choose latest report per step,
-  // return {runId, reentry, lastPass, warnings, state} without writes.
-}
-
-if (require.main === module) main();
-module.exports = { STEP_ORDER, latestStatusByStep, reentryFromReports, inspectResume };
-```
-
-Keep `soma run resume --run <runId>` mandatory and read-only.
-
-- [ ] **Step 4: Add optional run context and card generation**
-
-`freshState()` adds these optional-compatible objects for new states:
-
-```js
-entry: {
-  objective: null, repoRoot: null, scopeRoot: null,
-  adoptionPath: null, baseline: null, ceremony: null
-},
-continuity: { tasks: [], proofs: [], blocker: null, nextAction: null }
-```
-
-Old `soma-state/v2` remains valid. Status and resume normalize absent objects in memory and do not persist that normalization.
-
-`card.cjs` exports `buildStatusCard`, `buildResumeCard`, `captureDirtyState` and `verifyResumeDrift`. The card must include every field named in AC-03. `verifyResumeDrift` compares canonical repo/scope, branch, HEAD and dirty hashes before any lock or state write.
-
-- [ ] **Step 5: Implement exact continuation ordering**
-
-The `UserPromptSubmit` hook supplies exact confirmation, while `entry --continue --run <id>` enforces this order:
+Continue must run in this order:
 
 ```text
-resolve project -> read handoff/state -> recompute Git and dirty hashes
--> reject drift -> acquire run lock -> persist reentry -> return CONTINUE_READY
+parse flags -> resolve exact project/scope/handoff -> reload durable inputs
+-> recompute snapshot -> compare exact lowercase digest -> acquire lock
+-> persist reentry -> return CONTINUE_READY
 ```
 
-No code path may acquire the lock before drift verification. Agent creation remains outside the CLI and is allowed only after `CONTINUE_READY`.
+Any mismatch returns `RESUME_DRIFT` before mutation. The second slash invocation is the authorization; no prompt hook participates.
 
-Implement `resume-confirmation-gate.cjs` as a fail-closed hook. It reads the standard hook JSON from stdin, matches only `^CONTINUAR (run-[a-z0-9-]+)$` after trimming, and calls:
-
-```js
-spawnSync('node', [installedSomaCli, 'entry', '--continue', '--run', runId], {
-  cwd: input.cwd,
-  encoding: 'utf8',
-  env: process.env
-});
-```
-
-On exit 0 it emits hook additional context containing the unchanged `CONTINUE_READY` payload, `orchestrationReference: ~/.claude/references/soma-run-orchestration.md`, and the instruction to read it before any dispatch. On nonzero, malformed JSON or unresolved installed CLI it returns a blocking hook decision and includes the diagnostic. Other prompts pass through without invoking anything. Register the hook in `hooks.json`, `soma-hooks-map.json` and Claude whole-file install targets.
-
-- [ ] **Step 6: Run focused resume/state tests**
-
-Run:
+- [ ] **Step 4: Run GREEN and commit**
 
 ```bash
-node --test core/scripts/__tests__/entry-resume-safe.test.cjs core/scripts/__tests__/run-resume.test.cjs core/scripts/__tests__/run-state.test.cjs core/hooks/__tests__/resume-confirmation-gate.test.cjs
+node --test core/scripts/__tests__/entry-resume-safe.test.cjs core/scripts/__tests__/run-resume.test.cjs core/scripts/__tests__/run-state.test.cjs
+git add core/scripts/entry/card.cjs core/scripts/entry/snapshot.cjs core/scripts/entry.cjs core/scripts/run/resume.cjs core/scripts/run/state.cjs core/scripts/__tests__/entry-resume-safe.test.cjs core/scripts/__tests__/run-resume.test.cjs core/scripts/__tests__/run-state.test.cjs
+git commit -m "feat(resume): bind continuation to durable snapshot"
 ```
 
-Expected: PASS, including old v2 fixtures and byte-identical resume inspection.
+Expected: PASS and zero mutation on every inspection or rejected continue.
 
-- [ ] **Step 7: Commit**
-
-```bash
-git add core/scripts/entry/card.cjs core/scripts/entry.cjs core/scripts/run/resume.cjs core/scripts/run/state.cjs core/hooks/resume-confirmation-gate.cjs core/hooks/hooks.json install/soma-hooks-map.json core/adapters/claude/install-targets.json core/scripts/__tests__/entry-resume-safe.test.cjs core/scripts/__tests__/run-resume.test.cjs core/scripts/__tests__/run-state.test.cjs core/hooks/__tests__/resume-confirmation-gate.test.cjs
-git commit -m "feat(resume): require read-only card and exact continuation"
-```
-
-### Task 5: Replace prose-only handoff with a validated durable pair
+### Task 5: Publish handoff only from durable run evidence
 
 **Files:**
 
@@ -433,174 +282,84 @@ git commit -m "feat(resume): require read-only card and exact continuation"
 - Modify: `core/scripts/__tests__/run.test.cjs`
 - Modify: `core/scripts/__tests__/run-gitignore.test.cjs`
 
-- [ ] **Step 1: Write RED schema, durability and atomicity tests**
+- [ ] **Step 1: Write RED derivation, durability and atomicity tests**
 
-Use the exact `soma-handoff/v2` fields from the design. Assert known-bad payloads fail for missing dirty hashes, temporary-only proof paths, undeclared agents, active agents omitted from `agents.active`, absent blocker and non-canonical resume command.
+Build dispatch fixtures under `.soma/dispatches`: prompt without output is active and yields `HANDOFF_ACTIVE_DISPATCH`; prompt plus output plus valid metadata is closed and supplies task, attempt, executor and closure; any missing/contradictory component yields `CORRUPT_DISPATCH_RECORD`. Checkpoint supplies only pause reason, blocker, next decision and task summary. Handoff must not accept caller-supplied agent truth.
 
-```js
-const result = runRun(['handoff', '--run', runId], { cwd: repo });
-assert.equal(result.status, 0, result.stderr);
-const generationDir = newestValidGeneration(path.join(repo, '.soma', 'handoffs', runId));
-const jsonPath = path.join(generationDir, 'handoff.json');
-const mdPath = path.join(generationDir, 'handoff.md');
-const json = readJson(jsonPath);
-assert.equal(json.$schema, 'soma-handoff/v2');
-assert.match(fs.readFileSync(mdPath, 'utf8'), new RegExp(`CONTINUAR ${runId}`));
-assert.equal(git(repo, ['check-ignore', jsonPath]).status, 1);
-assert.deepEqual(git(repo, ['diff', '--cached', '--name-only']).stdout, indexBefore);
-assert.equal(json.artifacts.jsonTracking, 'untracked');
-assert.equal(json.artifacts.markdownTracking, 'untracked');
-```
+Reject proof paths that are ignored by Git, under the OS temp directory, outside repo/scope, symlinked outside or contain `..`. Fault-inject before validation and directory rename. Assert either the previous immutable pair remains or no new generation exists. Compare Git index bytes/mtime before and after.
 
-Fault-inject between temp writes, JSON validation, Markdown render and rename. Expected: either the previous valid pair remains or neither new file exists.
-
-- [ ] **Step 2: Run RED tests**
-
-Run:
+- [ ] **Step 2: Run RED**
 
 ```bash
 node --test core/scripts/__tests__/run-handoff.test.cjs core/scripts/__tests__/run-gitignore.test.cjs
 ```
 
-Expected: FAIL because the verb and schema are absent.
+Expected: FAIL because the writer and schema are absent.
 
-- [ ] **Step 3: Implement schema and paths**
+- [ ] **Step 3: Implement schema, derivation and atomic publish**
 
-Extend `resolveSomaPaths()` with `handoffsDir`, `runHandoffsDir` and `resolveHandoffGeneration(runId, handoffId)`. Export `HANDOFF_SCHEMA`, `validateHandoff` and `renderHandoffMarkdown` from `handoff-schema.cjs`:
+Add handoff paths to `resolveSomaPaths`. `handoff.cjs` may read only run state, newest valid checkpoint, dispatch records and durable proofs. It derives attempts and closed agents, builds canonical `soma-handoff/v2`, derives Markdown from the validated JSON, and renames one sibling temp directory to `.soma/handoffs/<runId>/<handoffId>/`. It reports `tracked`, `modified`, `untracked` or `non_git` with read-only Git. It never stages, commits or pushes.
 
-```js
-function validateHandoff(payload) {
-  return validate(HANDOFF_SCHEMA, payload);
-}
+- [ ] **Step 4: Route `/handoff` without a second ledger**
 
-function renderHandoffMarkdown(payload) {
-  // Render repo, run/tasks, dirty files, proofs, agent closure,
-  // pause reason, blocker, next decision and exact resume instructions.
-}
-```
+With an explicit `--run` or valid active `.soma.lock`, the adapter writes a structured checkpoint input, invokes the absolute CLI `run checkpoint`, then `run handoff`, reports both artifacts and stops. It does not infer attempts or agent closure. Without an active SOMA run, preserve the existing path but mark it `$schema: soma-handoff/legacy` and `resumable_by_soma_run: false`; keep it outside `.soma/handoffs/`.
 
-The real implementation returns `valid:false` with field paths for every violation. Markdown must derive only from the validated payload.
-
-- [ ] **Step 4: Implement atomic publish without Git index mutation**
-
-`handoff.cjs` reads run state and project evidence, creates `.soma/handoffs/<runId>/.<handoffId>.tmp/`, builds and validates `handoff.json` plus `handoff.md`, then publishes the immutable generation with one directory rename to `.soma/handoffs/<runId>/<handoffId>/`. Resume selects the newest schema-valid `createdAt`. It queries tracking status read-only with:
-
-```js
-spawnSync('git', ['status', '--porcelain=v1', '--', relativeJsonPath, relativeMarkdownPath], {
-  cwd: projectRoot, encoding: 'utf8'
-});
-```
-
-It must not stage, commit or push. Record each artifact as `tracked`, `modified`, `untracked` or `non_git`. Add `handoff` to `VERBS` without changing existing verb forms.
-
-Keep `.soma/handoffs/` unignored. Add explicit tests on both sides instead of a broad `.soma/` ignore rule.
-
-- [ ] **Step 5: Make the Claude `/handoff` adapter invoke the primitive**
-
-Add one router at the start of `/handoff`. If explicit `--run` or a valid `.soma.lock` identifies an active SOMA run, collect required run data, close or declare agents, persist non-temporary proofs, call `node "${SOMA_HOME:-$HOME/.soma-v2}/scripts/soma.cjs" run handoff --run <runId>`, report both paths and stop. It may not also write the legacy plan handoff. Without an active run, preserve the current general-session path but mark its header `$schema: soma-handoff/legacy` and `resumable_by_soma_run: false`; it stays outside `.soma/handoffs/`. The templates must make those modes explicit.
-
-- [ ] **Step 6: Run focused tests**
-
-Run:
+- [ ] **Step 5: Run GREEN and commit**
 
 ```bash
 node --test core/scripts/__tests__/run-handoff.test.cjs core/scripts/__tests__/run.test.cjs core/scripts/__tests__/run-gitignore.test.cjs
-```
-
-Expected: PASS. The previous pair survives injected failure, the Git index is unchanged, and active-run `/handoff` produces only the structured pair.
-
-- [ ] **Step 7: Commit**
-
-```bash
 git add core/scripts/run.cjs core/scripts/run/paths.cjs core/scripts/run/handoff.cjs core/scripts/run/handoff-schema.cjs core/scripts/__tests__/run-handoff.test.cjs core/scripts/__tests__/run.test.cjs core/scripts/__tests__/run-gitignore.test.cjs core/adapters/claude/commands/handoff.md core/templates/handoff-template.md templates/handoff-template.md
-git commit -m "feat(handoff): persist structured resumable continuity"
+git commit -m "feat(handoff): derive continuity from durable records"
 ```
 
-### Task 6: Make `/soma-run` thin, lazy-loaded, installed and PATH-independent
+Expected: PASS; active/corrupt dispatches and non-durable proofs block without a new generation or index change.
+
+### Task 6: Make `/soma-run` safe, thin, lazy and transactionally installed
 
 **Files:**
 
 - Modify: `core/adapters/claude/commands/soma-run.md`
 - Create: `core/adapters/claude/references/soma-run-orchestration.md`
+- Modify: `core/adapters/claude/install-targets.json`
 - Create: `core/scripts/__tests__/universal-entry-adapter.test.cjs`
 - Modify: `core/scripts/__tests__/install-targets-set.test.cjs`
 - Modify: `install/__tests__/global-install-transaction.test.cjs`
 
-- [ ] **Step 1: Write RED adapter contract tests**
+- [ ] **Step 1: Write RED adapter, injection and lazy-load tests**
 
-Assert the command source:
+Assert the adapter contains `$ARGUMENTS`, calls only `node "${SOMA_HOME:-$HOME/.soma-v2}/scripts/soma.cjs"`, is at most 8,000 UTF-8 bytes with a target near 4 KiB, and contains none of the 10-step headings. Assert each heading exists exactly once in the current source tree, in `soma-run-orchestration.md`.
 
-```js
-assert.match(source, /\$ARGUMENTS/);
-assert.match(source, /\$\{SOMA_HOME:-\$HOME\/\.soma-v2\}\/scripts\/soma\.cjs/);
-assert.doesNotMatch(source, /(?:^|\s)soma\s+(?:entry|run)/m);
-assert.match(source, /CONTINUAR <runId>/);
-assert.match(source, /resume-confirmation-gate/);
-assert.match(source, /CONTINUE_READY/);
-assert.ok(Buffer.byteLength(source, 'utf8') <= 8_000);
-assert.doesNotMatch(source, /STEP_1A_SPECIFY|STEP_10_COMMIT|Recovery Protocol/);
-assert.match(reference, /STEP_1A_SPECIFY/);
-assert.match(reference, /STEP_10_COMMIT/);
+Instrument reference reads. Help, status and resume inspection must read it zero times; `READY` and `CONTINUE_READY` read it exactly once before dispatch. Continue routes validated flags to entry. Start uses structured Write to create a session-scoped `soma-entry-request/v1`, verifies schema/hash and calls fixed `entry --request-file <path>`. Exercise spaces, quotes, `$()`, backticks and newline with a sentinel and prove no payload executes. Use a fake HOME and remove every `soma` shim from PATH.
 
-const routes = parseModeRoutes(source);
-assert.deepEqual(routes.help.reads, []);
-assert.deepEqual(routes.status.reads, []);
-assert.deepEqual(routes.resume_inspect.reads, []);
-assert.deepEqual(routes.ready.reads, ['~/.claude/references/soma-run-orchestration.md']);
-assert.deepEqual(routes.continue_ready.reads, ['~/.claude/references/soma-run-orchestration.md']);
-```
-
-Prove the route parser itself with a known-bad fixture that reads the reference before help and a known-good fixture that reads it only after readiness. Assert each state-machine heading exists in exactly one current source file, the reference. Exercise installed copies in a fake HOME with `PATH` excluding any `soma` shim.
-
-- [ ] **Step 2: Run RED tests**
-
-Run:
+- [ ] **Step 2: Run RED**
 
 ```bash
 node --test core/scripts/__tests__/universal-entry-adapter.test.cjs install/__tests__/global-install-transaction.test.cjs
 ```
 
-Expected: FAIL because the adapter omits `$ARGUMENTS` and absolute entry routing.
+Expected: FAIL because routing and the separate reference are absent.
 
-- [ ] **Step 3: Extract the single orchestration source and rewrite the adapter**
+- [ ] **Step 3: Extract the single long reference and rewrite the adapter**
 
-Move the current 10-step, gates, recovery and efficiency body from `soma-run.md` into `core/adapters/claude/references/soma-run-orchestration.md`. Do not copy it. Add the reference as a Claude `kind:"file"` target at `~/.claude/references/soma-run-orchestration.md`.
+Move, do not copy, the 10-step body into `core/adapters/claude/references/soma-run-orchestration.md`. Its first execution rule creates and dispatches `T-BASELINE` before every other task whenever adoption says `pending`; FOUNDATION is not a prerequisite. It parses the baseline proof and stops in diagnostics on fail/timeout.
 
-The FOUNDATION section of that reference must make `soma run baseline --run <runId> --dispatch <dispatchId>` the first executor action when adoption recorded `pending`. It parses the persisted proof before any later mutation.
+The thin adapter classifies modes before reading the reference. Help/status/resume only print the preflight result. Start stops unless it receives `READY`. Continue stops unless it receives `CONTINUE_READY`. Only those two states permit exactly one reference read; no agent dispatch occurs earlier. Do not add a hook.
 
-Rewrite `soma-run.md` with frontmatter argument hints and an explicit raw argument block containing `$ARGUMENTS`. Keep it at or below 8,000 UTF-8 bytes, with an implementation target near 4,000. The adapter must:
+- [ ] **Step 4: Extend transactional install coverage**
 
-1. classify help/status/resume/start before the 10-step prompt;
-2. call the fixed absolute Node CLI;
-3. stop on every non-`READY` start response;
-4. print resume cards without state writes;
-5. wait for the `UserPromptSubmit` confirmation hook to emit `CONTINUE_READY`;
-6. fail closed when the hook blocks or emits any other state;
-7. read `~/.claude/references/soma-run-orchestration.md` exactly once only after `READY` or `CONTINUE_READY`;
-8. dispatch no agent before that authorized lazy read.
+The watched set must include the adapter, reference, `soma.cjs`, entry modules, `run.cjs`, baseline, checkpoint, handoff/schema and every changed manifest or install target. Inject faults after core copy and file sync; compare every pre-state hash after rollback.
 
-Keep the current orchestration invariants, report gates, efficiency envelope and compressed/full ceremony rules. Do not add `/soma:run` or a plugin.
-
-- [ ] **Step 4: Prove install and live-sync parity**
-
-Extend the global transaction test so the watched set includes installed `soma.cjs`, `entry.cjs`, `entry/args.cjs`, `entry/project.cjs`, `entry/adoption.cjs`, `entry/card.cjs`, `commands/soma-run.md` and `references/soma-run-orchestration.md`. Add a fault point after core copy and after file sync. Assert rollback restores all watched hashes.
-
-Run:
+- [ ] **Step 5: Run GREEN and commit**
 
 ```bash
 node --test core/scripts/__tests__/universal-entry-adapter.test.cjs core/scripts/__tests__/install-targets-set.test.cjs install/__tests__/global-install-transaction.test.cjs
-```
-
-Expected: PASS with no `soma` executable on `PATH`.
-
-- [ ] **Step 5: Commit**
-
-```bash
 git add core/adapters/claude/commands/soma-run.md core/adapters/claude/references/soma-run-orchestration.md core/adapters/claude/install-targets.json core/scripts/__tests__/universal-entry-adapter.test.cjs core/scripts/__tests__/install-targets-set.test.cjs install/__tests__/global-install-transaction.test.cjs
-git commit -m "feat(adapter): route soma-run through absolute safe entry"
+git commit -m "feat(adapter): lazy-load universal entry safely"
 ```
 
-### Task 7: Migrate current documentation to the canonical public name
+Expected: PASS, zero sentinel execution and full rollback parity without a PATH shim.
+
+### Task 7: Migrate current documentation to the canonical contract
 
 **Files:**
 
@@ -610,39 +369,19 @@ git commit -m "feat(adapter): route soma-run through absolute safe entry"
 - Modify: `docs/ARCHITECTURE.md`
 - Create: `core/scripts/__tests__/universal-entry-docs.test.cjs`
 
-- [ ] **Step 1: Write the RED documentation scan**
+- [ ] **Step 1: Write and run the RED documentation scan**
 
-Scan only current user docs, not `core/specs/`, snapshots or archived evidence:
-
-```js
-for (const file of ['README.md', 'docs/QUICKSTART.md', 'docs/INSTALL.md', 'docs/ARCHITECTURE.md']) {
-  const text = fs.readFileSync(path.join(ROOT, file), 'utf8');
-  assert.doesNotMatch(text, /\/soma:run\b/, file);
-  assert.match(text, /\/soma-run\b/, file);
-}
-```
-
-Also assert architecture names `.soma/run-state-<runId>.json`, `.soma/handoffs/<runId>/<handoffId>/handoff.json`, the installed orchestration reference and the exact confirmation.
-
-- [ ] **Step 2: Run RED test**
-
-Run:
+Scan only current user docs. Require `/soma-run`, full snapshot-bound continuation, safe request-file routing, `.soma/run-state-<runId>.json`, checkpoint and handoff paths, `T-BASELINE`, and the installed lazy reference. Reject `/soma:run` and claims that resume inspection writes.
 
 ```bash
 node --test core/scripts/__tests__/universal-entry-docs.test.cjs
 ```
 
-Expected: FAIL on the existing `/soma:run` references and temporary-state description.
+Expected: FAIL on current naming and temporary-state claims.
 
-- [ ] **Step 3: Update current docs**
+- [ ] **Step 2: Update docs and run GREEN**
 
-Document only `/soma-run` as the public entry, show normal, help, status and resume examples, explain the absolute installed CLI prerequisite, describe automatic adoption and state that starting from home requires `--project` or a validated handoff. Replace the old `/tmp/soma-state-{sessionId}.json` architecture claim with project run state and structured handoff paths.
-
-Do not rewrite historical specs that quote old behavior.
-
-- [ ] **Step 4: Run GREEN test**
-
-Run:
+Document normal/help/status/resume/continue examples, new non-Git cwd rules, explicit project/scope from home, absolute installed CLI, adoption without script execution, executor-owned bounded baseline, durable checkpoint/handoff and zero staging.
 
 ```bash
 node --test core/scripts/__tests__/universal-entry-docs.test.cjs
@@ -650,14 +389,14 @@ node --test core/scripts/__tests__/universal-entry-docs.test.cjs
 
 Expected: PASS with zero `/soma:run` in current user docs.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 3: Commit**
 
 ```bash
 git add README.md docs/QUICKSTART.md docs/INSTALL.md docs/ARCHITECTURE.md core/scripts/__tests__/universal-entry-docs.test.cjs
-git commit -m "docs(soma): make soma-run the canonical public entry"
+git commit -m "docs(soma): publish universal entry contract"
 ```
 
-### Task 8: Prove the full contract and normal-command regression
+### Task 8: Prove the integrated contract and failure-set delta
 
 **Files:**
 
@@ -665,107 +404,53 @@ git commit -m "docs(soma): make soma-run the canonical public entry"
 - Modify: `core/scripts/__tests__/trilho-e2e.test.cjs`
 - Modify: `core/scripts/__tests__/cross-harness-parity.test.cjs`
 
-- [ ] **Step 1: Capture the inherited full-suite baseline**
+- [ ] **Step 1: Write the RED end-to-end matrix**
 
-Before implementation commits change behavior, run:
+Cover new non-Git, legacy dirty, installed and monorepo starts; home/invalid scope rejection; hostile objective request files; help/status/resume byte and mtime identity with stale index cache; full locator-bearing continuation from home; snapshot drift before lock; `T-BASELINE` as the first and only allowed pending dispatch; bounded baseline proof; checkpoint plus dispatch-derived handoff; ignored/temp/escaped proof rejection; immutable handoff pair with zero staging; zero lazy reads for inspection and exactly one for readiness; and normal objective reachability.
 
-```bash
-npm test > .soma/universal-entry-npm-baseline.log 2>&1; test $? -ne 0
-rg -n "operator-gate\.cjs|not ok|fail" .soma/universal-entry-npm-baseline.log
-git merge-base --is-ancestor 1cbebb4 HEAD
-git merge-base --is-ancestor b3a4997 HEAD
-```
-
-Expected: the suite is nonzero because spec 024 deliberately expects the absent `operator-gate.cjs`; both ancestry checks exit 0. Record the exact failing test names in the run evidence. Do not create `operator-gate.cjs`, change its assertions or otherwise implement spec 024 in this plan.
-
-- [ ] **Step 2: Write the RED end-to-end matrix**
-
-Use real filesystem and child processes. The matrix must contain:
-
-```text
-new explicit project + objective -> adopted -> READY
-legacy project without .soma + dirty files -> adopted with matching hashes -> READY
-installed project + objective -> no adoption rewrite -> READY
-non-Git empty or marker-bearing cwd outside home -> classified new -> READY
-home cwd + no project/handoff -> PROJECT_UNRESOLVED, no mutation
-monorepo valid workspace -> READY with repoRoot and scopeRoot distinct
-monorepo invalid nested scope -> MONOREPO_SCOPE_AMBIGUOUS, no mutation
-status/help -> recursive snapshot identical
-resume inspection -> card, no lock, no agent
-wrong confirmation -> hook pass-through, no mutation
-exact confirmation after drift -> RESUME_DRIFT, no mutation
-exact confirmation without drift -> CONTINUE_READY at first non-pass step
-handoff generation directory -> validated JSON and Markdown, index unchanged -> resume from home through newest valid generation
-help/status/resume inspect -> orchestration reference read count 0
-READY/CONTINUE_READY -> orchestration reference read count 1 -> first FOUNDATION executor records bounded baseline proof
-normal objective -> existing gate/report orchestration remains reachable
-```
-
-- [ ] **Step 3: Run the focused matrix**
-
-Run:
+- [ ] **Step 2: Run focused RED, wire only integration gaps, rerun GREEN**
 
 ```bash
 node --test core/scripts/__tests__/universal-entry-e2e.test.cjs core/scripts/__tests__/trilho-e2e.test.cjs core/scripts/__tests__/cross-harness-parity.test.cjs
 ```
 
-Expected before final wiring: at least one RED on normal objective or handoff-based resume. Apply the smallest wiring correction, then rerun until PASS.
+Expected: initial RED on an integration seam, then PASS after the smallest in-scope wiring change.
 
-- [ ] **Step 4: Run deterministic delta verification**
+- [ ] **Step 3: Run deterministic global and delta checks**
 
-Run:
+Run `npm test` once and save `.soma/baselines/universal-entry-npm-final.log`. Parse it using the same algorithm as Task 0 and compare structured failure identities. Require no new failure; the inherited spec 024 RED may remain.
 
 ```bash
-npm test > .soma/universal-entry-npm-final.log 2>&1; test $? -ne 0
 node --test install/__tests__/*.test.cjs
 bash install/__tests__/synthetic-env.test.sh
 git diff --check
 git status --short
 ```
 
-Expected:
+Expected: install and focused suites exit 0, synthetic environment exits 0, diff check is empty, and the full-suite failure set is equal to or smaller than Task 0. A new failure blocks completion. Do not repair spec 024 in this feature.
 
-```text
-npm test: nonzero only for the exact spec 024 failure set captured before implementation
-install node tests: exit 0
-synthetic environment: exit 0
-git diff --check: no output
-git status --short: only intended implementation/docs and pre-existing .soma/ entries
-```
+- [ ] **Step 4: Run the lightweight SONAR audit**
 
-Compare the failing test names from the two npm logs. Any new failure is a blocker. The known spec 024 RED is not a blocker for this feature and must not be repaired here.
+Audit architecture, backward-compatible state, test-to-AC traceability, install ownership and scope against AC-01 through AC-15. Confirm no production dependency, plugin, daemon, hook, PATH shim, historical-spec rewrite, adoption script execution, pre-snapshot resume write, auto-stage, non-durable proof or duplicate state-machine body. Fix only blocking findings and rerun focused tests plus the failure-set delta once.
 
-- [ ] **Step 5: Run the lightweight SONAR self-audit**
-
-Check architecture, state compatibility, test coverage, install ownership and spec adherence against AC-01 through AC-13. Confirm:
-
-```text
-no production dependency added
-no plugin or PATH shim added
-no historical spec rewritten
-no application source written during adoption
-no write before exact resume confirmation
-no critical proof limited to temporary or ignored storage
-```
-
-Fix only blocking findings and rerun their focused tests plus the npm delta comparison once.
-
-- [ ] **Step 6: Commit integration proof**
+- [ ] **Step 5: Commit integration proof**
 
 ```bash
 git add core/scripts/__tests__/universal-entry-e2e.test.cjs core/scripts/__tests__/trilho-e2e.test.cjs core/scripts/__tests__/cross-harness-parity.test.cjs
-git commit -m "test(entry): prove universal start and safe resume"
+git commit -m "test(entry): prove universal start and safe continuation"
 ```
 
 ## Completion gate
 
-- [ ] Every AC maps to at least one passing behavioral test.
-- [ ] Help, status and resume inspection are byte and mtime identical.
-- [ ] Adoption is byte-stable on repeat and preserves application source.
-- [ ] Resume needs exact confirmation and rechecks drift before lock/state writes.
-- [ ] Handoff JSON and Markdown validate, survive fault injection, stay project-resident and do not change the Git index.
-- [ ] Global install rollback covers the adapter and internal entry modules.
-- [ ] Thin adapter is at most 8,000 bytes and the single long reference is loaded only after `READY` or `CONTINUE_READY`.
-- [ ] `/soma:run` is absent from current user docs.
-- [ ] Normal `/soma-run "objective"` still reaches orchestration.
-- [ ] Focused suites pass, install suites pass, `git diff --check` passes, and the npm full-suite failure set has no delta beyond the captured spec 024 RED.
+- [ ] AC-01 through AC-15 each map to a passing behavioral test.
+- [ ] Help, status and resume inspection preserve project bytes, mtimes, Git index, locks and agent records.
+- [ ] Start objectives cross the shell only through a validated `soma-entry-request/v1`; hostile payloads never execute.
+- [ ] Continue carries resolved project/scope/handoff and exact canonical snapshot; drift fails before lock or write.
+- [ ] Pending adoption always creates `T-BASELINE`; the dispatch gate blocks all other tasks until a valid proof exists.
+- [ ] Baseline runs only in its executor with 120-second and 256-KiB-per-stream limits; fail/timeout checkpoints diagnostics without cleanup.
+- [ ] Checkpoint is append-only; handoff derives attempts and closed agents from dispatch records and rejects active/corrupt dispatches or non-durable proofs.
+- [ ] Handoff JSON/Markdown survive fault injection, stay project-resident and never change the Git index.
+- [ ] Adapter is at most 8,000 bytes; the single long reference loads once only after `READY` or `CONTINUE_READY`.
+- [ ] Global rollback covers adapter, reference, entry, baseline, checkpoint, handoff and changed manifests/targets.
+- [ ] Current docs use `/soma-run`; historical evidence remains untouched.
+- [ ] Focused and install suites pass, `git diff --check` passes, and the full-suite failure set adds nothing beyond the Task 0 baseline.
