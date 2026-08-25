@@ -300,6 +300,175 @@ function runFaultingCli(args, fault) {
   });
 }
 
+function runCrashingPrepare(fx) {
+  return spawnSync(process.execPath, [
+    MODULE_PATH,
+    'prepare',
+    '--repo-root', fx.repoRoot,
+    '--home', fx.home,
+    '--backup-root', fx.backupRoot,
+    '--source-sha', '307c51bc7f7111e846e4730f104cade8527ae6fd',
+  ], {
+    env: {
+      ...process.env,
+      HOME: fx.home,
+      SOMA_INSTALL_TESTING: '1',
+      SOMA_TRANSACTION_CRASH_AFTER: 'PREPARING:pointer',
+    },
+    encoding: 'utf8',
+  });
+}
+
+function captureDurability(run, failPath = null) {
+  const originalOpen = fs.openSync;
+  const originalClose = fs.closeSync;
+  const originalFsync = fs.fsyncSync;
+  const originalRename = fs.renameSync;
+  const descriptors = new Map();
+  const events = [];
+  fs.openSync = function patchedOpen(filePath, ...args) {
+    const fd = originalOpen.call(this, filePath, ...args);
+    descriptors.set(fd, path.resolve(String(filePath)));
+    return fd;
+  };
+  fs.closeSync = function patchedClose(fd, ...args) {
+    try {
+      return originalClose.call(this, fd, ...args);
+    } finally {
+      descriptors.delete(fd);
+    }
+  };
+  fs.fsyncSync = function patchedFsync(fd, ...args) {
+    const filePath = descriptors.get(fd) || `<fd:${fd}>`;
+    events.push(`fsync:${filePath}`);
+    if (failPath && filePath === path.resolve(failPath)) {
+      throw Object.assign(new Error(`injected fsync failure: ${filePath}`), { code: 'EIO' });
+    }
+    return originalFsync.call(this, fd, ...args);
+  };
+  fs.renameSync = function patchedRename(source, destination, ...args) {
+    const result = originalRename.call(this, source, destination, ...args);
+    if (path.basename(String(destination)) === '.active-transaction.json') {
+      const pointer = readJson(destination);
+      const selected = readJson(pointer.generation_path || pointer.transaction_path);
+      events.push(`pointer:${selected.state}`);
+    }
+    return result;
+  };
+  try {
+    return { result: run(), events };
+  } finally {
+    fs.openSync = originalOpen;
+    fs.closeSync = originalClose;
+    fs.fsyncSync = originalFsync;
+    fs.renameSync = originalRename;
+  }
+}
+
+function durablePaths(rootPath) {
+  const stat = fs.lstatSync(rootPath);
+  if (stat.isFile()) return [rootPath];
+  const paths = [];
+  for (const name of fs.readdirSync(rootPath).sort()) {
+    paths.push(...durablePaths(path.join(rootPath, name)));
+  }
+  paths.push(rootPath);
+  return paths;
+}
+
+test('hard death after the initial PREPARING pointer recovers without a compatibility view', async (t) => {
+  for (const compatibility of ['missing', 'torn']) {
+    await t.test(compatibility, () => {
+      const fx = makeFixture();
+      try {
+        const crashed = runCrashingPrepare(fx);
+        assert.equal(crashed.signal, 'SIGKILL', `${crashed.stdout}\n${crashed.stderr}`);
+        assert.equal(fs.existsSync(fx.pointerPath), true);
+        const pointer = pointerMatches(fx.pointerPath);
+        assert.equal(readJson(pointer.generation_path).state, 'PREPARING');
+        assert.equal(fs.existsSync(pointer.transaction_path), false);
+        if (compatibility === 'torn') fs.writeFileSync(pointer.transaction_path, '{torn');
+
+        const recovered = transaction.recoverActiveTransaction(fx.backupRoot);
+        assert.equal(recovered.status, 'ROLLED_BACK', JSON.stringify(recovered));
+        assert.equal(fs.readFileSync(path.join(fx.home, '.claude', 'hooks', 'soma-hook.cjs'), 'utf8'), 'old hook\n');
+        assert.equal(fs.existsSync(fx.pointerPath), false);
+      } finally {
+        fx.cleanup();
+      }
+    });
+  }
+});
+
+test('durability barriers precede PREPARED, ROLLBACK_VERIFIED, VERIFIED and COMMITTED publication', (t) => {
+  const fx = makeFixture();
+  t.after(() => fx.cleanup());
+
+  let prepared;
+  const prepareCapture = captureDurability(() => {
+    prepared = fx.prepare();
+    return prepared;
+  });
+  const preparedIndex = prepareCapture.events.indexOf('pointer:PREPARED');
+  assert.notEqual(preparedIndex, -1);
+  for (const snapshot of prepared.snapshots.filter((entry) => entry.existed)) {
+    for (const durablePath of durablePaths(snapshot.snapshot_path)) {
+      const syncIndex = prepareCapture.events.indexOf(`fsync:${durablePath}`);
+      assert.ok(syncIndex !== -1 && syncIndex < preparedIndex, `${durablePath} must be durable before PREPARED`);
+    }
+  }
+
+  const hookPath = path.join(fx.home, '.claude', 'hooks', 'soma-hook.cjs');
+  writeFile(hookPath, 'partial bytes\n', 0o755);
+  fs.rmSync(path.join(fx.home, '.soma-v2'), { recursive: true, force: true });
+  writeFile(path.join(fx.home, '.soma-v2', 'partial.txt'), 'partial tree\n');
+  const rollbackCapture = captureDurability(() => transaction.rollbackTransaction(prepared.journal_path));
+  const rollbackVerifiedIndex = rollbackCapture.events.indexOf('pointer:ROLLBACK_VERIFIED');
+  assert.notEqual(rollbackVerifiedIndex, -1);
+  for (const restoredPath of [hookPath, ...durablePaths(path.join(fx.home, '.soma-v2'))]) {
+    const syncIndex = rollbackCapture.events.indexOf(`fsync:${restoredPath}`);
+    assert.ok(syncIndex !== -1 && syncIndex < rollbackVerifiedIndex, `${restoredPath} must be durable before rollback verification`);
+  }
+
+  const next = fx.prepare();
+  advanceTo(next.journal_path, 'ANCHORS_SYNCED');
+  const ledgerPath = path.join(fx.home, '.soma-v2', '.soma', 'install-state.json');
+  writeFile(ledgerPath, '{"schema":"test"}\n');
+  const verifiedCapture = captureDurability(() => transaction.advanceTransaction(next.journal_path, 'VERIFIED'));
+  const verifiedIndex = verifiedCapture.events.indexOf('pointer:VERIFIED');
+  assert.notEqual(verifiedIndex, -1);
+  for (const target of next.snapshots.map((entry) => entry.target_path).filter((entry) => fs.existsSync(entry))) {
+    for (const durablePath of durablePaths(target)) {
+      const syncIndex = verifiedCapture.events.indexOf(`fsync:${durablePath}`);
+      assert.ok(syncIndex !== -1 && syncIndex < verifiedIndex, `${durablePath} must be durable before VERIFIED`);
+    }
+  }
+  assert.ok(verifiedCapture.events.indexOf(`fsync:${ledgerPath}`) < verifiedIndex);
+
+  const committedCapture = captureDurability(() => transaction.advanceTransaction(next.journal_path, 'COMMITTED'));
+  const committedIndex = committedCapture.events.indexOf('pointer:COMMITTED');
+  assert.notEqual(committedIndex, -1);
+  assert.ok(committedCapture.events.indexOf(`fsync:${ledgerPath}`) < committedIndex);
+  assert.equal(fs.existsSync(fx.pointerPath), false);
+});
+
+test('durability failures retain the active authenticated state and pointer', (t) => {
+  const fx = makeFixture();
+  t.after(() => fx.cleanup());
+  const prepared = fx.prepare();
+  advanceTo(prepared.journal_path, 'ANCHORS_SYNCED');
+  const hookPath = path.join(fx.home, '.claude', 'hooks', 'soma-hook.cjs');
+  assert.throws(
+    () => captureDurability(() => transaction.advanceTransaction(prepared.journal_path, 'VERIFIED'), hookPath),
+    (error) => error && error.code === 'EIO'
+  );
+  assert.deepEqual(transaction.recoverActiveTransaction(fx.backupRoot, { dryRun: true }), {
+    status: 'PENDING',
+    state: 'ANCHORS_SYNCED',
+  });
+  assert.equal(fs.existsSync(fx.pointerPath), true);
+});
+
 test('journal, pointer and unlink crash boundaries recover in forward, rollback and commit release', async (t) => {
   for (const boundary of ['generation', 'pointer']) {
     await t.test(`forward ADOPTED after ${boundary}`, () => {
@@ -648,7 +817,15 @@ test('prepared authorization requires the active authenticated journal and an al
   t.after(() => fx.cleanup());
   const prepared = fx.prepare();
   const allowed = path.join(fx.home, '.claude', 'hooks', 'soma-hook.cjs');
-  assert.equal(transaction.verifyPreparedAuthorization(prepared.journal_path, allowed), true);
+  const authorization = transaction.verifyPreparedAuthorization(prepared.journal_path, allowed);
+  assert.equal(authorization.target_path, allowed);
+  assert.equal(authorization.sha256, transaction.hashFile(allowed));
+  authorization.sha256 = '0'.repeat(64);
+  assert.notEqual(
+    transaction.verifyPreparedAuthorization(prepared.journal_path, allowed).sha256,
+    authorization.sha256,
+    'callers receive a detached authenticated snapshot value'
+  );
   assert.throws(
     () => transaction.verifyPreparedAuthorization(prepared.journal_path, path.join(fx.home, 'foreign.txt')),
     (error) => error && error.code === 'UNAUTHORIZED_TARGET'

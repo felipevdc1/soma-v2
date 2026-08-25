@@ -131,6 +131,8 @@ test('026 AC-06/07/11: install.sh declares one transactional writer and a read-o
   assert.match(source, /--files-only/);
   assert.match(source, /SOMA_INSTALL_FAULT_AFTER/);
   assert.match(source, /SOMA_INSTALL_CRASH_AFTER/);
+  assert.match(source, /TRANSACTION_JSON/);
+  assert.doesNotMatch(source, /readFileSync\(process\.argv\[1\].*transaction/i);
   assert.doesNotMatch(source, /rsync[^\n]*(?:core\/hooks|adapters\/claude\/commands)/);
   assert.doesNotMatch(source, /sync[^\n]*(?:\|\||2>\/dev\/null)/);
   assert.doesNotMatch(source, /doctor[^\n]*(?:\|\||2>\/dev\/null)/);

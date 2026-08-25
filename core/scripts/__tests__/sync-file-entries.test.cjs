@@ -755,6 +755,30 @@ test('026 AC-05: force fails RECOVERY_BLOCKED if live bytes no longer match the 
   assert.equal(fs.readFileSync(target, 'utf8'), 'changed after PREPARED\n');
 });
 
+test('026 AC-05: replacing transaction.json cannot mint adoption authority', () => {
+  const fixtureDir = path.join(FIXTURE_BASE, 'adoption-compatibility-spoof');
+  const target = path.join(fixtureDir, 'home', '.claude', 'commands', 'new.md');
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(target, 'snapshotted bytes\n');
+  const fx = createAdoptionFixture('compatibility-spoof', {
+    previousEntries: [],
+    candidateEntries: [fileEntry('commands/new.md', target)],
+    previousSources: [],
+    candidateSources: [['commands/new.md', 'candidate bytes\n']],
+  });
+  fs.writeFileSync(target, 'changed after PREPARED\n');
+  const compatibility = JSON.parse(fs.readFileSync(fx.prepared.journal_path, 'utf8'));
+  compatibility.snapshots.find((snapshot) => snapshot.target_path === target).sha256 = sha256('changed after PREPARED\n');
+  fs.writeFileSync(fx.prepared.journal_path, `${JSON.stringify(compatibility, null, 2)}\n`);
+
+  const result = runSync(adoptionArgs(fx, ['--allow-new-target-overwrite']), { HOME: fx.home }, { cwd: fx.repoRoot });
+
+  assert.equal(result.status, 3, `${result.stdout}\n${result.stderr}`);
+  assert.equal(JSON.parse(result.stdout).error.code, 'RECOVERY_BLOCKED');
+  assert.equal(fs.existsSync(fx.ledgerPath), false);
+  assert.equal(fs.readFileSync(target, 'utf8'), 'changed after PREPARED\n');
+});
+
 test('026 AC-05: force fails RECOVERY_BLOCKED after the active journal leaves PREPARED', () => {
   const fixtureDir = path.join(FIXTURE_BASE, 'adoption-expired-prepared');
   const target = path.join(fixtureDir, 'home', '.claude', 'commands', 'new.md');
