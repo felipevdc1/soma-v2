@@ -57,13 +57,17 @@ if [[ "${NODE_VER:-0}" -lt 22 ]]; then
   exit 1
 fi
 
-# Permissions test — use $HOME (supports HOME override for synthetic env)
-mkdir -p "${HOME}/.claude" 2>/dev/null
-if ! touch "${HOME}/.claude/.soma-perm-test" 2>/dev/null; then
-  echo "ERROR: ${HOME}/.claude/ not writable. Aborting." >&2
-  exit 1
+# Permissions test — skipped in dry-run so HOME stays byte-identical.
+if [[ "${DRY_RUN}" == "1" ]]; then
+  echo "[DRY-RUN] Skipping write permission probe"
+else
+  mkdir -p "${HOME}/.claude" 2>/dev/null
+  if ! touch "${HOME}/.claude/.soma-perm-test" 2>/dev/null; then
+    echo "ERROR: ${HOME}/.claude/ not writable. Aborting." >&2
+    exit 1
+  fi
+  rm -f "${HOME}/.claude/.soma-perm-test"
 fi
-rm -f "${HOME}/.claude/.soma-perm-test"
 
 # Phase 0.5: MCP dependency check (warn-and-continue)
 node "${REPO_ROOT}/install/check-mcp-deps.cjs" || true
@@ -94,13 +98,17 @@ for FILE in "$LAB_CLAUDE" "$LAB_CODEX" "$LAB_HOME"; do
 done
 
 if [ "$NEEDS_MIGRATION" -eq 1 ]; then
-  echo "[SOMA] cbm/legacy markers detected. Running cbm migration first..."
-  MIGRATION_OUTPUT=$(node "${REPO_ROOT}/core/scripts/migrate-cbm-deprecation.cjs" 2>&1) || {
-    echo "ERROR: cbm migration failed. Output:" >&2
-    echo "$MIGRATION_OUTPUT" >&2
-    echo "Inspect snapshot in ${HOME}/.soma-v2/.snapshots/" >&2
-    exit 1
-  }
+  if [[ "${DRY_RUN}" == "1" ]]; then
+    echo "[DRY-RUN] cbm/legacy markers detected; skipping migration"
+  else
+    echo "[SOMA] cbm/legacy markers detected. Running cbm migration first..."
+    MIGRATION_OUTPUT=$(node "${REPO_ROOT}/core/scripts/migrate-cbm-deprecation.cjs" 2>&1) || {
+      echo "ERROR: cbm migration failed. Output:" >&2
+      echo "$MIGRATION_OUTPUT" >&2
+      echo "Inspect snapshot in ${HOME}/.soma-v2/.snapshots/" >&2
+      exit 1
+    }
+  fi
 fi
 
 # ── Phase 1: Backup ──────────────────────────────────────────────────────────
@@ -156,7 +164,7 @@ else
 fi
 # T08C_COLLISION_DETECT_END
 
-if [[ -n "${COLLISIONS}" && "${FORCE_OVERWRITE}" != "1" && -t 0 ]]; then
+if [[ "${DRY_RUN}" != "1" && -n "${COLLISIONS}" && "${FORCE_OVERWRITE}" != "1" && -t 0 ]]; then
   echo "[COLLISION] Custom-modified hooks found in ${HOOKS_TARGET}/:"
   echo "${COLLISIONS}"
   read -rp "Install SOMA versions anyway (custom moves to .bak)? [y/N] " ans
@@ -164,7 +172,7 @@ if [[ -n "${COLLISIONS}" && "${FORCE_OVERWRITE}" != "1" && -t 0 ]]; then
   while IFS= read -r collision_file; do
     [[ -f "${collision_file}" ]] && mv "${collision_file}" "${collision_file}.pre-soma-${TS}.bak"
   done <<< "${COLLISIONS}"
-elif [[ -n "${COLLISIONS}" && "${FORCE_OVERWRITE}" == "1" ]]; then
+elif [[ "${DRY_RUN}" != "1" && -n "${COLLISIONS}" && "${FORCE_OVERWRITE}" == "1" ]]; then
   echo "[SOMA] FORCE_OVERWRITE=1 — renaming colliding hooks to .bak"
   while IFS= read -r collision_file; do
     [[ -f "${collision_file}" ]] && mv "${collision_file}" "${collision_file}.pre-soma-${TS}.bak"
