@@ -272,6 +272,73 @@ test('026 AC-11: --no-claude-md still installs whole files and leaves CLAUDE.md 
   assert.equal(fs.existsSync(path.join(home, '.claude', 'commands', 'soma-run.md')), true);
 });
 
+test('026 AC-10: --no-claude-md still applies and verifies requested Codex targets', (t) => {
+  const sandbox = tmp('soma-global-no-claude-codex-');
+  t.after(() => fs.rmSync(sandbox, { recursive: true, force: true }));
+  const home = path.join(sandbox, 'home');
+  const project = path.join(sandbox, 'project');
+  fs.mkdirSync(home);
+  fs.mkdirSync(project);
+
+  const result = runInstall(home, project, ['--no-claude-md'], { NO_CODEX: '0' });
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  assert.equal(fs.existsSync(path.join(home, '.codex', 'AGENTS.md')), true);
+  assert.equal(fs.existsSync(path.join(home, 'AGENTS.md')), true);
+  assert.match(fs.readFileSync(path.join(home, '.codex', 'AGENTS.md'), 'utf8'), /soma-v2:start/);
+  assert.match(fs.readFileSync(path.join(home, 'AGENTS.md'), 'utf8'), /soma-v2:start/);
+});
+
+test('026 D-02: invalid previous root proof fails closed before ledger write', async (t) => {
+  const cases = [
+    ['missing manifest', (previous) => fs.unlinkSync(path.join(previous, 'manifest.json'))],
+    ['corrupt manifest', (previous) => fs.writeFileSync(path.join(previous, 'manifest.json'), '{broken')],
+    ['schema-invalid manifest', (previous) => fs.writeFileSync(path.join(previous, 'manifest.json'), '{"schema":"wrong","files":[]}\n')],
+    ['symlinked manifest', (previous, sandbox) => {
+      const manifestPath = path.join(previous, 'manifest.json');
+      const outside = path.join(sandbox, 'outside-manifest.json');
+      fs.copyFileSync(manifestPath, outside);
+      fs.unlinkSync(manifestPath);
+      fs.symlinkSync(outside, manifestPath);
+    }],
+  ];
+  for (const [name, mutate] of cases) {
+    await t.test(name, () => {
+      const sandbox = tmp('soma-global-old-proof-');
+      const home = path.join(sandbox, 'home');
+      const project = path.join(sandbox, 'project');
+      fs.mkdirSync(home);
+      fs.mkdirSync(project);
+      const previous = seedLegacy(home);
+      mutate(previous, sandbox);
+      const watchedTarget = path.join(home, '.claude', 'hooks', 'agent-mode-gate.cjs');
+      const before = fs.readFileSync(watchedTarget);
+
+      const result = runInstall(home, project, ['--no-codex', '--no-claude-md']);
+      assert.notEqual(result.status, 0, `${name} unexpectedly committed\n${result.stdout}\n${result.stderr}`);
+      assert.equal(fs.existsSync(path.join(home, '.soma-v2', '.soma', 'install-state.json')), false);
+      assert.deepEqual(fs.readFileSync(watchedTarget), before);
+      fs.rmSync(sandbox, { recursive: true, force: true });
+    });
+  }
+});
+
+test('026 D-02: a requested invalid previous Codex adapter fails closed', (t) => {
+  const sandbox = tmp('soma-global-old-codex-proof-');
+  t.after(() => fs.rmSync(sandbox, { recursive: true, force: true }));
+  const home = path.join(sandbox, 'home');
+  const project = path.join(sandbox, 'project');
+  fs.mkdirSync(home);
+  fs.mkdirSync(project);
+  const previous = seedLegacy(home);
+  fs.writeFileSync(path.join(previous, 'adapters', 'codex', 'install-targets.json'), '{broken');
+  const before = snapshotLive(home);
+
+  const result = runInstall(home, project, [], { NO_CODEX: '0' });
+  assert.notEqual(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  assert.equal(fs.existsSync(path.join(home, '.soma-v2', '.soma', 'install-state.json')), false);
+  assertLiveSnapshot(home, before);
+});
+
 test('026 AC-08/09: every mutable state rolls back on exit, INT and TERM; SIGKILL recovers in another process', async (t) => {
   const states = ['ADOPTED', 'CORE_COPIED', 'FILES_SYNCED', 'SETTINGS_MERGED', 'ANCHORS_SYNCED', 'VERIFIED'];
   const modes = ['EXIT', 'INT', 'TERM'];

@@ -621,3 +621,42 @@ test('026 adoption planner validates every candidate before returning any ledger
     });
   });
 });
+
+test('026 AC-04: an old-only present target is preflighted but never enters the candidate ledger', () => {
+  withTmp('soma-adoption-candidate-', (candidateRoot) => {
+    withTmp('soma-adoption-previous-', (previousRoot) => {
+      withTmp('soma-adoption-target-', (targetRoot) => {
+        const targetPath = path.join(targetRoot, 'retired.cjs');
+        makeRepoWithFiles(previousRoot, { 'hooks/retired.cjs': 'old soma bytes\n' });
+        fs.writeFileSync(targetPath, 'user divergent bytes\n');
+
+        const result = files.planFileAdoption([], {
+          candidateRoot,
+          previousRoot,
+          previousEntries: [adoptionEntry('hooks/retired.cjs', targetPath)],
+        });
+
+        assert.equal(result.ok, false);
+        assert.deepEqual(result.conflicts, [targetPath]);
+        assert.deepEqual(result.ledgerEntries, {});
+      });
+    });
+  });
+});
+
+test('026 old-only absent target is valid preflight and remains outside the candidate ledger', () => {
+  withTmp('soma-adoption-candidate-', (candidateRoot) => {
+    withTmp('soma-adoption-previous-', (previousRoot) => {
+      const targetPath = path.join(previousRoot, '..', 'absent-retired.cjs');
+      makeRepoWithFiles(previousRoot, { 'hooks/retired.cjs': 'old soma bytes\n' });
+      const result = files.planFileAdoption([], {
+        candidateRoot,
+        previousRoot,
+        previousEntries: [adoptionEntry('hooks/retired.cjs', targetPath)],
+      });
+      assert.equal(result.ok, true);
+      assert.deepEqual(result.conflicts, []);
+      assert.deepEqual(result.ledgerEntries, {});
+    });
+  });
+});

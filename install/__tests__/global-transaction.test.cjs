@@ -158,7 +158,8 @@ function readMode(filePath) {
 
 function pointerMatches(pointerPath) {
   const pointer = readJson(pointerPath);
-  const current = crypto.createHash('sha256').update(fs.readFileSync(pointer.transaction_path)).digest('hex');
+  const selectedPath = pointer.generation_path || pointer.transaction_path;
+  const current = crypto.createHash('sha256').update(fs.readFileSync(selectedPath)).digest('hex');
   assert.equal(pointer.journal_sha256, current);
   assert.equal(path.isAbsolute(pointer.transaction_path), true);
   return pointer;
@@ -248,6 +249,133 @@ test('advance enforces the exact forward state machine and refreshes pointer has
     else pointerMatches(fx.pointerPath);
   }
   assert.equal(fs.existsSync(fx.pointerPath), false);
+});
+
+test('crash after publishing a newer journal generation keeps the old authenticated generation recoverable', (t) => {
+  const fx = makeFixture();
+  t.after(() => fx.cleanup());
+  const prepared = fx.prepare();
+  const pointer = readJson(fx.pointerPath);
+  const selectedPath = pointer.generation_path || pointer.transaction_path;
+  const orphan = readJson(selectedPath);
+  orphan.state = 'ADOPTED';
+  orphan.phases.push({ state: 'ADOPTED', at: new Date().toISOString() });
+
+  const orphanPath = pointer.generation_path
+    ? path.join(orphan.transaction_dir, 'transaction.99999999.json')
+    : selectedPath;
+  fs.writeFileSync(orphanPath, `${JSON.stringify(orphan, null, 2)}\n`);
+  writeFile(path.join(fx.home, '.claude', 'hooks', 'soma-hook.cjs'), 'partial install bytes\n', 0o755);
+
+  const recovered = transaction.recoverActiveTransaction(fx.backupRoot);
+  assert.equal(recovered.status, 'ROLLED_BACK');
+  assert.equal(fs.readFileSync(path.join(fx.home, '.claude', 'hooks', 'soma-hook.cjs'), 'utf8'), 'old hook\n');
+  assert.equal(fs.existsSync(fx.pointerPath), false);
+  assert.equal(fs.existsSync(prepared.journal_path), true);
+});
+
+test('each published state has a distinct immutable generation selected by the pointer', (t) => {
+  const fx = makeFixture();
+  t.after(() => fx.cleanup());
+  const prepared = fx.prepare();
+  const preparedPointer = pointerMatches(fx.pointerPath);
+  const preparedGeneration = preparedPointer.generation_path;
+  assert.ok(preparedGeneration, 'pointer must select an immutable generation path');
+  const preparedBytes = fs.readFileSync(preparedGeneration);
+
+  transaction.advanceTransaction(prepared.journal_path, 'ADOPTED');
+  const adoptedPointer = pointerMatches(fx.pointerPath);
+  assert.notEqual(adoptedPointer.generation_path, preparedGeneration);
+  assert.deepEqual(fs.readFileSync(preparedGeneration), preparedBytes, 'published generation must never be replaced');
+});
+
+function runFaultingCli(args, fault) {
+  return spawnSync(process.execPath, [MODULE_PATH, ...args], {
+    env: {
+      ...process.env,
+      SOMA_INSTALL_TESTING: '1',
+      SOMA_TRANSACTION_FAULT_AFTER: fault,
+    },
+    encoding: 'utf8',
+  });
+}
+
+test('journal, pointer and unlink crash boundaries recover in forward, rollback and commit release', async (t) => {
+  for (const boundary of ['generation', 'pointer']) {
+    await t.test(`forward ADOPTED after ${boundary}`, () => {
+      const fx = makeFixture();
+      try {
+        const prepared = fx.prepare();
+        writeFile(path.join(fx.home, '.claude', 'hooks', 'soma-hook.cjs'), 'partial forward bytes\n', 0o755);
+        const faulted = runFaultingCli(
+          ['advance', '--transaction', prepared.journal_path, '--to', 'ADOPTED'],
+          `ADOPTED:${boundary}`
+        );
+        assert.notEqual(faulted.status, 0);
+        assert.equal(transaction.recoverActiveTransaction(fx.backupRoot).status, 'ROLLED_BACK');
+        assert.equal(fs.readFileSync(path.join(fx.home, '.claude', 'hooks', 'soma-hook.cjs'), 'utf8'), 'old hook\n');
+      } finally {
+        fx.cleanup();
+      }
+    });
+  }
+
+  for (const [state, boundary] of [
+    ['ROLLING_BACK', 'generation'],
+    ['ROLLING_BACK', 'pointer'],
+    ['ROLLBACK_VERIFIED', 'generation'],
+    ['ROLLBACK_VERIFIED', 'pointer'],
+    ['ROLLED_BACK', 'generation'],
+    ['ROLLED_BACK', 'pointer'],
+    ['ROLLED_BACK', 'unlink'],
+  ]) {
+    await t.test(`rollback ${state} after ${boundary}`, () => {
+      const fx = makeFixture();
+      try {
+        const prepared = fx.prepare();
+        transaction.advanceTransaction(prepared.journal_path, 'ADOPTED');
+        writeFile(path.join(fx.home, '.claude', 'hooks', 'soma-hook.cjs'), 'partial rollback bytes\n', 0o755);
+        const faulted = runFaultingCli(
+          ['rollback', '--transaction', prepared.journal_path],
+          `${state}:${boundary}`
+        );
+        assert.notEqual(faulted.status, 0);
+        const recovered = transaction.recoverActiveTransaction(fx.backupRoot);
+        assert.ok(['ROLLED_BACK', 'NONE'].includes(recovered.status), JSON.stringify(recovered));
+        assert.equal(fs.readFileSync(path.join(fx.home, '.claude', 'hooks', 'soma-hook.cjs'), 'utf8'), 'old hook\n');
+        assert.equal(fs.existsSync(fx.pointerPath), false);
+      } finally {
+        fx.cleanup();
+      }
+    });
+  }
+
+  for (const boundary of ['generation', 'pointer', 'unlink']) {
+    await t.test(`commit release after ${boundary}`, () => {
+      const fx = makeFixture();
+      try {
+        const prepared = fx.prepare();
+        advanceTo(prepared.journal_path, 'VERIFIED');
+        writeFile(path.join(fx.home, '.claude', 'hooks', 'soma-hook.cjs'), 'candidate committed bytes\n', 0o755);
+        const faulted = runFaultingCli(
+          ['advance', '--transaction', prepared.journal_path, '--to', 'COMMITTED'],
+          `COMMITTED:${boundary}`
+        );
+        assert.notEqual(faulted.status, 0);
+        const recovered = transaction.recoverActiveTransaction(fx.backupRoot);
+        if (boundary === 'generation') {
+          assert.equal(recovered.status, 'ROLLED_BACK');
+          assert.equal(fs.readFileSync(path.join(fx.home, '.claude', 'hooks', 'soma-hook.cjs'), 'utf8'), 'old hook\n');
+        } else {
+          assert.ok(['COMMITTED', 'NONE'].includes(recovered.status), JSON.stringify(recovered));
+          assert.equal(fs.readFileSync(path.join(fx.home, '.claude', 'hooks', 'soma-hook.cjs'), 'utf8'), 'candidate committed bytes\n');
+        }
+        assert.equal(fs.existsSync(fx.pointerPath), false);
+      } finally {
+        fx.cleanup();
+      }
+    });
+  }
 });
 
 test('prepare rejects symlinks, HOME escapes, duplicate file targets and unsafe overlap', async (t) => {
