@@ -731,6 +731,8 @@ Use the real hook process with a `git commit -m test` payload, isolated session 
 
 Patch `fs.readFileSync`/`unlinkSync` only in a child preload so the test records access order without changing hook semantics. Keep the old temp-state fallback only when no new lock/candidate exists; it cannot authorize a new run identity.
 
+Oracle Task 10/11: the order preload must resolve file descriptors back to watched paths because the universal modules read with `O_NOFOLLOW`, `fstatSync` and `readFileSync(fd)`.
+
 - [ ] **Step 3: Freeze runtime documentation and ignore expectations**
 
 The test requires `.soma/run-identities/` to be ignored while `.soma/install-state.json` remains trackable. It also requires the current persistence contract to name canonical marker bytes and marker-last retention, and `core/adapters/claude/commands/soma-run.md` to state that `state --init` reserves the marker before state and retention removes recovery/state before marker.

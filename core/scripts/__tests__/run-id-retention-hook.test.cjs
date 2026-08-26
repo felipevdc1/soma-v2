@@ -351,16 +351,37 @@ function writeObservationPreload(fx, watched) {
     'use strict';
     const fs = require('node:fs');
     const path = require('node:path');
+    const descriptors = new Map();
+    const originalOpenSync = fs.openSync;
+    const originalCloseSync = fs.closeSync;
     const originalReadFileSync = fs.readFileSync;
     const originalUnlinkSync = fs.unlinkSync;
     const watched = new Set(JSON.parse(process.env.SOMA_TEST_WATCHED_PATHS).map(value => path.resolve(value)));
     const eventFile = process.env.SOMA_TEST_EVENT_FILE;
-    function record(kind, target) {
-      if (typeof target !== 'string') return;
+    function watchedPath(target) {
+      if (typeof target === 'number') return descriptors.get(target) || null;
+      if (typeof target !== 'string') return null;
       const resolved = path.resolve(target);
-      if (!watched.has(resolved)) return;
+      return watched.has(resolved) ? resolved : null;
+    }
+    function record(kind, target) {
+      const resolved = watchedPath(target);
+      if (!resolved) return;
       fs.appendFileSync(eventFile, JSON.stringify({ kind, path: resolved }) + '\n');
     }
+    fs.openSync = function observedOpen(target, ...args) {
+      const descriptor = Reflect.apply(originalOpenSync, this, [target, ...args]);
+      const resolved = watchedPath(target);
+      if (resolved) descriptors.set(descriptor, resolved);
+      return descriptor;
+    };
+    fs.closeSync = function observedClose(descriptor, ...args) {
+      try {
+        return Reflect.apply(originalCloseSync, this, [descriptor, ...args]);
+      } finally {
+        descriptors.delete(descriptor);
+      }
+    };
     fs.readFileSync = function observedRead(target, ...args) {
       record('read', target);
       return Reflect.apply(originalReadFileSync, this, [target, ...args]);
