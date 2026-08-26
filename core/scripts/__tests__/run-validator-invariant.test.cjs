@@ -176,6 +176,15 @@ function writeLock(projectRoot, runId) {
   );
 }
 
+function initExactState(projectRoot, runId) {
+  const result = runRun(['state', '--init', '--run', runId], { cwd: projectRoot });
+  assert.equal(
+    result.status,
+    0,
+    `state --init falhou para ${runId}. stdout=${result.stdout} stderr=${result.stderr}`
+  );
+}
+
 // Fabricates metadata.json at the exact path CONTRACT-DISPATCH-RECORD-03
 // specifies ({projeto}/.soma/dispatches/{runId}/{taskId}/metadata.json) —
 // via fs directly, since `soma run dispatch-record` (T-10) is a different
@@ -210,6 +219,7 @@ test('T-11 CLI ponta-a-ponta lado A: soma run gate --validate com validador == e
     const runId = 'run-t11-cli-a';
     const executorAgent = 'soma-lab-T-03';
     writeLock(projectRoot, runId);
+    initExactState(projectRoot, runId);
     fabricateDispatchMetadata(projectRoot, runId, 'T-03', executorAgent);
 
     const result = runRun(['gate', '--validate', 'T-03', '--validator', executorAgent], { cwd: projectRoot });
@@ -233,6 +243,7 @@ test('T-11 CLI ponta-a-ponta lado B: soma run gate --validate com validador != e
     const executorAgent = 'soma-lab-T-03';
     const proposedValidator = 'soma-lab-T-99';
     writeLock(projectRoot, runId);
+    initExactState(projectRoot, runId);
     fabricateDispatchMetadata(projectRoot, runId, 'T-03', executorAgent);
 
     const result = runRun(['gate', '--validate', 'T-03', '--validator', proposedValidator], { cwd: projectRoot });

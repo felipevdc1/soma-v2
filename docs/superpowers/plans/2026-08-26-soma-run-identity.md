@@ -650,6 +650,8 @@ git diff --check
 
 Expected: PASS. Exact new state-less dispatch succeeds; legacy state-less dispatch fails unprovable; all budgets and ordinary coherence tests remain green.
 
+Legacy fixtures whose focus is report or validator behavior must seed exact state with a successful `state --init` before creating report or metadata artifacts. Artifacts never authorize identity adoption. Keep the resume-without-state case blocked, and preserve a legible missing-state message without relaxing exact identity checks.
+
 - [ ] **Step 6: Commit production only**
 
 ```bash

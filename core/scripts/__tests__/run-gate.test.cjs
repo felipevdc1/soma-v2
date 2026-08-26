@@ -67,6 +67,15 @@ function writeLock(projectRoot, runId) {
   );
 }
 
+function initExactState(projectRoot, runId) {
+  const result = runRun(['state', '--init', '--run', runId], { cwd: projectRoot });
+  assert.equal(
+    result.status,
+    0,
+    `state --init falhou para ${runId}. stdout=${result.stdout} stderr=${result.stderr}`
+  );
+}
+
 function reportPathFor(projectRoot, runId, step) {
   const p = resolveSomaPaths(projectRoot, runId);
   return path.join(p.runReportsDir, `${step}-report.json`);
@@ -104,6 +113,7 @@ test('T-07 sanity: report presente, válido, status pass → gate exit 0', () =>
   try {
     const runId = 'run-t07-sanity';
     writeLock(projectRoot, runId);
+    initExactState(projectRoot, runId);
     writeReport(projectRoot, runId, 'STEP_2_TASKS', validPassReport({ run_id: runId, step: 'STEP_2_TASKS' }));
 
     const result = runRun(['gate', '--step', 'STEP_3_FOUNDATION'], { cwd: projectRoot });
@@ -121,6 +131,7 @@ test('T-07 caminho 1/5 — ausência: nenhum report emitido → exit 2, causa no
   try {
     const runId = 'run-t07-absent';
     writeLock(projectRoot, runId);
+    initExactState(projectRoot, runId);
     // STEP_2_TASKS nunca teve report emitido.
 
     const result = runRun(['gate', '--step', 'STEP_3_FOUNDATION'], { cwd: projectRoot });
@@ -140,6 +151,7 @@ test('T-07 caminho 2/5 — status fail: report válido mas fail → exit 2, cita
     const runId = 'run-t07-fail';
     const reason = 'suite RED planejado não fechou — 3 casos ainda vermelhos';
     writeLock(projectRoot, runId);
+    initExactState(projectRoot, runId);
     writeReport(
       projectRoot,
       runId,
@@ -164,6 +176,7 @@ test('T-07 caminho 3/5 — status blocked: report válido mas blocked → exit 2
     const runId = 'run-t07-blocked';
     const reason = 'aguardando aprovação humana do Gate 1';
     writeLock(projectRoot, runId);
+    initExactState(projectRoot, runId);
     writeReport(
       projectRoot,
       runId,
@@ -187,6 +200,7 @@ test('T-07 caminho 4/5 — inválido: report com campo obrigatório ausente → 
   try {
     const runId = 'run-t07-invalid';
     writeLock(projectRoot, runId);
+    initExactState(projectRoot, runId);
     const broken = validPassReport({ run_id: runId, step: 'STEP_2_TASKS' });
     delete broken.metrics; // campo obrigatório, sempre presente no contrato
 
@@ -209,6 +223,7 @@ test('T-07 caminho 5/5 — ilegível: JSON corrompido → exit 2, causa de não-
   try {
     const runId = 'run-t07-illegible';
     writeLock(projectRoot, runId);
+    initExactState(projectRoot, runId);
     const filePath = reportPathFor(projectRoot, runId, 'STEP_2_TASKS');
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
     fs.writeFileSync(filePath, '{ isto não é json válido', 'utf8');
@@ -283,6 +298,7 @@ test('T-07 --validate: metadata ausente para a task (módulo presente) → exit 
   try {
     const runId = 'run-t07-validate';
     writeLock(projectRoot, runId);
+    initExactState(projectRoot, runId);
 
     const result = runRun(['gate', '--validate', 'T-03', '--validator', 'soma-lab-T-99'], { cwd: projectRoot });
     const out = assertValidateFailureInvariant(result, { context: 'metadata ausente' });

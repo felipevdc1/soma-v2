@@ -224,10 +224,12 @@ test('E2E (d): run-dir de dispatch é diffável — prompt.md/output.md idêntic
     );
     assert.equal(begin.status, 0, `dispatch-record begin falhou: ${begin.stderr}`);
 
-    const { runDispatchesDir } = resolveSomaPaths(dir, runId);
+    const { runDispatchesDir, runIdentityFile, runStateFile } = resolveSomaPaths(dir, runId);
     const taskDir = path.join(runDispatchesDir, taskId);
     const writtenPrompt = path.join(taskDir, 'prompt.md');
     assert.ok(fs.existsSync(writtenPrompt), `esperava ${writtenPrompt} existir`);
+    assert.ok(fs.existsSync(runIdentityFile), 'dispatch state-less deve reservar o marker antes do prompt');
+    assert.equal(fs.existsSync(runStateFile), false, 'dispatch begin não deve fabricar state');
 
     // diff real, não comparação de string — exit 0 = idêntico.
     const diffPrompt = spawnSync('diff', [writtenPrompt, promptFile], { encoding: 'utf8' });
@@ -274,6 +276,10 @@ test('E2E (d): run-dir de dispatch é diffável — prompt.md/output.md idêntic
     assert.equal(writtenMetadata.executor_agent, 'soma-e2e-T-99');
     assert.equal(writtenMetadata.run_id, runId);
     assert.equal(writtenMetadata.task_id, taskId);
+    assert.equal(fs.existsSync(runStateFile), false, 'dispatch end deve continuar válido com marker e sem state');
+
+    const init = runRun(['state', '--init', '--run', runId], { cwd: dir });
+    assert.equal(init.status, 0, `state --init falhou antes do gate validator: ${init.stderr}`);
 
     // AC-06: executor == validador é recusado; executor != validador é aceito.
     const sameValidator = runRun(
