@@ -7,20 +7,49 @@ const path = require('node:path');
 const { canonicalJson, sha256Hex } = require('./recovery-model.cjs');
 const { resolveSomaPaths } = require('./paths.cjs');
 
-const AUTOMATIC_STATES = new Set(['RED_PENDING', 'GREEN_PENDING', 'REVIEW_PENDING', 'CORRECTION_PENDING']);
+const AUTOMATIC_STATES = new Set([
+  'DIAGNOSTIC_REPLAN', 'RED_PENDING', 'RED_FROZEN', 'EXECUTOR_PENDING',
+  'IMPLEMENTING', 'REVIEWING', 'CORRECTION',
+]);
 const HUMAN_STATE = 'HUMAN_GATE';
 const CLOSED_STATE = 'CLOSED';
 const BRANCH_STATES = new Set([...AUTOMATIC_STATES, HUMAN_STATE, CLOSED_STATE]);
-const CLASSIFICATIONS = new Set([
-  'TECHNICAL_DETERMINISTIC', 'EVIDENCE_DEFICIENT', 'NORMATIVE_DECISION',
-  'SCOPE_AUTHORITY', 'CONTRADICTORY_REQUIREMENTS', 'NO_PROGRESS',
+const AUTOMATIC_CLASSIFICATIONS = new Set(['TECHNICAL_DETERMINISTIC', 'EVIDENCE_DEFICIENT']);
+const HUMAN_CLASSIFICATIONS = new Set([
+  'NORMATIVE_DECISION', 'SCOPE_AUTHORITY', 'CONTRADICTORY_REQUIREMENTS', 'NO_PROGRESS',
+]);
+const CLASSIFICATIONS = new Set([...AUTOMATIC_CLASSIFICATIONS, ...HUMAN_CLASSIFICATIONS]);
+const PERSISTENT_BRANCH_FIELDS = new Set([
+  'branchId', 'generation', 'state', 'classification', 'fingerprint', 'boundary',
+  'candidate', 'proofs', 'closedFindings', 'openFindings', 'fingerprintHistory',
+  'dependencyClosure', 'reviewPlan', 'transitionKey', 'nextTask', 'humanGate',
+  'executorRotation', 'progressDelta',
+]);
+const TRANSIENT_BRANCH_FIELDS = new Set([
+  'generationArtifact', 'dispatchHistory', 'prompt', 'output', 'path', 'publishedAt',
 ]);
 const isObject = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const isString = value => typeof value === 'string' && value.length > 0;
+const isNonBlank = value => typeof value === 'string' && /\P{White_Space}/u.test(value);
 const isSha256 = value => typeof value === 'string' && /^[0-9a-f]{64}$/.test(value);
 const isGitSha = value => typeof value === 'string' && /^[0-9a-f]{7,64}$/.test(value);
+const hasExactKeys = (value, keys) => isObject(value) &&
+  Object.keys(value).length === keys.length && keys.every(key => Object.hasOwn(value, key));
 
 function invalid(violations) { return { valid: false, violations }; }
+function codedError(code, detail) { return new Error(detail ? `${code}: ${detail}` : code); }
+
+function projectPersistentBranch(branch) {
+  if (!isObject(branch)) throw new TypeError('recovery branch must be an object');
+  const persistent = {};
+  for (const [key, value] of Object.entries(branch)) {
+    if (PERSISTENT_BRANCH_FIELDS.has(key)) persistent[key] = value;
+    else if (!TRANSIENT_BRANCH_FIELDS.has(key)) {
+      throw codedError('RECOVERY_BRANCH_UNKNOWN_FIELD', key);
+    }
+  }
+  return persistent;
+}
 
 function validateStateV3(state) {
   const violations = [];
@@ -31,7 +60,7 @@ function validateStateV3(state) {
     'teammateNamePrefix', 'constitutionVersion', 'constitutionSnapshotPath',
     'lastSuccessfulState', 'baselineSha', 'pausedDiagnostic',
   ]) {
-    if (!Object.prototype.hasOwnProperty.call(state, key)) violations.push(`${key} must be present`);
+    if (!Object.hasOwn(state, key)) violations.push(`${key} must be present`);
   }
   for (const key of [
     'previousState', 'featureSlug', 'specPath', 'planPath', 'tasksPath', 'contractsDir',
@@ -63,20 +92,24 @@ function validateStateV3(state) {
   for (const [index, branch] of recovery.branches.entries()) {
     const prefix = `diagnosticRecovery.branches[${index}]`;
     if (!isObject(branch)) { violations.push(`${prefix} must be an object`); continue; }
-    for (const key of ['branchId', 'state', 'classification', 'fingerprint', 'boundary', 'transitionKey']) {
-      if (!isString(branch[key])) violations.push(`${prefix}.${key} must be a non-empty string`);
+    for (const key of Object.keys(branch)) {
+      if (!PERSISTENT_BRANCH_FIELDS.has(key) && key !== 'generationArtifact') {
+        violations.push(`${prefix}.${key} is not a persistent branch field`);
+      }
     }
-    if (!BRANCH_STATES.has(branch.state)) violations.push(`${prefix}.state must be a documented branch state`);
+    for (const key of ['branchId', 'state', 'classification', 'fingerprint', 'boundary', 'transitionKey']) {
+      if (!isNonBlank(branch[key])) violations.push(`${prefix}.${key} must be a non-blank string`);
+    }
+    if (!BRANCH_STATES.has(branch.state)) violations.push(`${prefix}.state must be an approved lifecycle state`);
     if (!CLASSIFICATIONS.has(branch.classification)) violations.push(`${prefix}.classification must be a documented classification`);
     if (!isSha256(branch.fingerprint)) violations.push(`${prefix}.fingerprint must be a sha256`);
     if (!Number.isInteger(branch.generation) || branch.generation < 1) violations.push(`${prefix}.generation must be a positive integer`);
     for (const key of ['candidate', 'reviewPlan', 'executorRotation', 'progressDelta']) {
       if (!isObject(branch[key])) violations.push(`${prefix}.${key} must be an object`);
     }
-    for (const key of ['proofs', 'openFindings', 'fingerprintHistory', 'dependencyClosure']) {
+    for (const key of ['proofs', 'openFindings', 'closedFindings', 'fingerprintHistory', 'dependencyClosure']) {
       if (!Array.isArray(branch[key])) violations.push(`${prefix}.${key} must be an array`);
     }
-    if (!Array.isArray(branch.closedFindings)) violations.push(`${prefix}.closedFindings must be an array`);
     if (!isObject(branch.reviewPlan) || !Array.isArray(branch.reviewPlan.declaredRisks) || !branch.reviewPlan.declaredRisks.every(isString)) {
       violations.push(`${prefix}.reviewPlan.declaredRisks must be an array`);
     }
@@ -84,18 +117,22 @@ function validateStateV3(state) {
       violations.push(`${prefix}.candidate.sha must be a git sha and candidate.preserved must be boolean`);
     }
     for (const [proofIndex, proof] of (Array.isArray(branch.proofs) ? branch.proofs : []).entries()) {
-      if (!isObject(proof) || !isString(proof.kind) || !isString(proof.path) || !isSha256(proof.sha256)) {
+      if (!isObject(proof) || !isNonBlank(proof.kind) || !isNonBlank(proof.path) || !isSha256(proof.sha256)) {
         violations.push(`${prefix}.proofs[${proofIndex}] must have kind, path, and sha256`);
       }
     }
-    for (const [findingIndex, finding] of (Array.isArray(branch.openFindings) ? branch.openFindings : []).entries()) {
-      if (!isObject(finding) || !isSha256(finding.fingerprint) || !isString(finding.requirementRef)) {
-        violations.push(`${prefix}.openFindings[${findingIndex}] must have fingerprint and requirementRef`);
+    const openFindings = Array.isArray(branch.openFindings) ? branch.openFindings : [];
+    for (const [findingIndex, finding] of openFindings.entries()) {
+      if (!hasExactKeys(finding, ['fingerprint', 'requirementRef']) ||
+          !isSha256(finding.fingerprint) || !isNonBlank(finding.requirementRef)) {
+        violations.push(`${prefix}.openFindings[${findingIndex}] must be exactly fingerprint and requirementRef`);
       }
     }
-    for (const [findingIndex, finding] of (Array.isArray(branch.closedFindings) ? branch.closedFindings : []).entries()) {
-      if (!isObject(finding) || !isSha256(finding.fingerprint) || !isString(finding.requirementRef)) {
-        violations.push(`${prefix}.closedFindings[${findingIndex}] must have fingerprint and requirementRef`);
+    const closedFindings = Array.isArray(branch.closedFindings) ? branch.closedFindings : [];
+    for (const [findingIndex, finding] of closedFindings.entries()) {
+      if (!hasExactKeys(finding, ['fingerprint', 'proof']) ||
+          !isSha256(finding.fingerprint) || !isNonBlank(finding.proof)) {
+        violations.push(`${prefix}.closedFindings[${findingIndex}] must be exactly fingerprint and proof`);
       }
     }
     if (!(Array.isArray(branch.fingerprintHistory) && branch.fingerprintHistory.every(isSha256))) {
@@ -105,10 +142,10 @@ function validateStateV3(state) {
       violations.push(`${prefix}.dependencyClosure must contain task ids`);
     }
     if (!isObject(branch.executorRotation) ||
-      !Object.prototype.hasOwnProperty.call(branch.executorRotation, 'originalExecutor') ||
-      !Object.prototype.hasOwnProperty.call(branch.executorRotation, 'rotatedExecutor') ||
-      !Object.prototype.hasOwnProperty.call(branch.executorRotation, 'rotationsUsed') ||
-      !Object.prototype.hasOwnProperty.call(branch.executorRotation, 'attemptsByExecutor') ||
+      !Object.hasOwn(branch.executorRotation, 'originalExecutor') ||
+      !Object.hasOwn(branch.executorRotation, 'rotatedExecutor') ||
+      !Object.hasOwn(branch.executorRotation, 'rotationsUsed') ||
+      !Object.hasOwn(branch.executorRotation, 'attemptsByExecutor') ||
       (branch.executorRotation.originalExecutor !== null && !isString(branch.executorRotation.originalExecutor)) ||
       (branch.executorRotation.rotatedExecutor !== null && !isString(branch.executorRotation.rotatedExecutor)) ||
       !Number.isInteger(branch.executorRotation.rotationsUsed) || branch.executorRotation.rotationsUsed < 0 ||
@@ -116,27 +153,37 @@ function validateStateV3(state) {
       !Object.values(branch.executorRotation.attemptsByExecutor).every(value => Number.isInteger(value) && value >= 0)) {
       violations.push(`${prefix}.executorRotation must be a valid rotation object`);
     }
-    if (!isObject(branch.progressDelta) || !Number.isInteger(branch.progressDelta.closed) || branch.progressDelta.closed < 0 || !Number.isInteger(branch.progressDelta.opened) || branch.progressDelta.opened < 0 ||
+    if (!isObject(branch.progressDelta) || !Number.isInteger(branch.progressDelta.closed) || branch.progressDelta.closed < 0 ||
+      !Number.isInteger(branch.progressDelta.opened) || branch.progressDelta.opened < 0 ||
       !Number.isInteger(branch.progressDelta.previousOpenCount) || !Number.isInteger(branch.progressDelta.currentOpenCount) ||
       typeof branch.progressDelta.setDecreased !== 'boolean' || typeof branch.progressDelta.strongerRed !== 'boolean') {
       violations.push(`${prefix}.progressDelta must be a valid progress object`);
     }
     if (branch.generationArtifact !== undefined &&
-      (!isObject(branch.generationArtifact) || !isString(branch.generationArtifact.path) || !isSha256(branch.generationArtifact.sha256))) {
-      violations.push(`${prefix}.generationArtifact must contain path and sha256`);
+      (!hasExactKeys(branch.generationArtifact, ['path', 'sha256']) ||
+       !isNonBlank(branch.generationArtifact.path) || !isSha256(branch.generationArtifact.sha256))) {
+      violations.push(`${prefix}.generationArtifact must contain exactly path and sha256`);
+    }
+    if (branch.state !== CLOSED_STATE && openFindings.length < 1) {
+      violations.push(`${prefix}.openFindings must contain at least one open finding`);
     }
     if (branch.state === HUMAN_STATE) {
+      if (!HUMAN_CLASSIFICATIONS.has(branch.classification)) violations.push(`${prefix}.classification must require a human gate`);
       if (branch.nextTask !== null) violations.push(`${prefix}.nextTask must be null for HUMAN_GATE`);
-      if (!isObject(branch.humanGate) || !isString(branch.humanGate.decisionNeeded) || !Array.isArray(branch.humanGate.proofs)) {
-        violations.push(`${prefix}.humanGate must name a decision and proofs for HUMAN_GATE`);
+      if (!isObject(branch.humanGate) || !isNonBlank(branch.humanGate.decisionNeeded) ||
+          !Array.isArray(branch.humanGate.proofs) || branch.humanGate.proofs.length < 1 ||
+          !branch.humanGate.proofs.every(proof => isObject(proof) && Object.values(proof).some(isNonBlank))) {
+        violations.push(`${prefix}.humanGate must name a proof-backed decision for HUMAN_GATE`);
       }
     } else if (branch.state === CLOSED_STATE) {
-      if (branch.openFindings.length !== 0 || branch.nextTask !== null || branch.humanGate !== null) {
-        violations.push(`${prefix} CLOSED requires empty openFindings and null nextTask/humanGate`);
+      if (openFindings.length !== 0 || branch.nextTask !== null || branch.humanGate !== null || closedFindings.length < 1) {
+        violations.push(`${prefix} CLOSED requires closed proof evidence, empty openFindings, and null nextTask/humanGate`);
       }
     } else if (AUTOMATIC_STATES.has(branch.state)) {
-      if (!isObject(branch.nextTask) || !isString(branch.nextTask.taskId) || !isString(branch.nextTask.kind) || !isString(branch.nextTask.status)) {
-        violations.push(`${prefix}.nextTask must have taskId, kind, and status for automatic branch`);
+      if (!AUTOMATIC_CLASSIFICATIONS.has(branch.classification)) violations.push(`${prefix}.classification must be technical or evidence-deficient`);
+      if (!hasExactKeys(branch.nextTask, ['taskId', 'kind', 'status']) ||
+          !isNonBlank(branch.nextTask.taskId) || !isNonBlank(branch.nextTask.kind) || !isNonBlank(branch.nextTask.status)) {
+        violations.push(`${prefix}.nextTask must have exactly taskId, kind, and status for automatic branch`);
       }
       if (branch.humanGate !== null) violations.push(`${prefix}.humanGate must be null for automatic branch`);
     }
@@ -147,27 +194,6 @@ function validateStateV3(state) {
 function migrateStateV2(state, diagnosticRecovery) {
   if (!isObject(state) || state.$schema !== 'soma-state/v2') throw new TypeError('migrateStateV2 requires soma-state/v2');
   return { ...state, $schema: 'soma-state/v3', diagnosticRecovery };
-}
-
-function readStateV3({ projectRoot, runId }) {
-  const { runStateFile } = resolveSomaPaths(projectRoot, runId);
-  let state;
-  try { state = JSON.parse(fs.readFileSync(runStateFile, 'utf8')); } catch (err) { throw new Error(`cannot read v3 state: ${err.message}`); }
-  const result = validateStateV3(state);
-  if (!result.valid) throw new Error(`invalid soma-state/v3: ${result.violations.join('; ')}`);
-  return state;
-}
-
-function syncFile(file) { const fd = fs.openSync(file, 'r'); try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); } }
-function syncDir(dir) { const fd = fs.openSync(dir, 'r'); try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); } }
-function atomicWrite(file, bytes) {
-  const dir = path.dirname(file);
-  fs.mkdirSync(dir, { recursive: true });
-  const temp = path.join(dir, `.${path.basename(file)}.${process.pid}.${crypto.randomBytes(8).toString('hex')}.tmp`);
-  fs.writeFileSync(temp, bytes, { flag: 'wx' });
-  syncFile(temp);
-  fs.renameSync(temp, file);
-  syncDir(dir);
 }
 
 function semanticGeneration(branch) {
@@ -187,12 +213,109 @@ function semanticGeneration(branch) {
   };
 }
 
-function persistentGeneration(branch) {
-  const { generationArtifact: _artifact, dispatchHistory: _history, ...persistent } = branch;
-  return persistent;
+function safeRunId(runId) {
+  return isNonBlank(runId) && runId !== '.' && runId !== '..' &&
+    !runId.includes('/') && !runId.includes('\\') && path.basename(runId) === runId;
 }
 
-function installImmutableNoClobber(target, bytes, beforeInstall) {
+function readReferencedGeneration({ projectRoot, runId, branch }) {
+  const reference = branch.generationArtifact;
+  if (reference === undefined) return;
+  const filename = `${String(branch.generation).padStart(4, '0')}.json`;
+  const expectedRelative = path.join('.soma', 'recovery', runId, filename);
+  if (!isObject(reference) || reference.path !== expectedRelative || path.isAbsolute(reference.path)) {
+    throw codedError('RECOVERY_REFERENCE_PATH_INVALID', reference && reference.path);
+  }
+
+  const realProjectRoot = fs.realpathSync(projectRoot);
+  const components = ['.soma', 'recovery', runId, filename];
+  let cursor = realProjectRoot;
+  for (const component of components) {
+    cursor = path.join(cursor, component);
+    let stat;
+    try { stat = fs.lstatSync(cursor); } catch (err) {
+      throw codedError('RECOVERY_REFERENCE_READ_FAILED', err.message);
+    }
+    if (stat.isSymbolicLink()) throw codedError('RECOVERY_REFERENCE_SYMLINK', cursor);
+  }
+  const recoveryRoot = fs.realpathSync(path.join(realProjectRoot, '.soma', 'recovery', runId));
+  const realFile = fs.realpathSync(cursor);
+  if (path.dirname(realFile) !== recoveryRoot) throw codedError('RECOVERY_REFERENCE_PATH_INVALID', reference.path);
+
+  let fd;
+  let bytes;
+  try {
+    const noFollow = fs.constants.O_NOFOLLOW || 0;
+    fd = fs.openSync(cursor, fs.constants.O_RDONLY | noFollow);
+    const stat = fs.fstatSync(fd);
+    if (!stat.isFile()) throw codedError('RECOVERY_REFERENCE_NOT_REGULAR', reference.path);
+    bytes = fs.readFileSync(fd);
+  } catch (err) {
+    if (err.message && err.message.startsWith('RECOVERY_REFERENCE_')) throw err;
+    throw codedError(err.code === 'ELOOP' ? 'RECOVERY_REFERENCE_SYMLINK' : 'RECOVERY_REFERENCE_READ_FAILED', err.message);
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd);
+  }
+  if (sha256Hex(bytes) !== reference.sha256) throw codedError('RECOVERY_REFERENCE_BYTES_SHA_MISMATCH');
+
+  let envelope;
+  try { envelope = JSON.parse(bytes.toString('utf8')); } catch (err) {
+    throw codedError('RECOVERY_REFERENCE_ENVELOPE_INVALID', err.message);
+  }
+  if (!isObject(envelope) || envelope.$schema !== 'soma-recovery-generation/v1' ||
+      !isSha256(envelope.semanticSha256) || !Number.isInteger(envelope.generation) ||
+      envelope.generation < 1 || !isObject(envelope.recovery)) {
+    throw codedError('RECOVERY_REFERENCE_ENVELOPE_INVALID');
+  }
+  if (envelope.generation !== branch.generation || envelope.recovery.generation !== branch.generation) {
+    throw codedError('RECOVERY_REFERENCE_GENERATION_MISMATCH');
+  }
+  let projectedArtifact;
+  try { projectedArtifact = projectPersistentBranch(envelope.recovery); } catch (err) {
+    throw codedError('RECOVERY_REFERENCE_ENVELOPE_INVALID', err.message);
+  }
+  if (Object.keys(projectedArtifact).length !== Object.keys(envelope.recovery).length) {
+    throw codedError('RECOVERY_REFERENCE_ENVELOPE_INVALID');
+  }
+  const semanticSha256 = sha256Hex(canonicalJson(semanticGeneration(envelope.recovery)));
+  if (semanticSha256 !== envelope.semanticSha256) throw codedError('RECOVERY_REFERENCE_SEMANTIC_SHA_MISMATCH');
+  const stateProjection = projectPersistentBranch(branch);
+  if (canonicalJson(stateProjection) !== canonicalJson(envelope.recovery)) {
+    throw codedError('RECOVERY_REFERENCE_STATE_MISMATCH');
+  }
+}
+
+function readStateV3({ projectRoot, runId }) {
+  if (!safeRunId(runId)) throw codedError('RECOVERY_REFERENCE_RUN_ID_INVALID');
+  const { runStateFile } = resolveSomaPaths(projectRoot, runId);
+  let state;
+  try { state = JSON.parse(fs.readFileSync(runStateFile, 'utf8')); } catch (err) { throw new Error(`cannot read v3 state: ${err.message}`); }
+  const result = validateStateV3(state);
+  if (!result.valid) throw new Error(`invalid soma-state/v3: ${result.violations.join('; ')}`);
+  for (const branch of state.diagnosticRecovery.branches) {
+    readReferencedGeneration({ projectRoot, runId, branch });
+  }
+  return state;
+}
+
+function syncFile(file) { const fd = fs.openSync(file, 'r'); try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); } }
+function syncDir(dir) { const fd = fs.openSync(dir, 'r'); try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); } }
+function atomicReplace(file, bytes) {
+  const dir = path.dirname(file);
+  fs.mkdirSync(dir, { recursive: true });
+  const temp = path.join(dir, `.${path.basename(file)}.${process.pid}.${crypto.randomBytes(8).toString('hex')}.tmp`);
+  fs.writeFileSync(temp, bytes, { flag: 'wx' });
+  try {
+    syncFile(temp);
+    fs.renameSync(temp, file);
+    syncDir(dir);
+  } catch (err) {
+    try { fs.unlinkSync(temp); } catch (_ignored) {}
+    throw err;
+  }
+}
+
+function installNoClobber(target, bytes, beforeInstall) {
   const dir = path.dirname(target);
   fs.mkdirSync(dir, { recursive: true });
   const temp = path.join(dir, `.${path.basename(target)}.${process.pid}.${crypto.randomBytes(8).toString('hex')}.tmp`);
@@ -200,50 +323,93 @@ function installImmutableNoClobber(target, bytes, beforeInstall) {
   try {
     syncFile(temp);
     if (typeof beforeInstall === 'function') beforeInstall();
-    fs.linkSync(temp, target); // link(2) installs only when target does not already exist
+    fs.linkSync(temp, target);
     syncDir(dir);
     fs.unlinkSync(temp);
     syncDir(dir);
+    return true;
   } catch (err) {
     try { fs.unlinkSync(temp); } catch (_ignored) {}
-    if (err && err.code === 'EEXIST') throw new Error(`immutable generation exists: ${target}`);
+    if (err && err.code === 'EEXIST') return false;
     throw err;
   }
 }
 
-function publishRecoveryGeneration({ projectRoot, runId, expectedStateSha256, generation, fault }) {
-  const paths = resolveSomaPaths(projectRoot, runId);
-  const stateBytes = fs.readFileSync(paths.runStateFile);
-  const actualStateSha256 = sha256Hex(stateBytes);
-  if (actualStateSha256 !== expectedStateSha256) throw new Error('state hash does not match expected prior state');
-  const state = JSON.parse(stateBytes.toString('utf8'));
+function installImmutableNoClobber(target, bytes, beforeInstall) {
+  if (!installNoClobber(target, bytes, beforeInstall)) throw new Error(`immutable generation exists: ${target}`);
+}
+
+function readJsonFile(file, code) {
+  try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch (err) { throw codedError(code, err.message); }
+}
+
+function claimMatchesGeneration(claim, { expectedStateSha256, generationPath, generationSha256 }) {
+  return isObject(claim) && claim.$schema === 'soma-recovery-state-cas/v1' &&
+    claim.expectedStateSha256 === expectedStateSha256 && isSha256(claim.nextStateSha256) &&
+    claim.generationPath === generationPath && claim.generationSha256 === generationSha256;
+}
+
+function completedRetry({ paths, expectedStateSha256, actualStateSha256, candidateBranch,
+  generationPath, generationSha256, semanticSha256, claimPath }) {
+  if (!fs.existsSync(claimPath)) throw codedError('STATE_CAS_MISMATCH');
+  const claim = readJsonFile(claimPath, 'STATE_CAS_MISMATCH');
+  if (!claimMatchesGeneration(claim, { expectedStateSha256, generationPath, generationSha256 })) {
+    throw codedError('STATE_CAS_CONFLICT');
+  }
+  if (actualStateSha256 !== claim.nextStateSha256) throw codedError('STATE_CAS_MISMATCH');
+  const state = readJsonFile(paths.runStateFile, 'STATE_CAS_MISMATCH');
   const valid = validateStateV3(state);
-  if (!valid.valid) throw new Error(`invalid soma-state/v3: ${valid.violations.join('; ')}`);
+  if (!valid.valid) throw codedError('STATE_CAS_MISMATCH', valid.violations.join('; '));
+  const branch = state.diagnosticRecovery.branches.find(item => item.branchId === candidateBranch.branchId);
+  if (!branch || canonicalJson(projectPersistentBranch(branch)) !== canonicalJson(candidateBranch) ||
+      !isObject(branch.generationArtifact) || branch.generationArtifact.path !== generationPath ||
+      branch.generationArtifact.sha256 !== generationSha256) {
+    throw codedError('STATE_CAS_MISMATCH');
+  }
+  return { generationPath, generationSha256, semanticSha256, adopted: true, state };
+}
+
+function publishRecoveryGeneration({ projectRoot, runId, expectedStateSha256, generation, fault }) {
+  if (!safeRunId(runId)) throw codedError('RECOVERY_REFERENCE_RUN_ID_INVALID');
+  if (!isSha256(expectedStateSha256)) throw new TypeError('expectedStateSha256 must be a sha256');
   if (!isObject(generation) || !Number.isInteger(generation.generation) || generation.generation < 1 || !isString(generation.branchId)) {
     throw new TypeError('generation requires branchId and positive integer generation');
   }
-  const branch = state.diagnosticRecovery.branches.find(item => item.branchId === generation.branchId);
-  if (!branch) throw new Error(`unknown recovery branch: ${generation.branchId}`);
-  const candidateBranch = persistentGeneration(generation);
-  const candidateState = {
-    ...state,
-    diagnosticRecovery: { ...state.diagnosticRecovery, branches: state.diagnosticRecovery.branches.map(item => item.branchId === generation.branchId ? candidateBranch : item) },
-  };
-  const candidateValidation = validateStateV3(candidateState);
-  if (!candidateValidation.valid) throw new Error(`invalid supplied recovery generation: ${candidateValidation.violations.join('; ')}`);
-  const semanticPayload = semanticGeneration(candidateBranch);
-  const semanticSha256 = sha256Hex(canonicalJson(semanticPayload));
-  const published = {
-    $schema: 'soma-recovery-generation/v1',
-    semanticSha256,
-    generation: generation.generation,
-    recovery: semanticPayload,
-  };
-  const generationBytes = canonicalJson(published);
-  const generationSha256 = sha256Hex(generationBytes);
+  const candidateBranch = projectPersistentBranch(generation);
+  const paths = resolveSomaPaths(projectRoot, runId);
   const filename = `${String(generation.generation).padStart(4, '0')}.json`;
   const absoluteGenerationPath = path.join(paths.runRecoveryDir, filename);
   const generationPath = path.join('.soma', 'recovery', runId, filename);
+  const semanticSha256 = sha256Hex(canonicalJson(semanticGeneration(candidateBranch)));
+  const published = {
+    $schema: 'soma-recovery-generation/v1', semanticSha256,
+    generation: generation.generation, recovery: candidateBranch,
+  };
+  const generationBytes = canonicalJson(published);
+  const generationSha256 = sha256Hex(generationBytes);
+  const claimPath = path.join(paths.runRecoveryDir, '.state-cas', `${expectedStateSha256}.json`);
+
+  const stateBytes = fs.readFileSync(paths.runStateFile);
+  const actualStateSha256 = sha256Hex(stateBytes);
+  if (actualStateSha256 !== expectedStateSha256) {
+    return completedRetry({ paths, expectedStateSha256, actualStateSha256, candidateBranch,
+      generationPath, generationSha256, semanticSha256, claimPath });
+  }
+  const state = JSON.parse(stateBytes.toString('utf8'));
+  const valid = validateStateV3(state);
+  if (!valid.valid) throw new Error(`invalid soma-state/v3: ${valid.violations.join('; ')}`);
+  const branch = state.diagnosticRecovery.branches.find(item => item.branchId === generation.branchId);
+  if (!branch) throw new Error(`unknown recovery branch: ${generation.branchId}`);
+  const candidateState = {
+    ...state,
+    diagnosticRecovery: {
+      ...state.diagnosticRecovery,
+      branches: state.diagnosticRecovery.branches.map(item => item.branchId === generation.branchId ? candidateBranch : item),
+    },
+  };
+  const candidateValidation = validateStateV3(candidateState);
+  if (!candidateValidation.valid) throw new Error(`invalid supplied recovery generation: ${candidateValidation.violations.join('; ')}`);
+
   let adopted = false;
   if (fs.existsSync(absoluteGenerationPath)) {
     if (fs.lstatSync(absoluteGenerationPath).isSymbolicLink()) throw new Error('existing generation symlink rejected');
@@ -256,13 +422,41 @@ function publishRecoveryGeneration({ projectRoot, runId, expectedStateSha256, ge
     installImmutableNoClobber(absoluteGenerationPath, generationBytes, fault && fault['before-generation-install']);
   }
   if (fault === 'after-generation-rename') throw new Error('INJECTED after-generation-rename');
+
   const nextBranch = { ...candidateBranch, generationArtifact: { path: generationPath, sha256: generationSha256 } };
   const nextState = {
     ...state,
-    diagnosticRecovery: { ...state.diagnosticRecovery, branches: state.diagnosticRecovery.branches.map(item => item.branchId === branch.branchId ? nextBranch : item) },
+    diagnosticRecovery: {
+      ...state.diagnosticRecovery,
+      branches: state.diagnosticRecovery.branches.map(item => item.branchId === branch.branchId ? nextBranch : item),
+    },
   };
-  atomicWrite(paths.runStateFile, JSON.stringify(nextState, null, 2) + '\n');
+  const nextStateBytes = Buffer.from(`${JSON.stringify(nextState, null, 2)}\n`);
+  const nextStateSha256 = sha256Hex(nextStateBytes);
+  const claim = {
+    $schema: 'soma-recovery-state-cas/v1', expectedStateSha256, nextStateSha256,
+    generationPath, generationSha256,
+  };
+  const claimBytes = Buffer.from(canonicalJson(claim));
+  if (fault && typeof fault['before-state-cas'] === 'function') fault['before-state-cas']();
+  const ownsClaim = installNoClobber(claimPath, claimBytes);
+  if (!ownsClaim) {
+    const existingClaimBytes = fs.readFileSync(claimPath);
+    if (!existingClaimBytes.equals(claimBytes)) throw codedError('STATE_CAS_CONFLICT');
+    const canonicalSha256 = sha256Hex(fs.readFileSync(paths.runStateFile));
+    if (canonicalSha256 === nextStateSha256) {
+      return { generationPath, generationSha256, semanticSha256, adopted: true, state: nextState };
+    }
+    if (canonicalSha256 === expectedStateSha256) throw codedError('STATE_CAS_IN_PROGRESS');
+    throw codedError('STATE_CAS_MISMATCH');
+  }
+
+  const canonicalStateSha256 = sha256Hex(fs.readFileSync(paths.runStateFile));
+  if (canonicalStateSha256 !== expectedStateSha256) throw codedError('STATE_CAS_MISMATCH');
+  atomicReplace(paths.runStateFile, nextStateBytes);
   return { generationPath, generationSha256, semanticSha256, adopted, state: nextState };
 }
 
-module.exports = { validateStateV3, migrateStateV2, readStateV3, publishRecoveryGeneration };
+module.exports = {
+  validateStateV3, migrateStateV2, readStateV3, publishRecoveryGeneration, projectPersistentBranch,
+};
