@@ -792,6 +792,8 @@ Load `resolveRunIdFromLock`, `assertSafeRunId` and `reserveRunIdentity` from the
 
 For a new-state candidate, call `reserveRunIdentity({allowNew:false})`, parse a regular permitted state, and compare its embedded ID exactly. Only after this proof may the hook test/unlink the bypass marker or read `specPath` and `tasksPath`. On identity failure, emit a warning containing the stable code and fail open under the hook's existing compatibility contract, but leave the bypass and all source paths untouched. Preserve the legacy temp-state fallback when no new candidate or authoritative invalid lock exists.
 
+New-state adoption fixtures under `.soma/run-state-<runId>.json` must use a structurally valid `soma-state/v2` or `soma-state/v3` object with an exact embedded `runId`. Partial state objects belong only to the legacy `/tmp/soma-state-<sessionId>.json` fallback and never authorize creation of a canonical marker.
+
 - [ ] **Step 4: Update only source-map-proven runtime artifacts**
 
 Add `.soma/run-identities/` to the selective runtime ignore block; keep `.soma/install-state.json` unignored. Update the current persistence contract with the exact two-key marker, additive exact-state adoption, identity preflight, recovery deletion and marker-last order. Update `soma-run.md` initialization and DONE cleanup paragraphs to reflect automatic reservation and the full deletion order.

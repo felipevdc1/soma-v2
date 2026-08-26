@@ -426,8 +426,18 @@ test('T-03-06: REGRESSION — spec-completeness-gate must keep blocking after st
     fs.unlinkSync(oldStatePath);
     oldFileExists = false;
     const runId = 'run-contract-regression-01';
-    const { runStateFile } = resolveSomaPaths(dir, runId);
-    fs.writeFileSync(runStateFile, JSON.stringify({ $schema: 'soma-state/v2', runId, specPath }));
+    const { runStateFile, runIdentityFile } = resolveSomaPaths(dir, runId);
+    const stateV2 = JSON.parse(fs.readFileSync(path.resolve(
+      __dirname,
+      'fixtures',
+      'recovery',
+      'state',
+      'v2-valid.json'
+    ), 'utf8'));
+    stateV2.runId = runId;
+    stateV2.specPath = specPath;
+    fs.writeFileSync(runStateFile, JSON.stringify(stateV2, null, 2) + '\n');
+    assert.equal(fs.existsSync(runIdentityFile), false, 'migration fixture must begin without a run identity marker');
 
     const postMigration = invokeHook('git commit -m "post-migration: new-path only state, must still block"');
     assert.equal(
@@ -437,6 +447,25 @@ test('T-03-06: REGRESSION — spec-completeness-gate must keep blocking after st
         `absent, with NO warning at all. Got exit ${postMigration.status}. stdout: ${postMigration.stdout} ` +
         `stderr: ${postMigration.stderr}. This is the exact silent-degradation defect Spec 016 exists to ` +
         'kill (contracts/persist-run-state.md, consumer note on spec-completeness-gate.cjs).'
+    );
+    assert.match(
+      postMigration.stderr,
+      /SPEC INCOMPLETE: 1 marker open/,
+      `post-migration block must come from the incomplete spec after identity adoption. Got: ${postMigration.stderr}`
+    );
+    assert.doesNotMatch(
+      postMigration.stderr,
+      /RUN_ID_/,
+      `a structurally valid exact v2 state must not fail identity proof. Got: ${postMigration.stderr}`
+    );
+    const canonicalMarker = Buffer.from(`${JSON.stringify({
+      $schema: 'soma-run-identity/v1',
+      runId,
+    }, null, 2)}\n`, 'utf8');
+    assert.deepEqual(
+      fs.readFileSync(runIdentityFile),
+      canonicalMarker,
+      'identity adoption must create the exact canonical marker before reading the spec, and the marker must remain valid after the hook blocks'
     );
   } finally {
     if (oldFileExists) { try { fs.unlinkSync(oldStatePath); } catch (_err) { /* best effort */ } }
