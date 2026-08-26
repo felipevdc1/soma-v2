@@ -117,6 +117,36 @@ test('validateStateV3 enforces automatic and human-gate branch nullability plus 
   assert.equal(validateStateV3(paused).valid, false);
 });
 
+test('validateStateV3 rejects missing v2 fields and malformed semantic branch values with named violations', () => {
+  const valid = readFixture('v3-red-pending.json');
+  const malformedCases = [
+    ['fixLoopIterations', state => { delete state.fixLoopIterations; }],
+    ['classification', state => { state.diagnosticRecovery.branches[0].classification = 'NOT_A_CLASSIFICATION'; }],
+    ['fingerprint', state => { state.diagnosticRecovery.branches[0].fingerprint = 'not-a-sha'; }],
+    ['candidate.sha', state => { state.diagnosticRecovery.branches[0].candidate.sha = 'not-a-sha'; }],
+    ['executorRotation', state => { state.diagnosticRecovery.branches[0].executorRotation = []; }],
+    ['progressDelta', state => { state.diagnosticRecovery.branches[0].progressDelta = []; }],
+    ['nextTask', state => { state.diagnosticRecovery.branches[0].nextTask = { taskId: '', kind: 7, status: null }; }],
+    ['proofs', state => { state.diagnosticRecovery.branches[0].proofs = [{ kind: 'RED', path: 7, sha256: 'not-a-sha' }]; }],
+    ['openFindings', state => { state.diagnosticRecovery.branches[0].openFindings = [{ fingerprint: 'not-a-sha', requirementRef: '' }]; }],
+  ];
+
+  for (const [name, mutate] of malformedCases) {
+    const malformed = clone(valid);
+    mutate(malformed);
+    const result = validateStateV3(malformed);
+    assert.equal(result.valid, false, `${name} must fail closed`);
+    assert.ok(result.violations.some(violation => violation.includes(name.split('.')[0])), `${name} must have a named violation`);
+  }
+
+  const closed = clone(valid);
+  closed.diagnosticRecovery.branches[0].state = 'CLOSED';
+  closed.diagnosticRecovery.branches[0].openFindings = [];
+  closed.diagnosticRecovery.branches[0].nextTask = null;
+  closed.diagnosticRecovery.branches[0].humanGate = null;
+  assert.equal(validateStateV3(closed).valid, true);
+});
+
 test('readStateV3 follows only the state reference and ignores a directory-only generation artifact', () => {
   const setup = setupState('run-reader');
   const orphanPath = path.join(setup.projectRoot, '.soma', 'recovery', setup.runId, '0001.json');
@@ -166,6 +196,49 @@ test('after-generation-rename leaves state unchanged and a matching orphan is ad
   assert.deepEqual(fs.readdirSync(recoveryDir).filter(name => name.endsWith('.json')), ['0001.json']);
 });
 
+test('generation two persists its own semantic branch truth and candidate changes alter the semantic hash', () => {
+  const setup = setupState('run-generation-two');
+  publishRecoveryGeneration(publicationInput(setup));
+  const current = readStateV3({ projectRoot: setup.projectRoot, runId: setup.runId });
+  setup.state = current;
+  const nextTask = { taskId: 'T-RECOVERY-G2-IMPLEMENT', kind: 'IMPLEMENTER', status: 'pending' };
+  const generation = generationFrom(current, {
+    generation: 2,
+    classification: 'EVIDENCE_DEFICIENT',
+    candidate: { sha: '1111111111111111111111111111111111111111', preserved: true },
+    nextTask,
+  });
+  const result = publishRecoveryGeneration({
+    projectRoot: setup.projectRoot,
+    runId: setup.runId,
+    expectedStateSha256: sha256File(setup.runStateFile),
+    generation,
+  });
+  const artifact = readJson(path.join(setup.projectRoot, result.generationPath));
+  const persisted = readStateV3({ projectRoot: setup.projectRoot, runId: setup.runId });
+  const persistedBranch = persisted.diagnosticRecovery.branches[0];
+
+  assert.equal(artifact.recovery.generation, 2);
+  assert.equal(artifact.recovery.classification, generation.classification);
+  assert.deepEqual(artifact.recovery.candidate, generation.candidate);
+  assert.deepEqual(artifact.recovery.nextTask, nextTask);
+  assert.equal(result.state.diagnosticRecovery.branches[0].generation, 2);
+  assert.equal(persistedBranch.classification, generation.classification);
+  assert.deepEqual(persistedBranch.candidate, generation.candidate);
+  assert.deepEqual(persistedBranch.nextTask, nextTask);
+  assert.deepEqual(persistedBranch.generationArtifact, { path: result.generationPath, sha256: result.generationSha256 });
+
+  const first = setupState('run-semantic-candidate');
+  const second = setupState('run-semantic-candidate');
+  const one = publishRecoveryGeneration(publicationInput(first, {
+    candidate: { sha: '2222222222222222222222222222222222222222', preserved: true },
+  }));
+  const two = publishRecoveryGeneration(publicationInput(second, {
+    candidate: { sha: '3333333333333333333333333333333333333333', preserved: true },
+  }));
+  assert.notEqual(one.semanticSha256, two.semanticSha256);
+});
+
 test('a wrong-semantic-hash orphan is rejected while preserving state and orphan bytes', () => {
   const setup = setupState('run-wrong-orphan');
   const input = publicationInput(setup);
@@ -207,4 +280,26 @@ test('an existing generation is immutable and semantic bytes omit path, publicat
   assert.throws(() => publishRecoveryGeneration(publicationInput(locked)), /exists|immutable|generation/i);
   assert.equal(fs.readFileSync(lockedPath, 'utf8'), originalBytes);
   assert.deepEqual(fs.readFileSync(locked.runStateFile), originalState);
+});
+
+test('a competitor installed immediately before generation installation is never clobbered', () => {
+  const setup = setupState('run-no-clobber-race');
+  const target = path.join(setup.projectRoot, '.soma', 'recovery', setup.runId, '0001.json');
+  const competitorBytes = '{"publisher":"competitor"}\n';
+  let injected = false;
+
+  assert.throws(
+    () => publishRecoveryGeneration({
+      ...publicationInput(setup),
+      fault: {
+        'before-generation-install': () => {
+          injected = true;
+          fs.writeFileSync(target, competitorBytes, { flag: 'wx' });
+        },
+      },
+    }),
+    /exists|immutable|generation/i
+  );
+  assert.equal(injected, true);
+  assert.equal(fs.readFileSync(target, 'utf8'), competitorBytes);
 });

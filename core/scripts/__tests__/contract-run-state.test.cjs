@@ -73,11 +73,11 @@ const V1_FIELD_NAMES = [
   'constitutionSnapshotPath', 'lastSuccessfulState', 'baselineSha', 'pausedDiagnostic',
 ];
 
-// ── 1. v2 is a superset of v1.0 ─────────────────────────────────────────
+// ── 1. v3 is a superset of v1.0 ─────────────────────────────────────────
 
 // @spec AC-03
 // @contract CONTRACT-RUN-STATE-02
-test('T-03-01: soma run state --init produces soma-state/v2 carrying every v1.0 field, same name/shape', () => {
+test('T-03-01: soma run state --init produces soma-state/v3 carrying every v1.0 field, same name/shape', () => {
   const dir = makeLabProject({ withSomaDir: true });
   try {
     const runId = 'run-contract-superset-01';
@@ -92,18 +92,23 @@ test('T-03-01: soma run state --init produces soma-state/v2 carrying every v1.0 
 
     const state = JSON.parse(fs.readFileSync(runStateFile, 'utf8'));
 
-    assert.equal(state.$schema, 'soma-state/v2', `$schema must be the literal "soma-state/v2". Got: ${state.$schema}`);
+    assert.equal(state.$schema, 'soma-state/v3', `$schema must be the literal "soma-state/v3". Got: ${state.$schema}`);
     for (const field of V1_FIELD_NAMES) {
       if (field === '$schema') continue; // value differs by design (v1.0 -> v2), presence already asserted above
       assert.ok(
         Object.prototype.hasOwnProperty.call(state, field),
-        `v1.0 field "${field}" must survive in v2 with the same name (soma-run.md:48-66). Got keys: ${Object.keys(state).join(', ')}`
+        `v1.0 field "${field}" must survive in v3 with the same name (soma-run.md:48-66). Got keys: ${Object.keys(state).join(', ')}`
       );
     }
 
     // New v2 fields.
     assert.ok(Array.isArray(state.decisions), 'state.decisions must be an array (append-only ledger)');
     assert.ok(Array.isArray(state.reports), 'state.reports must be an array (append-only ledger)');
+    assert.deepEqual(state.diagnosticRecovery, {
+      terminalCondition: { kind: 'finish', active: true },
+      taskGraph: [],
+      branches: [],
+    }, 'fresh v3 state must add an empty diagnostic recovery graph without changing legacy fields');
 
     // Semantics that are unambiguous from soma-run.md §0.2's fresh-bootstrap
     // shape, regardless of what currentState value --init chooses to start at.
