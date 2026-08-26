@@ -47,7 +47,8 @@ const { validate } = require('./schema.cjs');
 const { resolveSomaPaths, resolveRunIdFromLock } = require('./paths.cjs');
 const { warnIfLegacy } = require('./legacy.cjs');
 const { sweepExpiredArtifacts } = require('./retention.cjs');
-const { validateStateV3, migrateStateV2, mutateRunStateCas, safeRunId } = require('./recovery-store.cjs');
+const { validateStateV3, migrateStateV2, mutateRunStateCas } = require('./recovery-store.cjs');
+const { assertSafeRunId, assertExactRunId, reserveRunIdentity } = require('./run-id.cjs');
 
 // ── soma-state/v2 schema (owned by T-08, per run/schema.cjs's docstring) ──
 // Only the fields whose type is unambiguous (never legitimately null) are
@@ -133,10 +134,15 @@ function isCasRetry(err) {
 }
 
 function mutateExistingState({ projectRoot, runId, transform }) {
-  if (!safeRunId(runId)) throw new Error('RECOVERY_STATE_RUN_ID_INVALID');
+  try {
+    assertSafeRunId(runId);
+  } catch (_error) {
+    throw new Error('RECOVERY_STATE_RUN_ID_INVALID');
+  }
   const { runStateFile } = resolveSomaPaths(projectRoot, runId);
   let lastCasError;
   for (let attempt = 0; attempt < 32; attempt++) {
+    readExactRunState({ projectRoot, runId, allowV2: false });
     const currentBytes = fs.readFileSync(runStateFile);
     let current;
     try { current = JSON.parse(currentBytes.toString('utf8')); } catch (err) {
@@ -211,6 +217,50 @@ function readRunState(runStateFile, { allowV2ForMigration = false } = {}) {
   return state;
 }
 
+function readExactRunState({ projectRoot, runId, allowV2 = false }) {
+  assertSafeRunId(runId);
+  reserveRunIdentity({ projectRoot, runId, allowNew: false });
+  const { runStateFile } = resolveSomaPaths(projectRoot, runId);
+
+  let descriptor;
+  try {
+    const stat = fs.lstatSync(runStateFile);
+    if (stat.isSymbolicLink() || !stat.isFile()) {
+      throw new Error('RUN_ID_MISMATCH: run state is not a regular file');
+    }
+    descriptor = fs.openSync(
+      runStateFile,
+      fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0)
+    );
+    if (!fs.fstatSync(descriptor).isFile()) {
+      throw new Error('RUN_ID_MISMATCH: run state changed type');
+    }
+    const exactStateBytes = fs.readFileSync(descriptor);
+    let state;
+    try {
+      state = JSON.parse(exactStateBytes.toString('utf8'));
+    } catch (error) {
+      throw new Error(`RUN_ID_MISMATCH: run state is not valid JSON: ${error.message}`);
+    }
+
+    if (state.$schema === 'soma-state/v2' && allowV2) {
+      const result = validate(STATE_SCHEMA_V2, state);
+      if (!result.valid) {
+        throw new Error(`RUN_ID_MISMATCH: invalid soma-state/v2: ${result.violations.join('; ')}`);
+      }
+    } else {
+      const result = validateStateV3(state);
+      if (!result.valid) {
+        throw new Error(`RUN_ID_MISMATCH: invalid soma-state/v3: ${result.violations.join('; ')}`);
+      }
+    }
+    assertExactRunId(state.runId, runId);
+    return { state, stateBytes: exactStateBytes, runStateFile };
+  } finally {
+    if (descriptor !== undefined) fs.closeSync(descriptor);
+  }
+}
+
 function validateRunState(state) { return validateStateV3(state); }
 
 /**
@@ -232,20 +282,20 @@ function resolveRunId(explicitRunId, projectRoot) {
 
 function cmdInit(runId, projectRoot) {
   if (!runId) fail('MISSING_RUN_ID', '"soma run state --init" requires --run <runId>');
-  if (!safeRunId(runId)) fail('RECOVERY_STATE_RUN_ID_INVALID', 'invalid run identity');
+  try {
+    assertSafeRunId(runId);
+  } catch (_error) {
+    fail('RECOVERY_STATE_RUN_ID_INVALID', 'invalid run identity');
+  }
 
   warnIfLegacy(projectRoot);
   const { runStateFile } = resolveSomaPaths(projectRoot, runId);
+  reserveRunIdentity({ projectRoot, runId, allowNew: true });
 
   if (fs.existsSync(runStateFile)) {
     // Idempotent: an existing run is never reset back to fresh-bootstrap
     // defaults — that would silently wipe decisions[]/reports[] (T-03-04b).
-    let existing;
-    try {
-      existing = JSON.parse(fs.readFileSync(runStateFile, 'utf8'));
-    } catch (err) {
-      fail('CORRUPT_STATE', `${runStateFile} exists but is not valid JSON: ${err.message}`);
-    }
+    const { state: existing } = readExactRunState({ projectRoot, runId, allowV2: true });
     process.stdout.write(
       `soma run state: run "${runId}" already initialized at ${runStateFile} (no-op)\n`
     );
@@ -258,7 +308,7 @@ function cmdInit(runId, projectRoot) {
     fail('INVALID_STATE', `freshly-built state failed its own schema: ${JSON.stringify(violations)}`);
   }
   if (!writeStateAtomic(runStateFile, state)) {
-    const existing = readRunState(runStateFile, { allowV2ForMigration: true });
+    const { state: existing } = readExactRunState({ projectRoot, runId, allowV2: true });
     process.stdout.write(
       `soma run state: run "${runId}" already initialized at ${runStateFile} (no-op)\n`
     );
@@ -279,7 +329,11 @@ function cmdSet(runId, newState, projectRoot) {
         'readable .soma.lock at the project root to resolve the active run'
     );
   }
-  if (!safeRunId(resolvedRunId)) fail('RECOVERY_STATE_RUN_ID_INVALID', 'invalid run identity');
+  try {
+    assertSafeRunId(resolvedRunId);
+  } catch (_error) {
+    fail('RECOVERY_STATE_RUN_ID_INVALID', 'invalid run identity');
+  }
 
   warnIfLegacy(projectRoot);
   const { runStateFile } = resolveSomaPaths(projectRoot, resolvedRunId);
@@ -293,6 +347,7 @@ function cmdSet(runId, newState, projectRoot) {
   const transitionAt = new Date().toISOString();
   let state;
   try {
+    readExactRunState({ projectRoot, runId: resolvedRunId, allowV2: false });
     const result = mutateExistingState({
       projectRoot,
       runId: resolvedRunId,
@@ -372,7 +427,9 @@ function appendReport({ projectRoot, runId, step, status, finishedAt }) {
   if (!step || !status || !finishedAt) {
     return { ok: false, reason: 'appendReport requires step, status, and finishedAt' };
   }
-  if (!safeRunId(runId)) {
+  try {
+    assertSafeRunId(runId);
+  } catch (_error) {
     return { ok: false, reason: 'RECOVERY_STATE_RUN_ID_INVALID' };
   }
 
@@ -382,6 +439,12 @@ function appendReport({ projectRoot, runId, step, status, finishedAt }) {
       ok: false,
       reason: `no state file at ${runStateFile} — run "soma run state --init --run ${runId}" first`,
     };
+  }
+
+  try {
+    readExactRunState({ projectRoot, runId, allowV2: false });
+  } catch (error) {
+    return { ok: false, reason: error.message };
   }
 
   const entry = {
@@ -454,4 +517,11 @@ if (require.main === module) {
   main();
 }
 
-module.exports = { appendReport, readRunState, writeStateAtomic, validateRunState, migrateStateV2 };
+module.exports = {
+  appendReport,
+  readRunState,
+  readExactRunState,
+  writeStateAtomic,
+  validateRunState,
+  migrateStateV2,
+};

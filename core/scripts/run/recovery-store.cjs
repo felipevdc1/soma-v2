@@ -6,6 +6,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { canonicalJson, sha256Hex } = require('./recovery-model.cjs');
 const { resolveSomaPaths } = require('./paths.cjs');
+const { safeRunId, assertSafeRunId, reserveRunIdentity } = require('./run-id.cjs');
 
 const AUTOMATIC_STATES = new Set([
   'DIAGNOSTIC_REPLAN', 'RED_PENDING', 'RED_FROZEN', 'EXECUTOR_PENDING',
@@ -217,10 +218,17 @@ function semanticGeneration(branch) {
   };
 }
 
-function safeRunId(runId) {
-  return isNonBlank(runId) && runId !== '.' && runId !== '..' &&
-    !runId.includes('/') && !runId.includes('\\') && !runId.includes('\0') &&
-    path.basename(runId) === runId;
+function preflightRecoveryIdentity({ projectRoot, runId, unsafeCode }) {
+  try {
+    assertSafeRunId(runId);
+    return reserveRunIdentity({ projectRoot, runId, allowNew: false });
+  } catch (error) {
+    if (error && /^RUN_ID_INVALID(?::|$)/.test(error.message)) throw codedError(unsafeCode);
+    if (error && /^RUN_ID_/.test(error.message)) {
+      throw codedError('RECOVERY_STATE_RUN_ID_MISMATCH', error.message);
+    }
+    throw error;
+  }
 }
 
 function readReferencedGeneration({ projectRoot, runId, branch }) {
@@ -291,7 +299,7 @@ function readReferencedGeneration({ projectRoot, runId, branch }) {
 }
 
 function readStateV3({ projectRoot, runId }) {
-  if (!safeRunId(runId)) throw codedError('RECOVERY_REFERENCE_RUN_ID_INVALID');
+  preflightRecoveryIdentity({ projectRoot, runId, unsafeCode: 'RECOVERY_REFERENCE_RUN_ID_INVALID' });
   const { runStateFile } = resolveSomaPaths(projectRoot, runId);
   let state;
   try { state = JSON.parse(fs.readFileSync(runStateFile, 'utf8')); } catch (err) { throw new Error(`cannot read v3 state: ${err.message}`); }
@@ -473,7 +481,7 @@ function verifyInstalledClaim(context, claim, claimBytes, intendedClaimBytes, ne
 
 function mutateRunStateCas({ projectRoot, runId, expectedStateSha256, nextStateBytes,
   generationReference = null, fault }) {
-  if (!safeRunId(runId)) throw codedError('RECOVERY_STATE_RUN_ID_INVALID');
+  preflightRecoveryIdentity({ projectRoot, runId, unsafeCode: 'RECOVERY_STATE_RUN_ID_INVALID' });
   if (!isSha256(expectedStateSha256)) throw new TypeError('expectedStateSha256 must be a sha256');
   if (!exactGenerationReference(generationReference)) throw codedError('STATE_CAS_GENERATION_REFERENCE_INVALID');
   if (!(Buffer.isBuffer(nextStateBytes) || nextStateBytes instanceof Uint8Array || typeof nextStateBytes === 'string')) {
@@ -587,7 +595,7 @@ function installedClaimForExpected(context, expectedStateSha256) {
 }
 
 function publishRecoveryGeneration({ projectRoot, runId, expectedStateSha256, generation, fault }) {
-  if (!safeRunId(runId)) throw codedError('RECOVERY_STATE_RUN_ID_INVALID');
+  preflightRecoveryIdentity({ projectRoot, runId, unsafeCode: 'RECOVERY_STATE_RUN_ID_INVALID' });
   if (!isSha256(expectedStateSha256)) throw new TypeError('expectedStateSha256 must be a sha256');
   if (!isObject(generation) || !Number.isInteger(generation.generation) || generation.generation < 1 || !isString(generation.branchId)) {
     throw new TypeError('generation requires branchId and positive integer generation');
