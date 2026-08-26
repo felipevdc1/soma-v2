@@ -84,7 +84,7 @@ function isNonEmptyString(value) {
 }
 
 function isNonBlankString(value) {
-  return isNonEmptyString(value) && value.trim().length > 0;
+  return typeof value === 'string' && /\P{White_Space}/u.test(value);
 }
 
 function isSha256(value) {
