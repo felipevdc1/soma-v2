@@ -1,0 +1,20 @@
+{
+  "$schema": "soma-finding-fingerprint/v1",
+  "requirementRef": "AC-06",
+  "minimalReproduction": {
+    "command": ["node", "--test", "core/scripts/__tests__/run-recovery-model.test.cjs", "--test-name-pattern", "canonical fingerprint"],
+    "fixtureSha256": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356"
+  },
+  "boundary": "core/scripts/run/recovery-model.cjs#fingerprintFinding",
+  "observedResult": {
+    "errorIdentity": "ERR_ASSERTION",
+    "resultSha256": "1111111111111111111111111111111111111111111111111111111111111111"
+  },
+  "taskId": "T-RECOVERY-A-RED",
+  "executor": "recovery_a_red_author",
+  "candidateSha": "878852851c4531baa0848a5c877652d86fc553f3",
+  "timestamp": "2026-08-26T12:00:00.000Z",
+  "durationMs": 1241,
+  "tapOrdinal": 7,
+  "title": "canonical fingerprint includes candidate SHA"
+}

@@ -1,0 +1,20 @@
+{
+  "$schema": "soma-finding-fingerprint/v1",
+  "requirementRef": "AC-06",
+  "minimalReproduction": {
+    "command": ["node", "--test", "core/scripts/__tests__/run-recovery-model.test.cjs", "--test-name-pattern", "array order"],
+    "fixtureSha256": "2222222222222222222222222222222222222222222222222222222222222222"
+  },
+  "boundary": "core/scripts/run/recovery-model.cjs#fingerprintFinding",
+  "observedResult": {
+    "errorIdentity": "ERR_ASSERTION",
+    "resultSha256": "3333333333333333333333333333333333333333333333333333333333333333"
+  },
+  "taskId": "T-RECOVERY-A-RED",
+  "executor": "recovery_a_red_author",
+  "candidateSha": "878852851c4531baa0848a5c877652d86fc553f3",
+  "timestamp": "2026-08-26T12:01:00.000Z",
+  "durationMs": 901,
+  "tapOrdinal": 8,
+  "title": "array order counterexample"
+}

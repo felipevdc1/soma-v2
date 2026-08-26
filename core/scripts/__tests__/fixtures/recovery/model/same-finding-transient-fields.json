@@ -1,0 +1,20 @@
+{
+  "title": "renamed task and rewritten prose must not affect the finding",
+  "tapOrdinal": 93,
+  "durationMs": 9,
+  "timestamp": "2026-08-27T04:52:11.000Z",
+  "candidateSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "executor": "rotated_executor",
+  "taskId": "T-RECOVERY-A-G4-IMPLEMENT",
+  "observedResult": {
+    "resultSha256": "1111111111111111111111111111111111111111111111111111111111111111",
+    "errorIdentity": "ERR_ASSERTION"
+  },
+  "boundary": "core/scripts/run/recovery-model.cjs#fingerprintFinding",
+  "minimalReproduction": {
+    "fixtureSha256": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356",
+    "command": ["node", "--test", "core/scripts/__tests__/run-recovery-model.test.cjs", "--test-name-pattern", "canonical fingerprint"]
+  },
+  "requirementRef": "AC-06",
+  "$schema": "soma-finding-fingerprint/v1"
+}
