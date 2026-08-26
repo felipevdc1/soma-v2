@@ -102,40 +102,6 @@ function findNewRunStateCandidate(projectRoot) {
   return { candidate: candidates[0], allowLegacy: false };
 }
 
-function readExactCandidateState({ statePath, runId }) {
-  let stat;
-  try {
-    stat = fs.lstatSync(statePath);
-  } catch (_error) {
-    throw new Error('RUN_ID_IDENTITY_UNPROVABLE: candidate state is absent');
-  }
-  if (stat.isSymbolicLink() || !stat.isFile()) {
-    throw new Error('RUN_ID_IDENTITY_UNPROVABLE: candidate state is not a regular file');
-  }
-
-  const noFollow = typeof fs.constants.O_NOFOLLOW === 'number' ? fs.constants.O_NOFOLLOW : 0;
-  let descriptor;
-  try {
-    descriptor = fs.openSync(statePath, fs.constants.O_RDONLY | noFollow);
-    if (!fs.fstatSync(descriptor).isFile()) {
-      throw new Error('RUN_ID_IDENTITY_UNPROVABLE: candidate state changed type');
-    }
-    let state;
-    try {
-      state = readJsonSafe(statePath);
-    } catch (_error) {
-      throw new Error('RUN_ID_IDENTITY_UNPROVABLE: candidate state is not valid JSON');
-    }
-    if (!state || (state.$schema !== 'soma-state/v2' && state.$schema !== 'soma-state/v3')) {
-      throw new Error('RUN_ID_IDENTITY_UNPROVABLE: candidate state schema is not permitted');
-    }
-    assertExactRunId(state.runId, runId);
-    return state;
-  } finally {
-    if (descriptor !== undefined) fs.closeSync(descriptor);
-  }
-}
-
 function warnIdentityFailure(error) {
   const message = error && error.message ? error.message : String(error);
   const stable = message.match(/RUN_ID_[A-Z_]+/);
@@ -289,22 +255,13 @@ async function main() {
     try {
       selection = findNewRunStateCandidate(projectRoot);
       if (selection.candidate) {
-        try {
-          const reservation = reserveRunIdentity({
-            projectRoot,
-            runId: selection.candidate.runId,
-            allowNew: false,
-          });
-          fs.readFileSync(reservation.markerPath);
-          fs.readFileSync(selection.candidate.statePath);
-          state = readExactCandidateState(selection.candidate);
-        } catch (error) {
-          if (!error || error.code !== 'RUN_ID_IDENTITY_UNPROVABLE' ||
-              !/state is not structurally valid/.test(error.message || '')) {
-            throw error;
-          }
-          state = readExactCandidateState(selection.candidate);
-        }
+        reserveRunIdentity({
+          projectRoot,
+          runId: selection.candidate.runId,
+          allowNew: false,
+        });
+        state = readJsonSafe(selection.candidate.statePath);
+        assertExactRunId(state && state.runId, selection.candidate.runId);
       }
     } catch (error) {
       warnIdentityFailure(error);
