@@ -83,6 +83,10 @@ function isNonEmptyString(value) {
   return typeof value === 'string' && value.length > 0;
 }
 
+function isNonBlankString(value) {
+  return isNonEmptyString(value) && value.trim().length > 0;
+}
+
 function isSha256(value) {
   return typeof value === 'string' && /^[0-9a-f]{64}$/.test(value);
 }
@@ -93,20 +97,20 @@ function hasCompleteNewEvidence(input) {
   const command = reproduction && reproduction.command;
 
   return Boolean(
-    isNonEmptyString(input.boundary) &&
+    isNonBlankString(input.boundary) &&
       reproduction &&
       Array.isArray(command) &&
       command.length > 0 &&
       command.every(isNonEmptyString) &&
       isSha256(reproduction.fixtureSha256) &&
       observed &&
-      isNonEmptyString(observed.errorIdentity) &&
+      isNonBlankString(observed.errorIdentity) &&
       isSha256(observed.resultSha256)
   );
 }
 
 function classifyFinding(input) {
-  if (isNonEmptyString(input.requirementRef)) {
+  if (isNonBlankString(input.requirementRef)) {
     if (!CLASSIFICATIONS.has(input.classification)) {
       throw new TypeError(`Unknown finding classification: ${input.classification}`);
     }
