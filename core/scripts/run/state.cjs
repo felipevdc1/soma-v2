@@ -142,7 +142,7 @@ function mutateExistingState({ projectRoot, runId, transform }) {
   const { runStateFile } = resolveSomaPaths(projectRoot, runId);
   let lastCasError;
   for (let attempt = 0; attempt < 32; attempt++) {
-    readExactRunState({ projectRoot, runId, allowV2: false });
+    readExactRunState({ projectRoot, runId, allowV2: true });
     const currentBytes = fs.readFileSync(runStateFile);
     let current;
     try { current = JSON.parse(currentBytes.toString('utf8')); } catch (err) {
@@ -347,7 +347,7 @@ function cmdSet(runId, newState, projectRoot) {
   const transitionAt = new Date().toISOString();
   let state;
   try {
-    readExactRunState({ projectRoot, runId: resolvedRunId, allowV2: false });
+    readExactRunState({ projectRoot, runId: resolvedRunId, allowV2: true });
     const result = mutateExistingState({
       projectRoot,
       runId: resolvedRunId,
@@ -442,7 +442,7 @@ function appendReport({ projectRoot, runId, step, status, finishedAt }) {
   }
 
   try {
-    readExactRunState({ projectRoot, runId, allowV2: false });
+    readExactRunState({ projectRoot, runId, allowV2: true });
   } catch (error) {
     return { ok: false, reason: error.message };
   }
