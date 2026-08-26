@@ -9,8 +9,16 @@ const { resolveSomaPaths } = require('./paths.cjs');
 
 const AUTOMATIC_STATES = new Set(['RED_PENDING', 'GREEN_PENDING', 'REVIEW_PENDING', 'CORRECTION_PENDING']);
 const HUMAN_STATE = 'HUMAN_GATE';
+const CLOSED_STATE = 'CLOSED';
+const BRANCH_STATES = new Set([...AUTOMATIC_STATES, HUMAN_STATE, CLOSED_STATE]);
+const CLASSIFICATIONS = new Set([
+  'TECHNICAL_DETERMINISTIC', 'EVIDENCE_DEFICIENT', 'NORMATIVE_DECISION',
+  'SCOPE_AUTHORITY', 'CONTRADICTORY_REQUIREMENTS', 'NO_PROGRESS',
+]);
 const isObject = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const isString = value => typeof value === 'string' && value.length > 0;
+const isSha256 = value => typeof value === 'string' && /^[0-9a-f]{64}$/.test(value);
+const isGitSha = value => typeof value === 'string' && /^[0-9a-f]{7,64}$/.test(value);
 
 function invalid(violations) { return { valid: false, violations }; }
 
@@ -25,6 +33,14 @@ function validateStateV3(state) {
   ]) {
     if (!Object.prototype.hasOwnProperty.call(state, key)) violations.push(`${key} must be present`);
   }
+  for (const key of [
+    'previousState', 'featureSlug', 'specPath', 'planPath', 'tasksPath', 'contractsDir',
+    'teammateNamePrefix', 'constitutionVersion', 'constitutionSnapshotPath',
+    'lastSuccessfulState', 'baselineSha',
+  ]) {
+    if (state[key] !== null && !isString(state[key])) violations.push(`${key} must be string or null`);
+  }
+  if (state.pausedDiagnostic !== null && !isObject(state.pausedDiagnostic)) violations.push('pausedDiagnostic must be object or null');
   for (const key of ['runId', 'sessionId', 'startedAt', 'currentState', 'lastTransitionAt']) {
     if (!isString(state[key])) violations.push(`${key} must be a non-empty string`);
   }
@@ -32,6 +48,7 @@ function validateStateV3(state) {
     if (!Array.isArray(state[key])) violations.push(`${key} must be an array`);
   }
   if (!isObject(state.failureCountsByStep)) violations.push('failureCountsByStep must be an object');
+  if (!Number.isInteger(state.fixLoopIterations) || state.fixLoopIterations < 0) violations.push('fixLoopIterations must be a non-negative integer');
   if (!isObject(state.humanGatesApproved)) violations.push('humanGatesApproved must be an object');
   if (!isObject(state.diagnosticRecovery)) return invalid([...violations, 'diagnosticRecovery must be an object']);
   const recovery = state.diagnosticRecovery;
@@ -49,6 +66,9 @@ function validateStateV3(state) {
     for (const key of ['branchId', 'state', 'classification', 'fingerprint', 'boundary', 'transitionKey']) {
       if (!isString(branch[key])) violations.push(`${prefix}.${key} must be a non-empty string`);
     }
+    if (!BRANCH_STATES.has(branch.state)) violations.push(`${prefix}.state must be a documented branch state`);
+    if (!CLASSIFICATIONS.has(branch.classification)) violations.push(`${prefix}.classification must be a documented classification`);
+    if (!isSha256(branch.fingerprint)) violations.push(`${prefix}.fingerprint must be a sha256`);
     if (!Number.isInteger(branch.generation) || branch.generation < 1) violations.push(`${prefix}.generation must be a positive integer`);
     for (const key of ['candidate', 'reviewPlan', 'executorRotation', 'progressDelta']) {
       if (!isObject(branch[key])) violations.push(`${prefix}.${key} must be an object`);
@@ -57,16 +77,67 @@ function validateStateV3(state) {
       if (!Array.isArray(branch[key])) violations.push(`${prefix}.${key} must be an array`);
     }
     if (!Array.isArray(branch.closedFindings)) violations.push(`${prefix}.closedFindings must be an array`);
-    if (!isObject(branch.reviewPlan) || !Array.isArray(branch.reviewPlan.declaredRisks)) {
+    if (!isObject(branch.reviewPlan) || !Array.isArray(branch.reviewPlan.declaredRisks) || !branch.reviewPlan.declaredRisks.every(isString)) {
       violations.push(`${prefix}.reviewPlan.declaredRisks must be an array`);
+    }
+    if (!isObject(branch.candidate) || !isGitSha(branch.candidate.sha) || typeof branch.candidate.preserved !== 'boolean') {
+      violations.push(`${prefix}.candidate.sha must be a git sha and candidate.preserved must be boolean`);
+    }
+    for (const [proofIndex, proof] of (Array.isArray(branch.proofs) ? branch.proofs : []).entries()) {
+      if (!isObject(proof) || !isString(proof.kind) || !isString(proof.path) || !isSha256(proof.sha256)) {
+        violations.push(`${prefix}.proofs[${proofIndex}] must have kind, path, and sha256`);
+      }
+    }
+    for (const [findingIndex, finding] of (Array.isArray(branch.openFindings) ? branch.openFindings : []).entries()) {
+      if (!isObject(finding) || !isSha256(finding.fingerprint) || !isString(finding.requirementRef)) {
+        violations.push(`${prefix}.openFindings[${findingIndex}] must have fingerprint and requirementRef`);
+      }
+    }
+    for (const [findingIndex, finding] of (Array.isArray(branch.closedFindings) ? branch.closedFindings : []).entries()) {
+      if (!isObject(finding) || !isSha256(finding.fingerprint) || !isString(finding.requirementRef)) {
+        violations.push(`${prefix}.closedFindings[${findingIndex}] must have fingerprint and requirementRef`);
+      }
+    }
+    if (!(Array.isArray(branch.fingerprintHistory) && branch.fingerprintHistory.every(isSha256))) {
+      violations.push(`${prefix}.fingerprintHistory must contain sha256 values`);
+    }
+    if (!(Array.isArray(branch.dependencyClosure) && branch.dependencyClosure.every(isString))) {
+      violations.push(`${prefix}.dependencyClosure must contain task ids`);
+    }
+    if (!isObject(branch.executorRotation) ||
+      !Object.prototype.hasOwnProperty.call(branch.executorRotation, 'originalExecutor') ||
+      !Object.prototype.hasOwnProperty.call(branch.executorRotation, 'rotatedExecutor') ||
+      !Object.prototype.hasOwnProperty.call(branch.executorRotation, 'rotationsUsed') ||
+      !Object.prototype.hasOwnProperty.call(branch.executorRotation, 'attemptsByExecutor') ||
+      (branch.executorRotation.originalExecutor !== null && !isString(branch.executorRotation.originalExecutor)) ||
+      (branch.executorRotation.rotatedExecutor !== null && !isString(branch.executorRotation.rotatedExecutor)) ||
+      !Number.isInteger(branch.executorRotation.rotationsUsed) || branch.executorRotation.rotationsUsed < 0 ||
+      !isObject(branch.executorRotation.attemptsByExecutor) ||
+      !Object.values(branch.executorRotation.attemptsByExecutor).every(value => Number.isInteger(value) && value >= 0)) {
+      violations.push(`${prefix}.executorRotation must be a valid rotation object`);
+    }
+    if (!isObject(branch.progressDelta) || !Number.isInteger(branch.progressDelta.closed) || branch.progressDelta.closed < 0 || !Number.isInteger(branch.progressDelta.opened) || branch.progressDelta.opened < 0 ||
+      !Number.isInteger(branch.progressDelta.previousOpenCount) || !Number.isInteger(branch.progressDelta.currentOpenCount) ||
+      typeof branch.progressDelta.setDecreased !== 'boolean' || typeof branch.progressDelta.strongerRed !== 'boolean') {
+      violations.push(`${prefix}.progressDelta must be a valid progress object`);
+    }
+    if (branch.generationArtifact !== undefined &&
+      (!isObject(branch.generationArtifact) || !isString(branch.generationArtifact.path) || !isSha256(branch.generationArtifact.sha256))) {
+      violations.push(`${prefix}.generationArtifact must contain path and sha256`);
     }
     if (branch.state === HUMAN_STATE) {
       if (branch.nextTask !== null) violations.push(`${prefix}.nextTask must be null for HUMAN_GATE`);
       if (!isObject(branch.humanGate) || !isString(branch.humanGate.decisionNeeded) || !Array.isArray(branch.humanGate.proofs)) {
         violations.push(`${prefix}.humanGate must name a decision and proofs for HUMAN_GATE`);
       }
-    } else if (AUTOMATIC_STATES.has(branch.state) || branch.state !== HUMAN_STATE) {
-      if (!isObject(branch.nextTask)) violations.push(`${prefix}.nextTask must be an object for automatic branch`);
+    } else if (branch.state === CLOSED_STATE) {
+      if (branch.openFindings.length !== 0 || branch.nextTask !== null || branch.humanGate !== null) {
+        violations.push(`${prefix} CLOSED requires empty openFindings and null nextTask/humanGate`);
+      }
+    } else if (AUTOMATIC_STATES.has(branch.state)) {
+      if (!isObject(branch.nextTask) || !isString(branch.nextTask.taskId) || !isString(branch.nextTask.kind) || !isString(branch.nextTask.status)) {
+        violations.push(`${prefix}.nextTask must have taskId, kind, and status for automatic branch`);
+      }
       if (branch.humanGate !== null) violations.push(`${prefix}.humanGate must be null for automatic branch`);
     }
   }
@@ -99,15 +170,45 @@ function atomicWrite(file, bytes) {
   syncDir(dir);
 }
 
-function stripTransient(value) {
-  if (Array.isArray(value)) return value.map(stripTransient);
-  if (!isObject(value)) return value;
-  const clean = {};
-  for (const [key, item] of Object.entries(value)) {
-    if (/^(generationArtifact|dispatchHistory|path)$/i.test(key) || /prompt|output|time|date/i.test(key)) continue;
-    clean[key] = stripTransient(item);
+function semanticGeneration(branch) {
+  const semanticProofs = branch.proofs.map(({ kind, sha256 }) => ({ kind, sha256 }));
+  const humanGate = branch.humanGate === null ? null : {
+    decisionNeeded: branch.humanGate.decisionNeeded,
+    proofs: branch.humanGate.proofs.map(proof => ({ ...proof, path: undefined })),
+  };
+  return {
+    branchId: branch.branchId, generation: branch.generation, state: branch.state,
+    classification: branch.classification, fingerprint: branch.fingerprint, boundary: branch.boundary,
+    candidate: branch.candidate, proofs: semanticProofs, closedFindings: branch.closedFindings,
+    openFindings: branch.openFindings, fingerprintHistory: branch.fingerprintHistory,
+    dependencyClosure: branch.dependencyClosure, reviewPlan: branch.reviewPlan,
+    transitionKey: branch.transitionKey, nextTask: branch.nextTask, humanGate,
+    executorRotation: branch.executorRotation, progressDelta: branch.progressDelta,
+  };
+}
+
+function persistentGeneration(branch) {
+  const { generationArtifact: _artifact, dispatchHistory: _history, ...persistent } = branch;
+  return persistent;
+}
+
+function installImmutableNoClobber(target, bytes, beforeInstall) {
+  const dir = path.dirname(target);
+  fs.mkdirSync(dir, { recursive: true });
+  const temp = path.join(dir, `.${path.basename(target)}.${process.pid}.${crypto.randomBytes(8).toString('hex')}.tmp`);
+  fs.writeFileSync(temp, bytes, { flag: 'wx' });
+  try {
+    syncFile(temp);
+    if (typeof beforeInstall === 'function') beforeInstall();
+    fs.linkSync(temp, target); // link(2) installs only when target does not already exist
+    syncDir(dir);
+    fs.unlinkSync(temp);
+    syncDir(dir);
+  } catch (err) {
+    try { fs.unlinkSync(temp); } catch (_ignored) {}
+    if (err && err.code === 'EEXIST') throw new Error(`immutable generation exists: ${target}`);
+    throw err;
   }
-  return clean;
 }
 
 function publishRecoveryGeneration({ projectRoot, runId, expectedStateSha256, generation, fault }) {
@@ -123,7 +224,14 @@ function publishRecoveryGeneration({ projectRoot, runId, expectedStateSha256, ge
   }
   const branch = state.diagnosticRecovery.branches.find(item => item.branchId === generation.branchId);
   if (!branch) throw new Error(`unknown recovery branch: ${generation.branchId}`);
-  const semanticPayload = stripTransient(generation);
+  const candidateBranch = persistentGeneration(generation);
+  const candidateState = {
+    ...state,
+    diagnosticRecovery: { ...state.diagnosticRecovery, branches: state.diagnosticRecovery.branches.map(item => item.branchId === generation.branchId ? candidateBranch : item) },
+  };
+  const candidateValidation = validateStateV3(candidateState);
+  if (!candidateValidation.valid) throw new Error(`invalid supplied recovery generation: ${candidateValidation.violations.join('; ')}`);
+  const semanticPayload = semanticGeneration(candidateBranch);
   const semanticSha256 = sha256Hex(canonicalJson(semanticPayload));
   const published = {
     $schema: 'soma-recovery-generation/v1',
@@ -145,10 +253,10 @@ function publishRecoveryGeneration({ projectRoot, runId, expectedStateSha256, ge
     if (sha256Hex(fs.readFileSync(absoluteGenerationPath)) !== generationSha256) throw new Error('existing generation bytes differ; immutable orphan rejected');
     adopted = true;
   } else {
-    atomicWrite(absoluteGenerationPath, generationBytes);
+    installImmutableNoClobber(absoluteGenerationPath, generationBytes, fault && fault['before-generation-install']);
   }
   if (fault === 'after-generation-rename') throw new Error('INJECTED after-generation-rename');
-  const nextBranch = { ...branch, generationArtifact: { path: generationPath, sha256: generationSha256 } };
+  const nextBranch = { ...candidateBranch, generationArtifact: { path: generationPath, sha256: generationSha256 } };
   const nextState = {
     ...state,
     diagnosticRecovery: { ...state.diagnosticRecovery, branches: state.diagnosticRecovery.branches.map(item => item.branchId === branch.branchId ? nextBranch : item) },
