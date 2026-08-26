@@ -42,11 +42,12 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const crypto = require('node:crypto');
 const { validate } = require('./schema.cjs');
 const { resolveSomaPaths, resolveRunIdFromLock } = require('./paths.cjs');
 const { warnIfLegacy } = require('./legacy.cjs');
 const { sweepExpiredArtifacts } = require('./retention.cjs');
-const { validateStateV3, migrateStateV2 } = require('./recovery-store.cjs');
+const { validateStateV3, migrateStateV2, mutateRunStateCas } = require('./recovery-store.cjs');
 
 // ── soma-state/v2 schema (owned by T-08, per run/schema.cjs's docstring) ──
 // Only the fields whose type is unambiguous (never legitimately null) are
@@ -95,14 +96,70 @@ function fail(code, message) {
   process.exit(2);
 }
 
-/** Write JSON atomically: tmp sibling file + rename (house convention, e.g. core/scripts/manifest.cjs). */
+/** Install an absent state without clobbering a concurrent initializer. */
 function writeStateAtomic(runStateFile, state) {
   const result = validateStateV3(state);
   if (!result.valid) throw new Error(`refusing to write invalid soma-state/v3: ${result.violations.join('; ')}`);
   fs.mkdirSync(path.dirname(runStateFile), { recursive: true });
-  const tmpPath = runStateFile + '.tmp';
-  fs.writeFileSync(tmpPath, JSON.stringify(state, null, 2) + '\n');
-  fs.renameSync(tmpPath, runStateFile);
+  const nonce = `${process.pid}.${crypto.randomBytes(8).toString('hex')}`;
+  const tmpPath = `${runStateFile}.${nonce}.tmp`;
+  const preparedPath = `${runStateFile}.${nonce}.init`;
+  fs.writeFileSync(tmpPath, JSON.stringify(state, null, 2) + '\n', { flag: 'wx' });
+  try {
+    fs.renameSync(tmpPath, preparedPath);
+    try {
+      fs.linkSync(preparedPath, runStateFile);
+      return true;
+    } catch (err) {
+      if (err && err.code === 'EEXIST') return false;
+      throw err;
+    }
+  } finally {
+    try { fs.unlinkSync(tmpPath); } catch (_ignored) {}
+    try { fs.unlinkSync(preparedPath); } catch (_ignored) {}
+  }
+}
+
+function stateBytes(state) {
+  return Buffer.from(`${JSON.stringify(state, null, 2)}\n`);
+}
+
+function stateSha256(bytes) {
+  return crypto.createHash('sha256').update(bytes).digest('hex');
+}
+
+function isCasRetry(err) {
+  return err && /^(?:STATE_CAS_CONFLICT|STATE_CAS_MISMATCH)(?::|$)/.test(err.message);
+}
+
+function mutateExistingState({ projectRoot, runId, transform }) {
+  const { runStateFile } = resolveSomaPaths(projectRoot, runId);
+  let lastCasError;
+  for (let attempt = 0; attempt < 32; attempt++) {
+    const currentBytes = fs.readFileSync(runStateFile);
+    let current;
+    try { current = JSON.parse(currentBytes.toString('utf8')); } catch (err) {
+      throw new Error(`${runStateFile} exists but is not valid JSON: ${err.message}`);
+    }
+    if (!validateStateV3(current).valid) {
+      throw new Error('soma-state/v2 is read-only; migrate explicitly to soma-state/v3 before mutation');
+    }
+    const next = transform(current);
+    const nextBytes = stateBytes(next);
+    try {
+      return mutateRunStateCas({
+        projectRoot,
+        runId,
+        expectedStateSha256: stateSha256(currentBytes),
+        nextStateBytes: nextBytes,
+        generationReference: null,
+      });
+    } catch (err) {
+      if (!isCasRetry(err)) throw err;
+      lastCasError = err;
+    }
+  }
+  throw lastCasError || new Error('STATE_CAS_RETRY_EXHAUSTED');
 }
 
 /**
@@ -198,7 +255,13 @@ function cmdInit(runId, projectRoot) {
   if (!valid) {
     fail('INVALID_STATE', `freshly-built state failed its own schema: ${JSON.stringify(violations)}`);
   }
-  writeStateAtomic(runStateFile, state);
+  if (!writeStateAtomic(runStateFile, state)) {
+    const existing = readRunState(runStateFile, { allowV2ForMigration: true });
+    process.stdout.write(
+      `soma run state: run "${runId}" already initialized at ${runStateFile} (no-op)\n`
+    );
+    return existing;
+  }
   process.stdout.write(`soma run state: initialized run "${runId}" at ${runStateFile}\n`);
   return state;
 }
@@ -224,21 +287,27 @@ function cmdSet(runId, newState, projectRoot) {
     );
   }
 
+  const transitionAt = new Date().toISOString();
   let state;
   try {
-    state = JSON.parse(fs.readFileSync(runStateFile, 'utf8'));
+    const result = mutateExistingState({
+      projectRoot,
+      runId: resolvedRunId,
+      transform: current => ({
+        ...current,
+        previousState: current.currentState,
+        currentState: newState,
+        lastTransitionAt: transitionAt,
+      }),
+    });
+    state = result.state;
   } catch (err) {
-    fail('CORRUPT_STATE', `${runStateFile} exists but is not valid JSON: ${err.message}`);
+    if (/soma-state\/v2 is read-only/.test(err.message)) {
+      fail('MIGRATION_REQUIRED', err.message);
+    }
+    if (/not valid JSON/.test(err.message)) fail('CORRUPT_STATE', err.message);
+    fail('STATE_MUTATION_FAILED', err.message);
   }
-  if (!validateStateV3(state).valid) {
-    fail('MIGRATION_REQUIRED', 'soma-state/v2 is read-only; migrate explicitly to soma-state/v3 before mutation');
-  }
-
-  state.previousState = state.currentState;
-  state.currentState = newState;
-  state.lastTransitionAt = new Date().toISOString();
-
-  writeStateAtomic(runStateFile, state);
   process.stdout.write(
     `soma run state: run "${resolvedRunId}" transitioned ${state.previousState} -> ${state.currentState}\n`
   );
@@ -309,22 +378,6 @@ function appendReport({ projectRoot, runId, step, status, finishedAt }) {
     };
   }
 
-  let state;
-  try {
-    state = JSON.parse(fs.readFileSync(runStateFile, 'utf8'));
-  } catch (err) {
-    return { ok: false, reason: `${runStateFile} exists but is not valid JSON: ${err.message}` };
-  }
-  if (!validateStateV3(state).valid) {
-    return { ok: false, reason: 'soma-state/v2 is read-only; migrate explicitly to soma-state/v3 before mutation' };
-  }
-  if (!Array.isArray(state.reports)) {
-    return {
-      ok: false,
-      reason: `${runStateFile}'s reports[] is not an array — refusing to append to corrupt state`,
-    };
-  }
-
   const entry = {
     step,
     status,
@@ -336,9 +389,21 @@ function appendReport({ projectRoot, runId, step, status, finishedAt }) {
     return { ok: false, reason: `report entry failed validation: ${JSON.stringify(violations)}` };
   }
 
-  state.reports = [...state.reports, entry]; // append-only — never overwrite an existing entry
-  writeStateAtomic(runStateFile, state);
-  return { ok: true, state, entry };
+  try {
+    const result = mutateExistingState({
+      projectRoot,
+      runId,
+      transform: state => {
+        if (!Array.isArray(state.reports)) {
+          throw new Error(`${runStateFile}'s reports[] is not an array — refusing to append to corrupt state`);
+        }
+        return { ...state, reports: [...state.reports, entry] };
+      },
+    });
+    return { ok: true, state: result.state, entry };
+  } catch (err) {
+    return { ok: false, reason: err.message };
+  }
 }
 
 // ── CLI ─────────────────────────────────────────────────────────────────

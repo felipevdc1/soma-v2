@@ -135,6 +135,10 @@ function validateStateV3(state) {
         violations.push(`${prefix}.closedFindings[${findingIndex}] must be exactly fingerprint and proof`);
       }
     }
+    const closedFingerprints = new Set(closedFindings.map(finding => finding && finding.fingerprint));
+    if (openFindings.some(finding => finding && closedFingerprints.has(finding.fingerprint))) {
+      violations.push(`${prefix}.openFindings and closedFindings fingerprint sets must be disjoint`);
+    }
     if (!(Array.isArray(branch.fingerprintHistory) && branch.fingerprintHistory.every(isSha256))) {
       violations.push(`${prefix}.fingerprintHistory must contain sha256 values`);
     }
@@ -215,7 +219,8 @@ function semanticGeneration(branch) {
 
 function safeRunId(runId) {
   return isNonBlank(runId) && runId !== '.' && runId !== '..' &&
-    !runId.includes('/') && !runId.includes('\\') && path.basename(runId) === runId;
+    !runId.includes('/') && !runId.includes('\\') && !runId.includes('\0') &&
+    path.basename(runId) === runId;
 }
 
 function readReferencedGeneration({ projectRoot, runId, branch }) {
@@ -290,6 +295,7 @@ function readStateV3({ projectRoot, runId }) {
   const { runStateFile } = resolveSomaPaths(projectRoot, runId);
   let state;
   try { state = JSON.parse(fs.readFileSync(runStateFile, 'utf8')); } catch (err) { throw new Error(`cannot read v3 state: ${err.message}`); }
+  if (state.runId !== runId) throw codedError('RECOVERY_STATE_RUN_ID_MISMATCH');
   const result = validateStateV3(state);
   if (!result.valid) throw new Error(`invalid soma-state/v3: ${result.violations.join('; ')}`);
   for (const branch of state.diagnosticRecovery.branches) {
@@ -300,6 +306,7 @@ function readStateV3({ projectRoot, runId }) {
 
 function syncFile(file) { const fd = fs.openSync(file, 'r'); try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); } }
 function syncDir(dir) { const fd = fs.openSync(dir, 'r'); try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); } }
+
 function atomicReplace(file, bytes) {
   const dir = path.dirname(file);
   fs.mkdirSync(dir, { recursive: true });
@@ -339,38 +346,248 @@ function installImmutableNoClobber(target, bytes, beforeInstall) {
   if (!installNoClobber(target, bytes, beforeInstall)) throw new Error(`immutable generation exists: ${target}`);
 }
 
-function readJsonFile(file, code) {
-  try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch (err) { throw codedError(code, err.message); }
+function rejectExistingSymlinkComponents(projectRoot, components, code) {
+  let cursor = fs.realpathSync(projectRoot);
+  for (const component of components) {
+    cursor = path.join(cursor, component);
+    let stat;
+    try { stat = fs.lstatSync(cursor); } catch (err) {
+      if (err && err.code === 'ENOENT') return;
+      throw codedError(code, err.message);
+    }
+    if (stat.isSymbolicLink()) throw codedError(code, `symlink rejected: ${cursor}`);
+  }
 }
 
-function claimMatchesGeneration(claim, { expectedStateSha256, generationPath, generationSha256 }) {
-  return isObject(claim) && claim.$schema === 'soma-recovery-state-cas/v1' &&
-    claim.expectedStateSha256 === expectedStateSha256 && isSha256(claim.nextStateSha256) &&
-    claim.generationPath === generationPath && claim.generationSha256 === generationSha256;
+function readRegularNoFollow(projectRoot, file, relativeComponents, code) {
+  rejectExistingSymlinkComponents(projectRoot, relativeComponents, code);
+  let fd;
+  try {
+    fd = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
+    if (!fs.fstatSync(fd).isFile()) throw codedError(code, `not a regular file: ${file}`);
+    return fs.readFileSync(fd);
+  } catch (err) {
+    if (err.message && err.message.startsWith(`${code}:`)) throw err;
+    throw codedError(code, err.message);
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd);
+  }
 }
 
-function completedRetry({ paths, expectedStateSha256, actualStateSha256, candidateBranch,
-  generationPath, generationSha256, semanticSha256, claimPath }) {
-  if (!fs.existsSync(claimPath)) throw codedError('STATE_CAS_MISMATCH');
-  const claim = readJsonFile(claimPath, 'STATE_CAS_MISMATCH');
-  if (!claimMatchesGeneration(claim, { expectedStateSha256, generationPath, generationSha256 })) {
+function parseAndValidateStateBytes(bytes, runId, code) {
+  let state;
+  try { state = JSON.parse(bytes.toString('utf8')); } catch (err) { throw codedError(code, err.message); }
+  const valid = validateStateV3(state);
+  if (!valid.valid) throw codedError(code, valid.violations.join('; '));
+  if (state.runId !== runId) throw codedError('RECOVERY_STATE_RUN_ID_MISMATCH');
+  return state;
+}
+
+function mutationContext(projectRoot, runId) {
+  if (!safeRunId(runId)) throw codedError('RECOVERY_STATE_RUN_ID_INVALID');
+  const realProjectRoot = fs.realpathSync(projectRoot);
+  const paths = resolveSomaPaths(realProjectRoot, runId);
+  const stateComponents = ['.soma', `run-state-${runId}.json`];
+  const stateBytes = readRegularNoFollow(
+    realProjectRoot, paths.runStateFile, stateComponents, 'RECOVERY_STATE_READ_FAILED'
+  );
+  const state = parseAndValidateStateBytes(stateBytes, runId, 'RECOVERY_STATE_INVALID');
+  for (const branch of state.diagnosticRecovery.branches) {
+    readReferencedGeneration({ projectRoot: realProjectRoot, runId, branch });
+  }
+  return { projectRoot: realProjectRoot, paths, stateBytes, state, stateSha256: sha256Hex(stateBytes) };
+}
+
+function exactGenerationReference(reference) {
+  return reference === null ||
+    (hasExactKeys(reference, ['path', 'sha256']) && isNonBlank(reference.path) && isSha256(reference.sha256));
+}
+
+function verifyGenerationReference(projectRoot, runId, reference) {
+  if (!exactGenerationReference(reference)) throw codedError('STATE_CAS_GENERATION_REFERENCE_INVALID');
+  if (reference === null) return;
+  const expectedPrefix = path.join('.soma', 'recovery', runId) + path.sep;
+  if (path.isAbsolute(reference.path) || path.normalize(reference.path) !== reference.path ||
+      !reference.path.startsWith(expectedPrefix)) {
+    throw codedError('STATE_CAS_GENERATION_REFERENCE_INVALID', reference.path);
+  }
+  const components = reference.path.split(path.sep);
+  const file = path.join(fs.realpathSync(projectRoot), ...components);
+  const bytes = readRegularNoFollow(projectRoot, file, components, 'STATE_CAS_GENERATION_REFERENCE_INVALID');
+  if (sha256Hex(bytes) !== reference.sha256) throw codedError('STATE_CAS_GENERATION_REFERENCE_INVALID', 'sha256 mismatch');
+}
+
+function stateCasLayout(context, expectedStateSha256, nextStateSha256) {
+  const relativeRoot = path.join('.soma', 'recovery', context.state.runId, '.state-cas');
+  const nextStatePath = path.join(relativeRoot, 'states', `${nextStateSha256}.json`);
+  return {
+    claimPath: path.join(context.projectRoot, relativeRoot, `${expectedStateSha256}.json`),
+    nextStatePath,
+    absoluteNextStatePath: path.join(context.projectRoot, nextStatePath),
+  };
+}
+
+function expectedClaim({ runId, expectedStateSha256, nextStateSha256, nextStatePath, generationReference }) {
+  return {
+    $schema: 'soma-state-cas/v1',
+    runId,
+    expectedStateSha256,
+    nextStateSha256,
+    nextStateReference: { path: nextStatePath, sha256: nextStateSha256 },
+    generationReference,
+  };
+}
+
+function validClaimShape(context, claim, expectedStateSha256) {
+  if (!hasExactKeys(claim, [
+    '$schema', 'runId', 'expectedStateSha256', 'nextStateSha256',
+    'nextStateReference', 'generationReference',
+  ]) || claim.$schema !== 'soma-state-cas/v1' || claim.runId !== context.state.runId ||
+      claim.expectedStateSha256 !== expectedStateSha256 || !isSha256(claim.nextStateSha256) ||
+      !hasExactKeys(claim.nextStateReference, ['path', 'sha256']) ||
+      claim.nextStateReference.sha256 !== claim.nextStateSha256 ||
+      !exactGenerationReference(claim.generationReference)) {
+    return false;
+  }
+  return claim.nextStateReference.path ===
+    stateCasLayout(context, expectedStateSha256, claim.nextStateSha256).nextStatePath;
+}
+
+function verifyInstalledClaim(context, claim, claimBytes, intendedClaimBytes, nextStateBytes) {
+  if (!claimBytes.equals(intendedClaimBytes)) throw codedError('STATE_CAS_CONFLICT');
+  if (!validClaimShape(context, claim, claim.expectedStateSha256)) {
+    throw codedError('STATE_CAS_MISMATCH', 'invalid installed claim');
+  }
+  const components = claim.nextStateReference.path.split(path.sep);
+  const installedBytes = readRegularNoFollow(
+    context.projectRoot,
+    path.join(context.projectRoot, claim.nextStateReference.path),
+    components,
+    'STATE_CAS_MISMATCH'
+  );
+  if (sha256Hex(installedBytes) !== claim.nextStateSha256 || !installedBytes.equals(nextStateBytes)) {
+    throw codedError('STATE_CAS_MISMATCH', 'immutable next-state bytes differ');
+  }
+  verifyGenerationReference(context.projectRoot, context.state.runId, claim.generationReference);
+}
+
+function mutateRunStateCas({ projectRoot, runId, expectedStateSha256, nextStateBytes,
+  generationReference = null, fault }) {
+  if (!safeRunId(runId)) throw codedError('RECOVERY_STATE_RUN_ID_INVALID');
+  if (!isSha256(expectedStateSha256)) throw new TypeError('expectedStateSha256 must be a sha256');
+  if (!exactGenerationReference(generationReference)) throw codedError('STATE_CAS_GENERATION_REFERENCE_INVALID');
+  if (!(Buffer.isBuffer(nextStateBytes) || nextStateBytes instanceof Uint8Array || typeof nextStateBytes === 'string')) {
+    throw new TypeError('nextStateBytes must be exact bytes');
+  }
+
+  const exactNextStateBytes = Buffer.from(nextStateBytes);
+  const nextState = parseAndValidateStateBytes(exactNextStateBytes, runId, 'RECOVERY_STATE_INVALID');
+  const context = mutationContext(projectRoot, runId);
+  const nextStateSha256 = sha256Hex(exactNextStateBytes);
+  const layout = stateCasLayout(context, expectedStateSha256, nextStateSha256);
+  const claim = expectedClaim({
+    runId, expectedStateSha256, nextStateSha256,
+    nextStatePath: layout.nextStatePath, generationReference,
+  });
+  const claimBytes = Buffer.from(canonicalJson(claim));
+
+  verifyGenerationReference(context.projectRoot, runId, generationReference);
+  rejectExistingSymlinkComponents(
+    context.projectRoot,
+    ['.soma', 'recovery', runId, '.state-cas'],
+    'STATE_CAS_PATH_INVALID'
+  );
+
+  let existingClaimBytes = null;
+  try {
+    existingClaimBytes = readRegularNoFollow(
+      context.projectRoot,
+      layout.claimPath,
+      path.relative(context.projectRoot, layout.claimPath).split(path.sep),
+      'STATE_CAS_PATH_INVALID'
+    );
+  } catch (err) {
+    if (!err || !/STATE_CAS_PATH_INVALID: ENOENT:/.test(err.message)) throw err;
+  }
+  if (existingClaimBytes !== null && !existingClaimBytes.equals(claimBytes)) {
     throw codedError('STATE_CAS_CONFLICT');
   }
-  if (actualStateSha256 !== claim.nextStateSha256) throw codedError('STATE_CAS_MISMATCH');
-  const state = readJsonFile(paths.runStateFile, 'STATE_CAS_MISMATCH');
-  const valid = validateStateV3(state);
-  if (!valid.valid) throw codedError('STATE_CAS_MISMATCH', valid.violations.join('; '));
-  const branch = state.diagnosticRecovery.branches.find(item => item.branchId === candidateBranch.branchId);
-  if (!branch || canonicalJson(projectPersistentBranch(branch)) !== canonicalJson(candidateBranch) ||
-      !isObject(branch.generationArtifact) || branch.generationArtifact.path !== generationPath ||
-      branch.generationArtifact.sha256 !== generationSha256) {
+  if (existingClaimBytes === null && context.stateSha256 !== expectedStateSha256) {
     throw codedError('STATE_CAS_MISMATCH');
   }
-  return { generationPath, generationSha256, semanticSha256, adopted: true, state };
+
+  let ownsClaim = false;
+  if (existingClaimBytes === null) {
+    const installedState = installNoClobber(layout.absoluteNextStatePath, exactNextStateBytes);
+    if (!installedState) {
+      const installedBytes = readRegularNoFollow(
+        context.projectRoot,
+        layout.absoluteNextStatePath,
+        layout.nextStatePath.split(path.sep),
+        'STATE_CAS_MISMATCH'
+      );
+      if (!installedBytes.equals(exactNextStateBytes)) throw codedError('STATE_CAS_CONFLICT');
+    }
+    if (fault && typeof fault['before-state-cas'] === 'function') fault['before-state-cas']();
+    ownsClaim = installNoClobber(layout.claimPath, claimBytes);
+    existingClaimBytes = ownsClaim ? claimBytes : fs.readFileSync(layout.claimPath);
+  }
+
+  let installedClaim;
+  try { installedClaim = JSON.parse(existingClaimBytes.toString('utf8')); } catch (err) {
+    throw codedError('STATE_CAS_CONFLICT', err.message);
+  }
+  verifyInstalledClaim(context, installedClaim, existingClaimBytes, claimBytes, exactNextStateBytes);
+
+  if (ownsClaim && fault === 'after-state-claim-install') {
+    throw new Error('INJECTED after-state-claim-install');
+  }
+  if (ownsClaim && fault && typeof fault['after-state-claim-install'] === 'function') {
+    fault['after-state-claim-install']();
+  }
+
+  const canonicalBytes = readRegularNoFollow(
+    context.projectRoot,
+    context.paths.runStateFile,
+    ['.soma', `run-state-${runId}.json`],
+    'STATE_CAS_MISMATCH'
+  );
+  const canonicalSha256 = sha256Hex(canonicalBytes);
+  let adopted = !ownsClaim;
+  let recovered = !ownsClaim;
+  if (canonicalSha256 === expectedStateSha256) {
+    atomicReplace(context.paths.runStateFile, exactNextStateBytes);
+  } else if (canonicalSha256 === nextStateSha256) {
+    adopted = true;
+  } else {
+    throw codedError('STATE_CAS_MISMATCH');
+  }
+
+  return { state: nextState, stateSha256: nextStateSha256, adopted, recovered };
+}
+
+function installedClaimForExpected(context, expectedStateSha256) {
+  const relativeRoot = path.join('.soma', 'recovery', context.state.runId, '.state-cas');
+  const claimPath = path.join(context.projectRoot, relativeRoot, `${expectedStateSha256}.json`);
+  let bytes;
+  try {
+    bytes = readRegularNoFollow(
+      context.projectRoot,
+      claimPath,
+      path.relative(context.projectRoot, claimPath).split(path.sep),
+      'STATE_CAS_PATH_INVALID'
+    );
+  } catch (err) {
+    if (err && /STATE_CAS_PATH_INVALID: ENOENT:/.test(err.message)) return null;
+    throw err;
+  }
+  let claim;
+  try { claim = JSON.parse(bytes.toString('utf8')); } catch (err) { throw codedError('STATE_CAS_CONFLICT', err.message); }
+  return { claim, bytes };
 }
 
 function publishRecoveryGeneration({ projectRoot, runId, expectedStateSha256, generation, fault }) {
-  if (!safeRunId(runId)) throw codedError('RECOVERY_REFERENCE_RUN_ID_INVALID');
+  if (!safeRunId(runId)) throw codedError('RECOVERY_STATE_RUN_ID_INVALID');
   if (!isSha256(expectedStateSha256)) throw new TypeError('expectedStateSha256 must be a sha256');
   if (!isObject(generation) || !Number.isInteger(generation.generation) || generation.generation < 1 || !isString(generation.branchId)) {
     throw new TypeError('generation requires branchId and positive integer generation');
@@ -387,17 +604,38 @@ function publishRecoveryGeneration({ projectRoot, runId, expectedStateSha256, ge
   };
   const generationBytes = canonicalJson(published);
   const generationSha256 = sha256Hex(generationBytes);
-  const claimPath = path.join(paths.runRecoveryDir, '.state-cas', `${expectedStateSha256}.json`);
-
-  const stateBytes = fs.readFileSync(paths.runStateFile);
-  const actualStateSha256 = sha256Hex(stateBytes);
-  if (actualStateSha256 !== expectedStateSha256) {
-    return completedRetry({ paths, expectedStateSha256, actualStateSha256, candidateBranch,
-      generationPath, generationSha256, semanticSha256, claimPath });
+  const generationReference = { path: generationPath, sha256: generationSha256 };
+  const context = mutationContext(projectRoot, runId);
+  const { state } = context;
+  const existingClaim = installedClaimForExpected(context, expectedStateSha256);
+  if (existingClaim &&
+      (!validClaimShape(context, existingClaim.claim, expectedStateSha256) ||
+       canonicalJson(existingClaim.claim.generationReference) !== canonicalJson(generationReference))) {
+    throw codedError('STATE_CAS_CONFLICT');
   }
-  const state = JSON.parse(stateBytes.toString('utf8'));
-  const valid = validateStateV3(state);
-  if (!valid.valid) throw new Error(`invalid soma-state/v3: ${valid.violations.join('; ')}`);
+
+  if (context.stateSha256 !== expectedStateSha256) {
+    if (!existingClaim || !isObject(existingClaim.claim.nextStateReference)) throw codedError('STATE_CAS_MISMATCH');
+    const claimedPath = existingClaim.claim.nextStateReference.path;
+    if (!isNonBlank(claimedPath) || path.isAbsolute(claimedPath)) throw codedError('STATE_CAS_MISMATCH');
+    const claimedBytes = readRegularNoFollow(
+      context.projectRoot,
+      path.join(context.projectRoot, claimedPath),
+      claimedPath.split(path.sep),
+      'STATE_CAS_MISMATCH'
+    );
+    const claimedState = parseAndValidateStateBytes(claimedBytes, runId, 'STATE_CAS_MISMATCH');
+    const claimedBranch = claimedState.diagnosticRecovery.branches.find(item => item.branchId === candidateBranch.branchId);
+    if (!claimedBranch || canonicalJson(projectPersistentBranch(claimedBranch)) !== canonicalJson(candidateBranch) ||
+        canonicalJson(claimedBranch.generationArtifact) !== canonicalJson(generationReference)) {
+      throw codedError('STATE_CAS_CONFLICT');
+    }
+    const cas = mutateRunStateCas({
+      projectRoot, runId, expectedStateSha256, nextStateBytes: claimedBytes, generationReference, fault,
+    });
+    return { generationPath, generationSha256, semanticSha256, ...cas, adopted: true };
+  }
+
   const branch = state.diagnosticRecovery.branches.find(item => item.branchId === generation.branchId);
   if (!branch) throw new Error(`unknown recovery branch: ${generation.branchId}`);
   const candidateState = {
@@ -423,7 +661,7 @@ function publishRecoveryGeneration({ projectRoot, runId, expectedStateSha256, ge
   }
   if (fault === 'after-generation-rename') throw new Error('INJECTED after-generation-rename');
 
-  const nextBranch = { ...candidateBranch, generationArtifact: { path: generationPath, sha256: generationSha256 } };
+  const nextBranch = { ...candidateBranch, generationArtifact: generationReference };
   const nextState = {
     ...state,
     diagnosticRecovery: {
@@ -432,31 +670,13 @@ function publishRecoveryGeneration({ projectRoot, runId, expectedStateSha256, ge
     },
   };
   const nextStateBytes = Buffer.from(`${JSON.stringify(nextState, null, 2)}\n`);
-  const nextStateSha256 = sha256Hex(nextStateBytes);
-  const claim = {
-    $schema: 'soma-recovery-state-cas/v1', expectedStateSha256, nextStateSha256,
-    generationPath, generationSha256,
-  };
-  const claimBytes = Buffer.from(canonicalJson(claim));
-  if (fault && typeof fault['before-state-cas'] === 'function') fault['before-state-cas']();
-  const ownsClaim = installNoClobber(claimPath, claimBytes);
-  if (!ownsClaim) {
-    const existingClaimBytes = fs.readFileSync(claimPath);
-    if (!existingClaimBytes.equals(claimBytes)) throw codedError('STATE_CAS_CONFLICT');
-    const canonicalSha256 = sha256Hex(fs.readFileSync(paths.runStateFile));
-    if (canonicalSha256 === nextStateSha256) {
-      return { generationPath, generationSha256, semanticSha256, adopted: true, state: nextState };
-    }
-    if (canonicalSha256 === expectedStateSha256) throw codedError('STATE_CAS_IN_PROGRESS');
-    throw codedError('STATE_CAS_MISMATCH');
-  }
-
-  const canonicalStateSha256 = sha256Hex(fs.readFileSync(paths.runStateFile));
-  if (canonicalStateSha256 !== expectedStateSha256) throw codedError('STATE_CAS_MISMATCH');
-  atomicReplace(paths.runStateFile, nextStateBytes);
-  return { generationPath, generationSha256, semanticSha256, adopted, state: nextState };
+  const cas = mutateRunStateCas({
+    projectRoot, runId, expectedStateSha256, nextStateBytes, generationReference, fault,
+  });
+  return { generationPath, generationSha256, semanticSha256, ...cas, adopted: adopted || cas.adopted };
 }
 
 module.exports = {
-  validateStateV3, migrateStateV2, readStateV3, publishRecoveryGeneration, projectPersistentBranch,
+  validateStateV3, migrateStateV2, readStateV3, publishRecoveryGeneration,
+  mutateRunStateCas, projectPersistentBranch,
 };
