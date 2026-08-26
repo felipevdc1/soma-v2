@@ -61,9 +61,15 @@ function fingerprintFinding(input) {
   const payload = {
     $schema: 'soma-finding-fingerprint/v1',
     requirementRef: input.requirementRef,
-    minimalReproduction: input.minimalReproduction,
+    minimalReproduction: {
+      command: input.minimalReproduction && input.minimalReproduction.command,
+      fixtureSha256: input.minimalReproduction && input.minimalReproduction.fixtureSha256,
+    },
     boundary: input.boundary,
-    observedResult: input.observedResult,
+    observedResult: {
+      errorIdentity: input.observedResult && input.observedResult.errorIdentity,
+      resultSha256: input.observedResult && input.observedResult.resultSha256,
+    },
   };
   const json = canonicalJson(payload);
 
@@ -77,6 +83,10 @@ function isNonEmptyString(value) {
   return typeof value === 'string' && value.length > 0;
 }
 
+function isSha256(value) {
+  return typeof value === 'string' && /^[0-9a-f]{64}$/.test(value);
+}
+
 function hasCompleteNewEvidence(input) {
   const reproduction = input.minimalReproduction;
   const observed = input.observedResult;
@@ -85,11 +95,13 @@ function hasCompleteNewEvidence(input) {
   return Boolean(
     isNonEmptyString(input.boundary) &&
       reproduction &&
-      (isNonEmptyString(command) || (Array.isArray(command) && command.length > 0)) &&
-      isNonEmptyString(reproduction.fixtureSha256) &&
+      Array.isArray(command) &&
+      command.length > 0 &&
+      command.every(isNonEmptyString) &&
+      isSha256(reproduction.fixtureSha256) &&
       observed &&
       isNonEmptyString(observed.errorIdentity) &&
-      isNonEmptyString(observed.resultSha256)
+      isSha256(observed.resultSha256)
   );
 }
 
@@ -160,7 +172,7 @@ function evaluateNoProgress({ generations, fingerprint, executors }) {
     executorState.rotationsUsed >= 1 &&
     rotatedExecutor &&
     rotatedAttempts >= 2 &&
-    history.some(generation => generationKeepsFingerprint(generation, fingerprint))
+    generationKeepsFingerprint(history.at(-1) || {}, fingerprint)
   ) {
     return {
       stop: true,
