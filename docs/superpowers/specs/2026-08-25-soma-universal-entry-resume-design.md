@@ -43,10 +43,11 @@ The selected design keeps a thin adapter and adds a fixed internal controller:
 1. A fixed dynamic command validates native `${CLAUDE_SESSION_ID}`, scavenges only a schema-valid, owner/mode-valid expired prior slot by atomic rename/claim, and creates one empty short-lived broker slot with a bounded TTL and monotonic-safe timestamps before Claude runs.
 2. The adapter copies the entire `$ARGUMENTS` string into `rawArguments` and attempts to write the envelope to that already-created slot with a structured Write tool.
 3. In a `finally` path for every turn that continues, it composes a fixed-shape consume call after a successful Write or abort call after a failed or rejected Write. Both calls contain the validated runtime session ID, request ID and capability returned by prepare. No user request value appears in argv.
-4. Consume and abort validate all three token formats before filesystem access, compare the tuple with the lease before claim, and fail without cleanup on mismatch. Consume also requires the envelope tuple to agree before it parses `rawArguments`. Both commands use idempotent cleanup in `finally` after success or error; abort itself is also idempotent.
-5. If the host dies before cleanup, the slot remains inert, authorizes no project, Git or run mutation, cannot be consumed after expiry, and is scavenged by the next prepare for that session.
-6. The CLI resolves, inspects or adopts the project according to the parsed mode.
-7. The adapter loads the long orchestration reference only after `READY` or `CONTINUE_READY`.
+4. Consume validates all three token formats, then opens and validates the lease and envelope without mutation. It compares `argv sessionId/requestId/capability = lease = envelope`; any mismatch fails before claim or cleanup and preserves the slot. Abort performs the corresponding argv-to-lease check without parsing the envelope.
+5. Only after consume establishes the triple identity does it create the atomic claim. It then reopens the request through the safe descriptor or no-follow path and compares device, inode, size and content hash with the pre-claim read. Drift fails closed, and cleanup is limited to the already authenticated slot. Only stable claimed bytes reach the `rawArguments` parser. Both commands use idempotent cleanup in `finally` after success or error; abort itself is also idempotent.
+6. If the host dies before cleanup, the slot remains inert, authorizes no project, Git or run mutation, cannot be consumed after expiry, and is scavenged by the next prepare for that session.
+7. The CLI resolves, inspects or adopts the project according to the parsed mode.
+8. The adapter loads the long orchestration reference only after `READY` or `CONTINUE_READY`.
 
 Existing `soma run` verbs remain internal orchestration primitives. New baseline, checkpoint and handoff verbs add durable evidence without changing the public command.
 
@@ -112,18 +113,16 @@ Preparation output gives the adapter the validated session ID, exact pre-created
 
 ### Validation and one-time consumption
 
-`broker-consume` and `broker-abort` require `--session`, `--request-id` and `--capability`. They validate all three formats before any filesystem access. Only then do they derive the session directory, read the owner/mode/schema-valid lease without following links, and compare all three argv tokens with it. A well-formed mismatch fails closed before claim, parse or cleanup and removes nothing. An exclusive `claim` file created with `O_EXCL` gives exactly one identity-matched operation the right to continue. Before parsing request data, consume verifies:
+`broker-consume` and `broker-abort` require `--session`, `--request-id` and `--capability`. They validate all three formats before any filesystem access. Consume then follows this order:
 
-- every ancestor stays under the canonical broker root;
-- directory and file owners equal the effective uid;
-- directory mode is exactly `0700` and file mode is exactly `0600`;
-- the request is one regular file opened with no-follow semantics;
-- session ID, request ID and capability agree across argv, lease and envelope, while exact path and expiry agree with the lease;
-- request schema and `rawArguments` type are valid;
-- size and string limits hold before JSON parsing completes;
-- the lease is live and the claim is unique.
+1. Derive the canonical session directory and open the lease and envelope without mutation or link following. Validate canonical containment, schema, owner, exact `0700`/`0600` modes, regular-file type, live monotonic-safe expiry, bounded size, token formats and `rawArguments` type. Record the envelope device, inode, size and exact content hash from this pre-claim read.
+2. Compare `argv sessionId/requestId/capability = lease = envelope`, require the opened request path to equal the lease path, and confirm that the lease remains live. A mismatch, including a capability that differs only in the envelope, fails before claim, parse or cleanup. It causes no project, Git or run mutation and leaves the slot intact for diagnosis or an authorized abort.
+3. Create the exclusive `claim` with `O_EXCL` only after the triple identity agrees. Replay and a second consumer fail.
+4. Reopen the request through the retained safe descriptor or canonical no-follow path. Revalidate type, owner and mode, then compare device, inode, size and exact content hash with the pre-claim read.
+5. If any post-claim fact drifted, fail closed before parsing or routing. Cleanup may remove only the slot authenticated before claim; it must not scan or remove another request.
+6. Parse `rawArguments` from the stable claimed bytes and route the request. Return their hash as internal `requestSha256`; the lease does not predict it.
 
-After the identity comparison and claim, consume opens the pre-created slot with no-follow semantics, validates its current inode/type/owner/mode and hashes the exact content bytes. It returns that hash as internal `requestSha256`; the lease does not predict it. A swapped or linked slot returns `INVALID_ENTRY_REQUEST` before parser, project resolution or run mutation. An expired request fails closed and cannot be routed. It then validates the envelope tuple, parses `rawArguments` and routes the request. Replay and a second consumer fail. Abort claims the identity-matched prepared request without parsing or routing it. Both operations remove only their claimed request directory in `finally` after success or error; repeated abort of an already absent matching request succeeds without mutation. SIGINT, SIGTERM and SIGHUP handlers request cancellation, run the same cleanup and then exit.
+An expired request or a swapped or linked slot returns `INVALID_ENTRY_REQUEST` before parser, project resolution or run mutation. Abort compares the three argv tokens with the validated lease before it claims, without parsing or routing the envelope. Both operations remove only their authenticated, claimed request directory in `finally` after success or error; repeated abort of an already absent matching request succeeds without mutation. SIGINT, SIGTERM and SIGHUP handlers request cancellation, run the same cleanup and then exit.
 
 Cleanup always operates on the directory claimed by the invocation's validated identity tuple and removes it only while session ID, request ID and capability still match. Scavenging applies only to a schema-valid, owner/mode-valid expired lease and uses atomic rename/claim before removal. A delayed consume or abort for request R1 therefore cannot claim, parse or remove R2. Links, unknown owners, wrong modes and invalid structures return `BROKER_CORRUPT` and remain untouched for diagnosis.
 
@@ -145,7 +144,7 @@ The ephemeral request is the only filesystem effect allowed before a read-only m
 }
 ```
 
-The adapter does not add mode, parsed payload, expiry or content hash. It copies the runtime-issued session ID, 32-lowercase-hex request ID and 64-lowercase-hex capability unchanged. Expiry belongs to the lease, and consume calculates the request content hash after its no-follow open. The schema rejects surplus fields. Only after argv, lease and envelope identity agree and the request is claimed does the CLI parser produce `{mode, objective, runId, project, scope, handoff, continuityDigest}`.
+The adapter does not add mode, parsed payload, expiry or content hash. It copies the runtime-issued session ID, 32-lowercase-hex request ID and 64-lowercase-hex capability unchanged. Expiry belongs to the lease, and consume calculates the request content hash during its non-mutating pre-claim read. The schema rejects surplus fields. Only after argv, lease and envelope identity agree, the request is claimed, and the post-claim device, inode, size and content hash match that pre-read does the CLI parser produce `{mode, objective, runId, project, scope, handoff, continuityDigest}`.
 
 ## Project and scope resolution
 
@@ -314,6 +313,8 @@ Broker preparation and cleanup may touch only the external broker. `HELP_SHOWN`,
 | Missing or malformed native session ID | `SESSION_UNAVAILABLE`; no broker or project access |
 | Malformed request ID or capability token | fail before filesystem access; no broker or project access |
 | Well-formed session/request/capability mismatch | fail before claim, parse or cleanup; current slot remains intact |
+| Capability differs only in the envelope | fail before claim or cleanup; preserve the slot for diagnosis or authorized abort; no project, Git or run mutation |
+| Request device, inode, size or content hash changes between pre-read and post-claim reopen | `INVALID_ENTRY_REQUEST`; fail closed before `rawArguments` parsing; cleanup only the authenticated slot |
 | Unknown, conflicting or malformed `rawArguments` | `INVALID_ENTRY_ARGS`; broker cleans up, no project access |
 | Consume finds traversal, symlink, wrong owner/mode or invalid request schema | `INVALID_ENTRY_REQUEST`; no project access |
 | Session B tries to consume session A's request | B derives only B's directory and returns `NO_ENTRY_REQUEST`; A remains intact |
@@ -341,7 +342,8 @@ Broker preparation and cleanup may touch only the external broker. `HELP_SHOWN`,
 | Shell | `rawArguments` contains path ``/tmp/x$(touch sentinel)``, quotes, backticks and newline | The raw string round-trips through Write; no Bash contains `$ARGUMENTS`, the CLI lexer treats metacharacters as data and the sentinel stays absent |
 | Broker session | Sessions A and B prepare concurrently, then B consumes | Session-directory derivation uses their native IDs, so B never searches A and both requests remain isolated |
 | Broker lease | Prepare runs before mode or request bytes exist | Lease contains only session ID, random request ID/capability, path and expiry; consume validates request schema and calculates its hash later |
-| Broker swap | The pre-created slot is replaced before consume and two consumers race | One claim wins; no-follow/inode/type checks reject the swap before project access, replay fails and cleanup removes the owned slot |
+| Broker identity | The envelope alone contains a different capability | Triple comparison fails before claim or cleanup, preserves the slot and causes no project, Git or run mutation |
+| Broker swap | The envelope is swapped after the non-mutating pre-read and before claim | The post-claim reopen detects device, inode, size or content-hash drift before `rawArguments` parsing; cleanup is limited to the authenticated slot |
 | Broker crash recovery | R1 expires, prepare creates R2, then delayed consume or abort arrives with R1 tokens | The residual valid slot is claimed and removed before replacement; full argv-to-lease identity comparison makes the delayed R1 call fail before claim, parse or cleanup, leaving R2 intact |
 | Broker corruption | An expired-looking entry has invalid schema, owner/mode or a symlink | Prepare returns `BROKER_CORRUPT`, emits a diagnostic and leaves the entry untouched; only valid expired leases are scavenged |
 | Trust limit | A hostile same-uid process edits broker files | SOMA detects ordinary corruption when possible but makes no sandbox claim against a process that already has the user's file permissions |
@@ -367,7 +369,7 @@ Start, help, status, resume and continue use the same envelope containing native
 
 ### AC-02: Broker binding and cleanup fail closed
 
-Preparation, consumption and abort require valid native `${CLAUDE_SESSION_ID}`, a 32-lowercase-hex request ID, a 64-lowercase-hex capability, distinct session directories, canonical containment, owner, mode, a pre-created regular slot, no-follow access, bounded monotonic-safe expiry, schema, computed content hash where applicable and an atomic claim. Malformed identity fails before filesystem access. A well-formed mismatch against the lease fails before claim, parse or cleanup; consume also requires the envelope identity to agree. Every flow in which the host continues after prepare runs consume after a successful Write or abort after a failed or rejected Write, and leaves zero slot. If the host dies first, at most one inert slot remains until expiry; it cannot be consumed or mutate project, Git or run state. The next same-session prepare scavenges it only when lease schema, owner and mode are valid and expiry has passed. Corrupt structures remain untouched with `BROKER_CORRUPT`. A delayed R1 consume or abort cannot touch R2 because all three runtime tokens must match before any claim or cleanup.
+Preparation, consumption and abort require valid native `${CLAUDE_SESSION_ID}`, a 32-lowercase-hex request ID, a 64-lowercase-hex capability, distinct session directories, canonical containment, owner, mode, a pre-created regular slot, no-follow access and bounded monotonic-safe expiry. Malformed identity fails before filesystem access. Consume opens and validates the lease and envelope without mutation, including schema and format, then requires `argv sessionId/requestId/capability = lease = envelope`. Any mismatch fails before claim, parse or cleanup, preserves the slot for diagnosis or authorized abort, and causes no project, Git or run mutation. Only then may consume create the atomic claim. It reopens through the safe descriptor or no-follow path and requires device, inode, size and content hash to match the pre-claim read before parsing `rawArguments`. Post-claim drift fails closed, and cleanup is limited to the authenticated slot. Every flow in which the host continues after prepare runs consume after a successful Write or abort after a failed or rejected Write, and leaves zero slot. If the host dies first, at most one inert slot remains until expiry; it cannot be consumed or mutate project, Git or run state. The next same-session prepare scavenges it only when lease schema, owner and mode are valid and expiry has passed. Corrupt structures remain untouched with `BROKER_CORRUPT`. A delayed R1 consume or abort cannot touch R2 because all three runtime tokens must match before any claim or cleanup.
 
 ### AC-03: Read-only modes preserve project state
 
