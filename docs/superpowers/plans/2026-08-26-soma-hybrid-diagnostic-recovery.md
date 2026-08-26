@@ -373,6 +373,110 @@ Expected: PASS.
 
 Verify publication ordering, orphan inertness, exact state references, field preservation and absence of prompts/outputs from generations. One integrated review only.
 
+## Pair B `NO_PROGRESS` decision pivot
+
+The approved human decision for `run-260825-universal-entry-7f3c2a` resolves the Pair B `NO_PROGRESS` gate and authorizes exactly the three bounded tasks below before Pair C. Tasks 4 through 6 and commits `70346fe`, `2675d2e`, `c034ebf`, `5f888dd`, `3004851`, `315ac42` and `eab0210` remain the evidence and implementation history. This pivot supersedes only their state-mutation and claim-recovery mechanics where they conflict with the design amendment. Pair C remains blocked until Task 6C approves one immutable candidate.
+
+The shared production contract added by this pivot is:
+
+```js
+// core/scripts/run/recovery-store.cjs
+mutateRunStateCas({
+  projectRoot,
+  runId,
+  expectedStateSha256,
+  nextStateBytes,
+  generationReference, // exact { path, sha256 } or null
+  fault,
+}) -> { state, stateSha256, adopted, recovered }
+```
+
+`mutateRunStateCas` is the only exported function allowed to replace an existing `soma-state/v3` file. It writes immutable next-state bytes and a durable no-clobber claim before replacement. An ordinary transition or report append passes `generationReference: null`; recovery publication passes the exact immutable generation path and hash. Initial creation of an absent state file remains a separate no-clobber operation and cannot replace an existing file. All paths remain file-based. No task in this pivot may add SQLite, a native helper, a daemon or a dependency.
+
+### Task 6A: Independent RED author freezes the four Pair B findings
+
+**AC mapping:** AC-07 covers all-writer CAS, exact run identity and finding-set validation. AC-08 covers file-only coordination. AC-10 covers deterministic claim takeover and competing-claim conflict.
+
+**Files:**
+
+- Create: `core/scripts/__tests__/run-state-cas-pivot.test.cjs`
+- Read: `core/scripts/__tests__/fixtures/recovery/state/v3-red-pending.json`
+- Create at runtime only: `.soma/dispatches/run-260825-universal-entry-7f3c2a/T-RECOVERY-B-PIVOT-RED/red-proof.json`
+
+- [ ] **Step 1: Freeze exactly four deterministic findings against `eab02104107fbef4d2b2464349fb6af63419d71b`**
+
+| Frozen test | Deterministic setup and required GREEN result | RED identity at the base candidate |
+| --- | --- | --- |
+| `all-writer CAS has no lost report` | Inspect `state.cjs` and `recovery-store.cjs` for direct replacement bypasses. Drive two mutations from the same expected state, let one append win, then retry the stale mutation from canonical bytes. The final state contains both report entries and the other writer's field change. | Direct `writeStateAtomic` calls remain and the stale path cannot preserve both changes. |
+| `crash claim takeover completes without a lease` | Inject failure after durable claim installation and before state replacement. Retry the byte-identical request. It verifies the immutable next-state bytes and generation reference, replaces when canonical equals expected, adopts when canonical equals next, and never returns `STATE_CAS_IN_PROGRESS`. A different claim returns `STATE_CAS_CONFLICT` without changing bytes. | The identical retry returns `STATE_CAS_IN_PROGRESS`. |
+| `exact runId equality is byte-for-byte` | Reject `..`, separators and NUL. Seed state with NFC `run-\u00e9`, request NFD `run-e\u0301`, and assert `RECOVERY_STATE_RUN_ID_MISMATCH` with state, claim and generation bytes unchanged even if both names resolve to one file. | The normalization alias is accepted or reaches mutation logic. |
+| `open/closed fingerprint sets are disjoint` | Put the same 64-hex fingerprint in both arrays and require `validateStateV3(state).valid === false` with an open/closed disjointness violation. | Current validation accepts the overlap. |
+
+- [ ] **Step 2: Run RED and freeze proof bytes**
+
+Run: `node --test core/scripts/__tests__/run-state-cas-pivot.test.cjs`
+
+Expected: all four named tests execute and fail only with the four identities above. Record the command, base SHA, test hash and exact failure output in `soma-red-proof/v1`. Do not edit production or existing tests.
+
+- [ ] **Step 3: Commit only the new RED file**
+
+```bash
+git add core/scripts/__tests__/run-state-cas-pivot.test.cjs
+git commit -m "test(recovery): freeze shared state CAS pivot"
+```
+
+### Task 6B: Fresh implementer adds the shared recoverable state CAS
+
+**AC mapping:** AC-07 requires the shared mutation boundary, exact state identity and disjoint finding sets. AC-08 keeps claim and next-state facts file-based and outside the dispatch ledger. AC-10 requires a crash-recoverable identical claim with deterministic conflict behavior.
+
+**Files:**
+
+- Modify: `core/scripts/run/recovery-store.cjs`
+- Modify: `core/scripts/run/state.cjs`
+
+- [ ] **Step 1: Verify the frozen RED proof and reproduce all four failures**
+
+Run: `shasum -a 256 core/scripts/__tests__/run-state-cas-pivot.test.cjs && node --test core/scripts/__tests__/run-state-cas-pivot.test.cjs`
+
+Expected: the test hash matches Task 6A and the four recorded failures reproduce. The implementer must be fresh and independent from the RED author.
+
+- [ ] **Step 2: Implement one file-based CAS and route every existing-v3 mutation through it**
+
+Export `mutateRunStateCas` from `recovery-store.cjs`. Store immutable next-state bytes plus a no-clobber claim containing the expected hash, next hash, next-state reference and exact generation reference or `null`. Use neither PID ownership nor TTL, timestamp or clock recovery. On an identical installed claim, verify all referenced bytes and complete from expected state or adopt next state. Return `STATE_CAS_CONFLICT` for different claim bytes and `STATE_CAS_MISMATCH` for any third canonical state. Never overwrite a competing claim.
+
+Make state transitions and `appendReport` read canonical bytes, verify the requested safe-component `runId` against `state.runId` byte for byte, derive their next state and call `mutateRunStateCas`. A mergeable report append that loses to another normal local writer rereads canonical state and reapplies the same entry so neither report disappears. A state transition may retry only after recomputing from the new canonical state. `publishRecoveryGeneration` installs and verifies the immutable generation first, then calls the same CAS with its exact reference. Remove every direct `writeRunStateAtomic`, `writeStateAtomic` or equivalent replacement path for an existing v3 file. Keep absent-file initialization no-clobber and idempotent. Reject pre-existing symlinks and path escapes before mutation.
+
+Add the `openFindings` and `closedFindings` fingerprint-set intersection check to `validateStateV3`. Compare run identity without NFC or NFD normalization. Do not claim to protect a parent directory deliberately swapped by a hostile local process during one synchronous filesystem operation; that case is out of scope.
+
+- [ ] **Step 3: Run focused GREEN and all Pair B regressions**
+
+Run: `node --test core/scripts/__tests__/run-state-cas-pivot.test.cjs core/scripts/__tests__/run-recovery-store.test.cjs core/scripts/__tests__/run-recovery-store-g2.test.cjs core/scripts/__tests__/run-state.test.cjs core/scripts/__tests__/contract-run-state.test.cjs core/scripts/__tests__/run-report.test.cjs core/scripts/__tests__/run-retention.test.cjs`
+
+Expected: PASS with no lost report, no permanent identical-claim `IN_PROGRESS`, exact run identity and disjoint finding sets. Existing generation, report, state and retention behavior remains green.
+
+- [ ] **Step 4: Commit production only**
+
+```bash
+git add core/scripts/run/recovery-store.cjs core/scripts/run/state.cjs
+git commit -m "fix(recovery): unify v3 state mutation CAS"
+```
+
+### Task 6C: One integrated reviewer gates Pair C
+
+**Files:** read-only Task 6A and Task 6B commits.
+
+- [ ] **Step 1: Re-run the immutable RED and Pair B regression suites**
+
+Run: `node --test core/scripts/__tests__/run-state-cas-pivot.test.cjs core/scripts/__tests__/run-recovery-store.test.cjs core/scripts/__tests__/run-recovery-store-g2.test.cjs core/scripts/__tests__/run-state.test.cjs core/scripts/__tests__/contract-run-state.test.cjs core/scripts/__tests__/run-report.test.cjs core/scripts/__tests__/run-retention.test.cjs && git diff --check HEAD~1 HEAD`
+
+Expected: PASS and no whitespace error.
+
+- [ ] **Step 2: Falsify the four findings and audit the scope boundary**
+
+Confirm that every existing-v3 state transition, `appendReport` call and recovery publication reaches `mutateRunStateCas`; no direct state replacement bypass remains. Kill after claim installation, then prove an identical retry completes or adopts using the immutable hashes and references with no PID, TTL or clock. Prove different claims never overwrite. Re-run the NFC/NFD alias and unsafe-component cases, and the open/closed intersection case. Confirm claims and next-state bytes remain file-based and do not copy prompts or agent outputs.
+
+Re-run the existing pre-created symlink and path-escape cases. Record explicitly that a hostile local process swapping a parent directory during one synchronous filesystem operation is outside the threat model and was not claimed fixed. Review AC-07, AC-08 and AC-10 only. Return `APPROVED` or one evidence-backed finding. One integrated reviewer is allowed; no second reviewer or automatic correction is authorized by this pivot.
+
 ### Task 7: Pair C RED author freezes recovery transitions and dispatch authorization
 
 **Files:**
@@ -917,10 +1021,10 @@ Expected: exit 0, action `start-missing`, exact pending transition key and dispa
 | AC-04 active automatic technical/evidence recovery | 7-12, 16-18 |
 | AC-05 only four human gate classes | 1-3, 7-9, 13-15 |
 | AC-06 stable canonical fingerprints | 1-3, 10-12 |
-| AC-07 v3 plus immutable referenced generation | 4-6, 10-12 |
-| AC-08 dispatch ledger only | 7-9, 13-15 |
+| AC-07 v3 plus immutable referenced generation | 4-6, 6A-6C, 10-12 |
+| AC-08 dispatch ledger only | 6A-6C, 7-9, 13-15 |
 | AC-09 DAG-local blocking and cross-session terminal condition | 10-12 |
-| AC-10 same-fingerprint and no-decrease anti-loop | 1-3, 7-9 |
+| AC-10 same-fingerprint and no-decrease anti-loop | 1-3, 6A-6C, 7-9 |
 | AC-11 active Task 0 migration and pending RED | 16-18 |
 | AC-12 prompt/output/reviewer budgets | 7-9, 13-15 |
 

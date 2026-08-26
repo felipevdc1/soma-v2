@@ -34,6 +34,25 @@ Adopt a hybrid model. Shift adversarial test design before implementation, then 
 
 The recovery rules in this document supersede the older `Stop eficiente` rule. Existing prompt and conversational output limits remain 8,000 and 4,000 bytes.
 
+### Decision amendment: Pair B storage gate
+
+For `run-260825-universal-entry-7f3c2a`, the Pair B storage work reached a proven `NO_PROGRESS` gate after its original implementation, review correction and CAS correction history. The approved human decision resolves that gate and authorizes exactly the storage pivot below. It does not erase or reinterpret the existing evidence, Pair A history or Pair B dispatch and commit history.
+
+1. **Threat model.** SOMA protects state across process crash, restart, multisession resume and normal concurrent local writers. It rejects a requested path escape and any pre-existing symlink in a resolved state or recovery path component. A hostile local process that deliberately swaps a parent directory during one synchronous filesystem operation is out of scope. The implementation and review MUST NOT claim protection against that attack.
+2. **Storage choice.** Canonical state, immutable next-state bytes, CAS claims and recovery generations remain files. This pivot adds no SQLite store, native helper, daemon or dependency.
+3. **One state mutation boundary.** `mutateRunStateCas` is the one exported recoverable CAS function for every mutation of an existing `soma-state/v3` file. State transitions, `appendReport` and recovery publication call it. No `writeRunStateAtomic`, `writeStateAtomic` or equivalent direct replacement may bypass it. Fresh initialization may create an absent state file with no-clobber semantics, but it MUST remain a no-op when the file already exists.
+4. **Crash-recoverable claim.** A durable claim records immutable `expectedStateSha256`, `nextStateSha256`, a reference to immutable next-state bytes and an exact recovery-generation reference or `null` for a non-recovery mutation. It uses no PID, TTL, timestamp or clock lease. An identical retry verifies the claim bytes, next-state bytes and any referenced generation bytes. If canonical state still hashes to `expectedStateSha256`, the retry completes the replacement from those exact next-state bytes. If canonical state already hashes to `nextStateSha256`, it adopts the completed result. Any other canonical hash fails with a mismatch. A different claim for the same expected state fails with a conflict and never overwrites the installed claim, next-state bytes or canonical state. An identical durable claim therefore cannot remain permanently `IN_PROGRESS` after a crash.
+5. **Exact run identity.** Before reading or mutating state, the requested `runId` MUST be a safe single path component. After reading state, the requested `runId` MUST be byte-for-byte equal to `state.runId` in UTF-8. Unicode normalization is forbidden for this comparison. NFC and NFD aliases are different run identities even when the host filesystem resolves both names to the same file.
+6. **Finding-set consistency.** `validateStateV3` MUST reject a recovery branch when the set of fingerprints in `openFindings` intersects the set in `closedFindings`.
+
+The amendment keeps AC mapping explicit:
+
+| Amendment clause | Acceptance criteria |
+| --- | --- |
+| Exact state identity, one CAS boundary, verified next bytes and generation references | AC-07 |
+| File-only coordination facts, no new agent ledger or dependency | AC-08 |
+| Deterministic crash takeover, competing-claim conflict and disjoint open/closed sets | AC-10 |
+
 ## Shift-left pipeline
 
 Every implementation task MUST follow this order:
