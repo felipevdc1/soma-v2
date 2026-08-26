@@ -3,13 +3,12 @@
 /**
  * run/state.cjs — `soma run state` (Spec 016, T-08)
  *
- * Persists `soma-state/v2` to `{projectRoot}/.soma/run-state-{runId}.json`.
+ * Persists `soma-state/v3` to `{projectRoot}/.soma/run-state-{runId}.json`.
  * Migration, not greenfield: v1.0 lived at `/tmp/soma-state-{sessionId}.json`
  * (soma-run.md §0.2) — v2 moves the artifact into the project and keys it by
  * `runId` instead of `sessionId`, which is what makes `resume` possible from
- * a different session (AC-04). v2 is a STRICT SUPERSET of v1.0: every v1.0
- * field survives with the same name and shape; two fields are added
- * (`decisions[]`, `reports[]`, both append-only ledgers).
+ * a different session (AC-04). v3 preserves every v2 field and adds the
+ * durable `diagnosticRecovery` graph.
  *
  * Contract: core/specs/016-artifact-gated-trilho/contracts/persist-run-state.md
  *
@@ -47,6 +46,7 @@ const { validate } = require('./schema.cjs');
 const { resolveSomaPaths, resolveRunIdFromLock } = require('./paths.cjs');
 const { warnIfLegacy } = require('./legacy.cjs');
 const { sweepExpiredArtifacts } = require('./retention.cjs');
+const { validateStateV3, migrateStateV2 } = require('./recovery-store.cjs');
 
 // ── soma-state/v2 schema (owned by T-08, per run/schema.cjs's docstring) ──
 // Only the fields whose type is unambiguous (never legitimately null) are
@@ -97,6 +97,8 @@ function fail(code, message) {
 
 /** Write JSON atomically: tmp sibling file + rename (house convention, e.g. core/scripts/manifest.cjs). */
 function writeStateAtomic(runStateFile, state) {
+  const result = validateStateV3(state);
+  if (!result.valid) throw new Error(`refusing to write invalid soma-state/v3: ${result.violations.join('; ')}`);
   fs.mkdirSync(path.dirname(runStateFile), { recursive: true });
   const tmpPath = runStateFile + '.tmp';
   fs.writeFileSync(tmpPath, JSON.stringify(state, null, 2) + '\n');
@@ -104,13 +106,13 @@ function writeStateAtomic(runStateFile, state) {
 }
 
 /**
- * Fresh soma-state/v2, mirroring the v1.0 "Novo run" bootstrap shape
+ * Fresh soma-state/v3, mirroring the v1.0 "Novo run" bootstrap shape
  * (soma-run.md §0.2:37-57) plus the two v2 ledgers.
  */
 function freshState(runId) {
   const now = new Date().toISOString();
   return {
-    $schema: 'soma-state/v2',
+    $schema: 'soma-state/v3',
     runId,
     sessionId: getSessionId(),
     startedAt: now,
@@ -135,8 +137,23 @@ function freshState(runId) {
     pausedDiagnostic: null,
     decisions: [],
     reports: [],
+    diagnosticRecovery: {
+      terminalCondition: { kind: 'finish', active: true },
+      taskGraph: [],
+      branches: [],
+    },
   };
 }
+
+function readRunState(runStateFile, { allowV2ForMigration = false } = {}) {
+  const state = JSON.parse(fs.readFileSync(runStateFile, 'utf8'));
+  if (state.$schema === 'soma-state/v2' && allowV2ForMigration) return state;
+  const result = validateStateV3(state);
+  if (!result.valid) throw new Error(`invalid soma-state/v3: ${result.violations.join('; ')}`);
+  return state;
+}
+
+function validateRunState(state) { return validateStateV3(state); }
 
 /**
  * Resolve `runId` from `--run`, falling back to `.soma.lock` when omitted
@@ -177,7 +194,7 @@ function cmdInit(runId, projectRoot) {
   }
 
   const state = freshState(runId);
-  const { valid, violations } = validate(STATE_SCHEMA_V2, state);
+  const { valid, violations } = validateStateV3(state);
   if (!valid) {
     fail('INVALID_STATE', `freshly-built state failed its own schema: ${JSON.stringify(violations)}`);
   }
@@ -212,6 +229,9 @@ function cmdSet(runId, newState, projectRoot) {
     state = JSON.parse(fs.readFileSync(runStateFile, 'utf8'));
   } catch (err) {
     fail('CORRUPT_STATE', `${runStateFile} exists but is not valid JSON: ${err.message}`);
+  }
+  if (!validateStateV3(state).valid) {
+    fail('MIGRATION_REQUIRED', 'soma-state/v2 is read-only; migrate explicitly to soma-state/v3 before mutation');
   }
 
   state.previousState = state.currentState;
@@ -295,6 +315,9 @@ function appendReport({ projectRoot, runId, step, status, finishedAt }) {
   } catch (err) {
     return { ok: false, reason: `${runStateFile} exists but is not valid JSON: ${err.message}` };
   }
+  if (!validateStateV3(state).valid) {
+    return { ok: false, reason: 'soma-state/v2 is read-only; migrate explicitly to soma-state/v3 before mutation' };
+  }
   if (!Array.isArray(state.reports)) {
     return {
       ok: false,
@@ -360,4 +383,4 @@ if (require.main === module) {
   main();
 }
 
-module.exports = { appendReport };
+module.exports = { appendReport, readRunState, writeStateAtomic, validateRunState, migrateStateV2 };

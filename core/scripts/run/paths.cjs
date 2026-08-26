@@ -43,6 +43,7 @@ function isLegacyProject(projectRoot) {
  *   somaDir: string,
  *   reportsDir: string,
  *   dispatchesDir: string,
+ *   recoveryDir: string,
  *   installStateFile: string,
  *   legacy: boolean,
  *   runReportsDir?: string,
@@ -54,12 +55,14 @@ function resolveSomaPaths(projectRoot, runId) {
   const somaDir = path.join(projectRoot, '.soma');
   const reportsDir = path.join(somaDir, 'reports');
   const dispatchesDir = path.join(somaDir, 'dispatches');
+  const recoveryDir = path.join(somaDir, 'recovery');
 
   const resolved = {
     projectRoot,
     somaDir,
     reportsDir,
     dispatchesDir,
+    recoveryDir,
     installStateFile: path.join(somaDir, 'install-state.json'),
     legacy: isLegacyProject(projectRoot),
   };
@@ -67,6 +70,7 @@ function resolveSomaPaths(projectRoot, runId) {
   if (runId) {
     resolved.runReportsDir = path.join(reportsDir, runId);
     resolved.runDispatchesDir = path.join(dispatchesDir, runId);
+    resolved.runRecoveryDir = path.join(recoveryDir, runId);
     resolved.runStateFile = path.join(somaDir, `run-state-${runId}.json`);
   }
 
