@@ -103,6 +103,7 @@ test('validateStateV3 enforces automatic and human-gate branch nullability plus 
 
   const humanGate = clone(valid);
   humanGate.diagnosticRecovery.branches[0].state = 'HUMAN_GATE';
+  humanGate.diagnosticRecovery.branches[0].classification = 'NORMATIVE_DECISION';
   humanGate.diagnosticRecovery.branches[0].nextTask = null;
   humanGate.diagnosticRecovery.branches[0].humanGate = {
     decisionNeeded: 'Choose the governing policy.',
@@ -144,6 +145,10 @@ test('validateStateV3 rejects missing v2 fields and malformed semantic branch va
   closed.diagnosticRecovery.branches[0].openFindings = [];
   closed.diagnosticRecovery.branches[0].nextTask = null;
   closed.diagnosticRecovery.branches[0].humanGate = null;
+  closed.diagnosticRecovery.branches[0].closedFindings = [{
+    fingerprint: 'a'.repeat(64),
+    proof: '.soma/dispatches/run-v3-red-pending/T-RED/red-proof.json',
+  }];
   assert.equal(validateStateV3(closed).valid, true);
 });
 
@@ -190,9 +195,14 @@ test('after-generation-rename leaves state unchanged and a matching orphan is ad
 
   const retry = publishRecoveryGeneration(input);
   const recoveryDir = path.join(setup.projectRoot, '.soma', 'recovery', setup.runId);
+  const stateAfterRetry = fs.readFileSync(setup.runStateFile);
+  const generationAfterRetry = fs.readFileSync(path.join(recoveryDir, '0001.json'));
   assert.equal(retry.adopted, true);
   assert.deepEqual(fs.readdirSync(recoveryDir).filter(name => name.endsWith('.json')), ['0001.json']);
-  assert.throws(() => publishRecoveryGeneration(input), /state|expected|hash|generation/i);
+  const completedRetry = publishRecoveryGeneration(input);
+  assert.equal(completedRetry.adopted, true);
+  assert.deepEqual(fs.readFileSync(setup.runStateFile), stateAfterRetry);
+  assert.deepEqual(fs.readFileSync(path.join(recoveryDir, '0001.json')), generationAfterRetry);
   assert.deepEqual(fs.readdirSync(recoveryDir).filter(name => name.endsWith('.json')), ['0001.json']);
 });
 

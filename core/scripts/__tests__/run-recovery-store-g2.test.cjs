@@ -183,6 +183,7 @@ test('R4 readStateV3 rejects absolute, dot-segment, outside, and symlinked recov
     }, /RECOVERY_REFERENCE_PATH_INVALID/],
     ['dot-segment', (setup, state) => {
       const outside = path.join(setup.projectRoot, '.soma', 'recovery', 'outside.json');
+      fs.mkdirSync(path.dirname(outside), { recursive: true });
       fs.writeFileSync(outside, '{"outside":true}');
       state.diagnosticRecovery.branches[0].generationArtifact = { path: `.soma/recovery/${setup.runId}/../outside.json`, sha256: sha256File(outside) };
     }, /RECOVERY_REFERENCE_PATH_INVALID/],
