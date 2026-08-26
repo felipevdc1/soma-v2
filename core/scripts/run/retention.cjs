@@ -72,6 +72,11 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { resolveSomaPaths } = require('./paths.cjs');
+const {
+  assertExactRunId,
+  assertSafeRunId,
+  reserveRunIdentity,
+} = require('./run-id.cjs');
 
 const RETENTION_DAYS = 7;
 const RETENTION_MS = RETENTION_DAYS * 24 * 60 * 60 * 1000;
@@ -81,29 +86,35 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 // `{somaDir}/run-state-{runId}.json`.
 const RUN_STATE_FILE_RE = /^run-state-(.+)\.json$/;
 
-/**
- * A runId extracted from a run-state filename is a single path COMPONENT
- * (readdir never returns entries containing `/`), but a crafted filename
- * like `run-state-...json` still yields the literal string `".."` after the
- * regex match. `path.join(dispatchesDir, '..')` then resolves to `somaDir`
- * itself — technically still "inside .soma/" by `isInsideSomaDir`'s prefix
- * check, but would make the sweep `rm -rf` the ENTIRE .soma/ tree. Rejected
- * here, before any path is ever built from it, not caught later by the
- * prefix check alone (defense in depth — the contract does not name this
- * edge case, decided conservatively and reported to the team lead).
- */
-function isSafeRunId(runId) {
-  if (!runId) return false;
-  if (runId.includes('/') || runId.includes('\\')) return false;
-  if (runId === '.' || runId === '..') return false;
-  return true;
-}
-
 function safeLstat(target) {
   try {
     return fs.lstatSync(target);
   } catch (_err) {
     return null;
+  }
+}
+
+function readExactState(runStateFile, runId) {
+  const noFollow = typeof fs.constants.O_NOFOLLOW === 'number' ? fs.constants.O_NOFOLLOW : 0;
+  const stat = fs.lstatSync(runStateFile);
+  if (stat.isSymbolicLink() || !stat.isFile()) {
+    throw new Error('RUN_ID_IDENTITY_UNPROVABLE: state is not a regular file');
+  }
+
+  let descriptor;
+  try {
+    descriptor = fs.openSync(runStateFile, fs.constants.O_RDONLY | noFollow);
+    if (!fs.fstatSync(descriptor).isFile()) {
+      throw new Error('RUN_ID_IDENTITY_UNPROVABLE: state changed type');
+    }
+    const state = JSON.parse(fs.readFileSync(descriptor, 'utf8'));
+    if (!state || (state.$schema !== 'soma-state/v2' && state.$schema !== 'soma-state/v3')) {
+      throw new Error('RUN_ID_IDENTITY_UNPROVABLE: state schema is not permitted');
+    }
+    assertExactRunId(state.runId, runId);
+    return state;
+  } finally {
+    if (descriptor !== undefined) fs.closeSync(descriptor);
   }
 }
 
@@ -185,12 +196,21 @@ function sweepExpiredArtifacts({ projectRoot, now = new Date(), retentionMs = RE
     if (!match) continue;
     const runId = match[1];
 
-    if (!isSafeRunId(runId)) {
+    try {
+      assertSafeRunId(runId);
+    } catch (error) {
       result.skipped.push({ runId, reason: `unsafe runId extracted from filename, refusing to evaluate: ${entry}` });
       continue;
     }
 
-    const runStateFile = path.join(somaDir, entry);
+    const runPaths = resolveSomaPaths(projectRoot, runId);
+    const {
+      runReportsDir,
+      runDispatchesDir,
+      runRecoveryDir,
+      runStateFile,
+      runIdentityFile,
+    } = runPaths;
 
     if (!isInsideSomaDir(somaDir, runStateFile)) {
       result.skipped.push({ runId, reason: `run-state filename resolves outside .soma/: ${entry}` });
@@ -208,11 +228,10 @@ function sweepExpiredArtifacts({ projectRoot, now = new Date(), retentionMs = RE
 
     let state;
     try {
-      state = JSON.parse(fs.readFileSync(runStateFile, 'utf8'));
+      reserveRunIdentity({ projectRoot, runId, allowNew: false });
+      state = readExactState(runStateFile, runId);
     } catch (err) {
-      // Corrupt state means we cannot confirm currentState === 'DONE' —
-      // never sweep on inability to determine eligibility.
-      result.skipped.push({ runId, reason: `run-state file not valid JSON, refusing to sweep: ${err.message}` });
+      result.skipped.push({ runId, reason: `run identity is not provable, refusing to sweep: ${err.message}` });
       continue;
     }
 
@@ -229,33 +248,23 @@ function sweepExpiredArtifacts({ projectRoot, now = new Date(), retentionMs = RE
       continue;
     }
 
-    const { runReportsDir, runDispatchesDir } = resolveSomaPaths(projectRoot, runId);
-    // Order matters, and it's not just "try all three then report": reports/
-    // dispatches are removed FIRST, and the state file is only ever touched
-    // if BOTH of those succeeded. A loop that attempts every target
-    // regardless of earlier failures would remove the state file even when
-    // a sibling directory failed (e.g. a symlink) — orphaning the run in a
-    // state where nothing marks it as still-needing-cleanup. Stopping short
-    // keeps the run discoverable (state file still there, still past the
-    // threshold) so the next sweep can safely retry.
-    const nonStateFailures = [];
-    for (const target of [runReportsDir, runDispatchesDir]) {
+    let completed = true;
+    for (const target of [
+      runReportsDir,
+      runDispatchesDir,
+      runRecoveryDir,
+      runStateFile,
+      runIdentityFile,
+    ]) {
       const outcome = removeSafely(somaDir, target);
-      if (!outcome.removed) nonStateFailures.push(outcome.reason);
+      if (!outcome.removed) {
+        result.errors.push({ runId, reason: outcome.reason });
+        completed = false;
+        break;
+      }
     }
 
-    if (nonStateFailures.length > 0) {
-      result.errors.push({ runId, reason: nonStateFailures.join('; ') });
-      continue;
-    }
-
-    const stateOutcome = removeSafely(somaDir, runStateFile);
-    if (!stateOutcome.removed) {
-      result.errors.push({ runId, reason: stateOutcome.reason });
-      continue;
-    }
-
-    result.swept.push({ runId, ageDays });
+    if (completed) result.swept.push({ runId, ageDays });
   }
 
   return result;

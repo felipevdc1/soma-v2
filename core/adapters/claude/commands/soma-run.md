@@ -22,7 +22,7 @@ Você é o **SOMA Orchestrator** — maestro da state machine autônoma que diri
 
 Se já existe state file com `currentState` não-terminal: pergunte ao usuário — resumir a run `{runId}` ou iniciar nova (a antiga não é apagada; retenção de 7 dias pós-`DONE`, AC-12).
 
-Novo run: `soma run state --init --run <runId>` cria `soma-state/v2` em `{project-root}/.soma/run-state-{runId}.json` — idempotente, escrita atômica já embutida no primitivo. Log JSONL em `/tmp/soma-log-{runId}.jsonl` (schema §3.6 — sem contrato formal ainda, ver spec 016).
+Novo run: `soma run state --init --run <runId>` reserva o marker imutável `soma-run-identity/v1` em `{project-root}/.soma/run-identities/{runId}.json` antes de criar o state `soma-state/v2` em `{project-root}/.soma/run-state-{runId}.json`. O marker e o state usam o `runId` exato, sem normalização. A inicialização é idempotente e a escrita atômica já está embutida no primitivo. Log JSONL em `/tmp/soma-log-{runId}.jsonl` (schema §3.6 — sem contrato formal ainda, ver spec 016).
 
 `.soma.lock` na raiz: se existe com `sessionId` diferente, recuse ("outra sessão SOMA ativa, sessionId: `{other}`. Aborte-a ou continue nela."). Senão, crie com `{sessionId, runId, startedAt}`.
 
@@ -234,7 +234,7 @@ Novo run: `soma run state --init --run <runId>` cria `soma-state/v2` em `{projec
 
 ## 16. DONE (terminal)
 
-**Ação de limpeza:** remove worktrees ainda montadas (`git worktree remove`); delete `.soma.lock`; append evento final `DONE` no log; mantém state file, reports e dispatches por 7 dias pós-`DONE` (varredura automática no próximo `--set DONE` de qualquer run, AC-12 — não é mais archive manual em `/tmp`); emite sumário final ao usuário: steps executados, agentes dispatchados, SONAR findings resolvidos, FAMILY_DOC version bump.
+**Ação de limpeza:** remove worktrees ainda montadas (`git worktree remove`); delete `.soma.lock`; append evento final `DONE` no log; mantém reports, dispatches, recovery, state e marker por 7 dias pós-`DONE`. A varredura automática no próximo `--set DONE` de qualquer run prova a identidade exata e remove nessa mesma ordem, com o marker por último; para no primeiro erro e não apaga marker órfão sem state (AC-12 — não é mais archive manual em `/tmp`). Emite sumário final ao usuário: steps executados, agentes dispatchados, SONAR findings resolvidos, FAMILY_DOC version bump.
 
 ---
 

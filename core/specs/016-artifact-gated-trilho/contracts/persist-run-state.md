@@ -14,6 +14,25 @@
 
 **Migração, não greenfield.** Hoje o state vive em `/tmp/soma-state-{sessionId}.json` (`soma-run.md` §0.2, linhas 37-57). Duas mudanças: o local passa a ser o projeto, e a chave passa a ser `runId` em vez de `sessionId` — é o que torna o `--resume` possível de outra sessão (AC-04).
 
+Antes do primeiro write durável, o run reserva o marker imutável:
+
+```
+{projeto}/.soma/run-identities/{runId}.json
+```
+
+O marker `soma-run-identity/v1` tem exatamente duas chaves, nesta ordem e sem campos adicionais:
+
+```json
+{
+  "$schema": "soma-run-identity/v1",
+  "runId": "run-260815-2340-a1b2c3"
+}
+```
+
+Os bytes canônicos são `Buffer.from(JSON.stringify({ $schema: 'soma-run-identity/v1', runId }, null, 2) + '\n', 'utf8')`. O preflight abre marker e state como arquivos regulares sem seguir symlink, aceita apenas state `soma-state/v2` ou `soma-state/v3` válido e exige igualdade exata entre o `runId` solicitado, o marker e o state. Não há normalização Unicode nem comparação por pathname ou inode.
+
+Legacy adoption of a missing marker requires an exact state proof. A adoção é aditiva e preserva todos os bytes do state; reports, dispatches e recovery isolados nunca autorizam criação ou adoção de identidade.
+
 ---
 
 ## Payload
@@ -99,7 +118,9 @@
 
 ## Retenção (AC-12)
 
-7 dias após o run atingir `DONE` — a mesma janela que o `soma-run.md` §16 já pratica para o state file. Uma regra só, aplicada a state, reports e dispatches.
+7 dias após o run atingir `DONE` — a mesma janela que o `soma-run.md` §16 já pratica para o state file. Uma regra só, aplicada ao conjunto do run.
+
+Antes de lifecycle, mtime ou delete, a retenção conclui o preflight de identidade e exige igualdade exata entre o ID extraído do filename, `marker.runId` e `state.runId`. O cleanup é sequencial: reports, dispatches, recovery, state e marker. Ele para no primeiro erro e só registra o run como removido depois de apagar o marker. Como state e marker são os dois últimos alvos, um retry continua um prefixo parcial válido; se state já sumiu e sobrou apenas o marker órfão, a retenção não o remove sem a prova de três partes.
 
 ---
 
@@ -116,6 +137,7 @@ Ignore **seletivo** no `.gitignore`, na seção "SOMA runtime artifacts" que já
 ```gitignore
 .soma/reports/
 .soma/dispatches/
+.soma/run-identities/
 .soma/run-state-*.json
 .soma.lock
 ```

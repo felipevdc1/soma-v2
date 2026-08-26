@@ -18,8 +18,38 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 
+function resolveRunModulesDirectory() {
+  const sourceDirectory = path.join(__dirname, '..', 'scripts', 'run');
+  if (fs.existsSync(path.join(sourceDirectory, 'run-id.cjs')) &&
+      fs.existsSync(path.join(sourceDirectory, 'paths.cjs'))) {
+    return sourceDirectory;
+  }
+
+  const somaHome = process.env.SOMA_HOME || path.join(os.homedir(), '.soma-v2');
+  return path.join(somaHome, 'scripts', 'run');
+}
+
+const runModulesDirectory = resolveRunModulesDirectory();
+const {
+  assertExactRunId,
+  assertSafeRunId,
+  reserveRunIdentity,
+} = require(path.join(runModulesDirectory, 'run-id.cjs'));
+const { resolveRunIdFromLock } = require(path.join(runModulesDirectory, 'paths.cjs'));
+
 function getSessionId() {
   return process.env.CK_SESSION_ID || process.env.CLAUDE_SESSION_ID || `pid-${process.ppid}`;
+}
+
+function getProjectRoot() {
+  const cwd = process.cwd();
+  const tempDirectory = os.tmpdir();
+  const expandedTempDirectory = path.join(path.sep, 'private', tempDirectory);
+  if (process.platform === 'darwin' &&
+      (cwd === expandedTempDirectory || cwd.startsWith(`${expandedTempDirectory}${path.sep}`))) {
+    return path.join(tempDirectory, path.relative(expandedTempDirectory, cwd));
+  }
+  return cwd;
 }
 
 function readJsonSafe(filePath) {
@@ -35,42 +65,83 @@ function readJsonSafe(filePath) {
 // when nothing is found at the new one. Legacy projects (no .soma/ at all)
 // keep working exactly as before via that fallback.
 //
-// There is no dependency on run/paths.cjs on purpose (Anti-Abstraction Gate,
-// plan.md §Dependencies — zero new coupling for a 3-line resolution).
-function findNewRunStatePath(projectRoot) {
+function findNewRunStateCandidate(projectRoot) {
   const somaDir = path.join(projectRoot, '.soma');
-
-  // 1. .soma.lock, when present and readable, is authoritative (soma-run.md
-  // §0.3) — prefer the run it names, but only if that run's state file
-  // actually exists (a stale/pointing-nowhere lock must not hide a real one).
   const lockPath = path.join(projectRoot, '.soma.lock');
-  try {
-    const lock = JSON.parse(fs.readFileSync(lockPath, 'utf-8'));
-    if (lock && typeof lock.runId === 'string' && lock.runId.length > 0) {
-      const candidate = path.join(somaDir, `run-state-${lock.runId}.json`);
-      if (fs.existsSync(candidate)) return candidate;
-    }
-  } catch (_err) {
-    // absent/unreadable/corrupt .soma.lock → fall through to directory scan
+  const lockPresent = fs.existsSync(lockPath);
+  const lock = resolveRunIdFromLock(projectRoot);
+
+  if (lock.status === 'ok') {
+    const runId = assertSafeRunId(lock.runId);
+    return {
+      candidate: { runId, statePath: path.join(somaDir, `run-state-${runId}.json`) },
+      allowLegacy: false,
+    };
+  }
+  if (lockPresent && lock.status === 'invalid_run_id') {
+    assertSafeRunId(undefined);
   }
 
-  // 2. No lock, or the lock didn't resolve to an existing file: scan .soma/
-  // for run-state-*.json. A single match is the common case (one active run
-  // per checkout); with more than one, the most recently modified wins —
-  // best-effort, not a substitute for a working .soma.lock.
   let entries;
   try {
     entries = fs.readdirSync(somaDir);
   } catch (_err) {
-    return null; // no .soma/ directory at all → legacy project
+    return { candidate: null, allowLegacy: !lockPresent };
   }
   const candidates = entries
-    .filter((name) => /^run-state-.+\.json$/.test(name))
-    .map((name) => path.join(somaDir, name));
-  if (candidates.length === 0) return null;
-  if (candidates.length === 1) return candidates[0];
-  candidates.sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs);
-  return candidates[0];
+    .map((name) => ({ name, match: /^run-state-(.+)\.json$/.exec(name) }))
+    .filter(({ match }) => match)
+    .map(({ name, match }) => {
+      const runId = assertSafeRunId(match[1]);
+      return { runId, statePath: path.join(somaDir, name) };
+    });
+  if (candidates.length === 0) return { candidate: null, allowLegacy: !lockPresent };
+  if (candidates.length > 1) {
+    candidates.sort((a, b) => fs.lstatSync(b.statePath).mtimeMs - fs.lstatSync(a.statePath).mtimeMs);
+  }
+  return { candidate: candidates[0], allowLegacy: false };
+}
+
+function readExactCandidateState({ statePath, runId }) {
+  let stat;
+  try {
+    stat = fs.lstatSync(statePath);
+  } catch (_error) {
+    throw new Error('RUN_ID_IDENTITY_UNPROVABLE: candidate state is absent');
+  }
+  if (stat.isSymbolicLink() || !stat.isFile()) {
+    throw new Error('RUN_ID_IDENTITY_UNPROVABLE: candidate state is not a regular file');
+  }
+
+  const noFollow = typeof fs.constants.O_NOFOLLOW === 'number' ? fs.constants.O_NOFOLLOW : 0;
+  let descriptor;
+  try {
+    descriptor = fs.openSync(statePath, fs.constants.O_RDONLY | noFollow);
+    if (!fs.fstatSync(descriptor).isFile()) {
+      throw new Error('RUN_ID_IDENTITY_UNPROVABLE: candidate state changed type');
+    }
+    let state;
+    try {
+      state = readJsonSafe(statePath);
+    } catch (_error) {
+      throw new Error('RUN_ID_IDENTITY_UNPROVABLE: candidate state is not valid JSON');
+    }
+    if (!state || (state.$schema !== 'soma-state/v2' && state.$schema !== 'soma-state/v3')) {
+      throw new Error('RUN_ID_IDENTITY_UNPROVABLE: candidate state schema is not permitted');
+    }
+    assertExactRunId(state.runId, runId);
+    return state;
+  } finally {
+    if (descriptor !== undefined) fs.closeSync(descriptor);
+  }
+}
+
+function warnIdentityFailure(error) {
+  const message = error && error.message ? error.message : String(error);
+  const stable = message.match(/RUN_ID_[A-Z_]+/);
+  process.stderr.write(
+    `[spec-completeness-gate] WARN: ${stable ? message : `RUN_ID_IDENTITY_UNPROVABLE: ${message}`}\n`
+  );
 }
 
 // v3 Fase 1: AC-line extraction — accepts the 3 line forms in use across
@@ -212,9 +283,36 @@ async function main() {
     const sessionId = getSessionId();
     const tmpDir = os.tmpdir();
     const oldStatePath = path.join(tmpDir, `soma-state-${sessionId}.json`);
-    const projectRoot = process.cwd();
-    const newStatePath = findNewRunStatePath(projectRoot);
-    const statePath = newStatePath || oldStatePath;
+    const projectRoot = getProjectRoot();
+    let selection;
+    let state;
+    try {
+      selection = findNewRunStateCandidate(projectRoot);
+      if (selection.candidate) {
+        try {
+          const reservation = reserveRunIdentity({
+            projectRoot,
+            runId: selection.candidate.runId,
+            allowNew: false,
+          });
+          fs.readFileSync(reservation.markerPath);
+          fs.readFileSync(selection.candidate.statePath);
+          state = readExactCandidateState(selection.candidate);
+        } catch (error) {
+          if (!error || error.code !== 'RUN_ID_IDENTITY_UNPROVABLE' ||
+              !/state is not structurally valid/.test(error.message || '')) {
+            throw error;
+          }
+          state = readExactCandidateState(selection.candidate);
+        }
+      }
+    } catch (error) {
+      warnIdentityFailure(error);
+      process.exit(0);
+    }
+
+    if (!selection.candidate && !selection.allowLegacy) process.exit(0);
+    const statePath = selection.candidate ? selection.candidate.statePath : oldStatePath;
 
     // No SOMA session → pass silently
     if (!fs.existsSync(statePath)) process.exit(0);
@@ -227,12 +325,13 @@ async function main() {
     }
 
     // Read SOMA state — fail-open on bad JSON
-    let state;
-    try {
-      state = readJsonSafe(statePath);
-    } catch (e) {
-      process.stderr.write(`[spec-completeness-gate] WARN: could not parse soma-state: ${e.message}\n`);
-      process.exit(0);
+    if (!state) {
+      try {
+        state = readJsonSafe(statePath);
+      } catch (e) {
+        process.stderr.write(`[spec-completeness-gate] WARN: could not parse soma-state: ${e.message}\n`);
+        process.exit(0);
+      }
     }
 
     const { specPath, tasksPath } = state || {};
