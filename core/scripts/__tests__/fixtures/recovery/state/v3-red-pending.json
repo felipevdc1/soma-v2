@@ -1,0 +1,53 @@
+{
+  "$schema": "soma-state/v3",
+  "runId": "run-v3-red-pending",
+  "sessionId": "session-v3-red-pending",
+  "startedAt": "2026-08-26T12:00:00.000Z",
+  "currentState": "DIAGNOSTIC_REPLAN",
+  "previousState": "STEP_1B_PLAN",
+  "lastTransitionAt": "2026-08-26T12:01:00.000Z",
+  "featureSlug": "hybrid-recovery",
+  "specPath": "docs/superpowers/specs/recovery.md",
+  "planPath": "docs/superpowers/plans/recovery.md",
+  "tasksPath": "docs/superpowers/tasks/recovery.md",
+  "contractsDir": "core/specs/contracts",
+  "teammateNamePrefix": "soma",
+  "activeDispatchIds": [],
+  "failureCountsByStep": {},
+  "fixLoopIterations": 0,
+  "snapshots": [],
+  "humanGatesApproved": {},
+  "constitutionVersion": "v2",
+  "constitutionSnapshotPath": "docs/constitution.md",
+  "lastSuccessfulState": "STEP_1B_PLAN",
+  "baselineSha": "75a1296441bc0a678aaffbe47ea496975abbfd94",
+  "pausedDiagnostic": {"kind": "recovery", "reason": "residual finding"},
+  "decisions": [],
+  "reports": [],
+  "diagnosticRecovery": {
+    "terminalCondition": {"kind": "finish", "active": true},
+    "taskGraph": [],
+    "branches": [
+      {
+        "branchId": "branch-red-pending",
+        "generation": 1,
+        "state": "RED_PENDING",
+        "classification": "TECHNICAL_DETERMINISTIC",
+        "fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "boundary": "core/scripts/run/recovery-store.cjs#publishRecoveryGeneration",
+        "candidate": {"sha": "d6c2fe0ca96736f60fbf554f8651ad830a03ebd3", "preserved": true},
+        "proofs": [{"kind": "RED", "path": ".soma/dispatches/run-v3-red-pending/T-RED/red-proof.json", "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}],
+        "closedFindings": [],
+        "openFindings": [{"fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "requirementRef": "AC-STORE-01"}],
+        "fingerprintHistory": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
+        "dependencyClosure": ["T-RECOVERY-G1-RED"],
+        "reviewPlan": {"declaredRisks": ["state replacement"]},
+        "transitionKey": "recovery:branch-red-pending:1:RED",
+        "nextTask": {"taskId": "T-RECOVERY-G1-RED", "kind": "RED", "status": "pending"},
+        "humanGate": null,
+        "executorRotation": {"originalExecutor": null, "rotatedExecutor": null, "rotationsUsed": 0, "attemptsByExecutor": {}},
+        "progressDelta": {"closed": 0, "opened": 1, "previousOpenCount": 0, "currentOpenCount": 1, "setDecreased": false, "strongerRed": false}
+      }
+    ]
+  }
+}
