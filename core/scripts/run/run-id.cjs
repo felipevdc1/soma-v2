@@ -238,6 +238,7 @@ function readRegularFile(filePath, invalidCode) {
 
   const noFollow = typeof fs.constants.O_NOFOLLOW === 'number' ? fs.constants.O_NOFOLLOW : 0;
   let descriptor;
+  let primaryError;
   try {
     descriptor = fs.openSync(filePath, fs.constants.O_RDONLY | noFollow);
     if (!fs.fstatSync(descriptor).isFile()) {
@@ -245,10 +246,20 @@ function readRegularFile(filePath, invalidCode) {
     }
     return fs.readFileSync(descriptor);
   } catch (error) {
-    if (isStableCodedError(error, invalidCode)) throw error;
-    throw codedError(invalidCode, 'cannot read identity evidence safely');
+    primaryError = isStableCodedError(error, invalidCode)
+      ? error
+      : codedError(invalidCode, 'cannot read identity evidence safely');
+    throw primaryError;
   } finally {
-    if (descriptor !== undefined) fs.closeSync(descriptor);
+    if (descriptor !== undefined) {
+      try {
+        fs.closeSync(descriptor);
+      } catch (_error) {
+        if (primaryError === undefined) {
+          throw codedError(invalidCode, 'cannot close identity evidence safely');
+        }
+      }
+    }
   }
 }
 
