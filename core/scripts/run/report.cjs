@@ -192,6 +192,12 @@ try {
   effectiveRunId = assertSafeRunId(runId);
   readExactRunState({ projectRoot, runId: effectiveRunId, allowV2: true });
 } catch (error) {
+  if (error && error.code === 'ENOENT') {
+    fail(
+      'RUN_ID_IDENTITY_UNPROVABLE',
+      `RUN_ID_IDENTITY_UNPROVABLE: no state file or exact state evidence for run "${runId}"`
+    );
+  }
   const code = error && error.code && /^RUN_ID_/.test(error.code)
     ? error.code
     : 'RUN_ID_MISMATCH';

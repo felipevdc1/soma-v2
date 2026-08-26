@@ -146,6 +146,12 @@ function preflightRunIdentity(runId, projectRoot) {
     readExactRunState({ projectRoot, runId: exactRunId, allowV2: true });
     return exactRunId;
   } catch (error) {
+    if (error && error.code === 'ENOENT') {
+      fail(
+        `RUN_ID_IDENTITY_UNPROVABLE: no state file or exact state evidence for run "${runId}"`,
+        { code: 'RUN_ID_IDENTITY_UNPROVABLE' }
+      );
+    }
     const rawMessage = error && error.message ? error.message : String(error);
     const prefixedCode = /^(RUN_ID_[A-Z_]+)(?::|$)/.exec(rawMessage);
     const code = error && error.code && /^RUN_ID_/.test(error.code)

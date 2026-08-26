@@ -153,11 +153,15 @@ function main() {
     effectiveRunId = assertSafeRunId(runId);
     ({ state } = readExactRunState({ projectRoot, runId: effectiveRunId, allowV2: true }));
   } catch (error) {
-    const code = error && error.code && /^RUN_ID_/.test(error.code)
+    const missingState = Boolean(error && error.code === 'ENOENT');
+    const code = missingState
+      ? 'RUN_ID_IDENTITY_UNPROVABLE'
+      : error && error.code && /^RUN_ID_/.test(error.code)
       ? error.code
       : 'RUN_ID_MISMATCH';
     const rawMessage = error && error.message ? error.message : String(error);
-    const message = code === 'RUN_ID_IDENTITY_UNPROVABLE' && rawMessage === code
+    const message = missingState ||
+      (code === 'RUN_ID_IDENTITY_UNPROVABLE' && rawMessage === code)
       ? `${code}: no state file or exact identity evidence for run "${runId}"`
       : rawMessage.startsWith(code)
         ? rawMessage
