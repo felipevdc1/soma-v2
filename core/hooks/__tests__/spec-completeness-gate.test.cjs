@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 
-const { test } = require('node:test');
+const { after, test } = require('node:test');
 const assert = require('node:assert/strict');
 const { spawnSync } = require('child_process');
 const fs = require('fs');
@@ -10,6 +10,11 @@ const os = require('os');
 
 const HOOK = path.join(__dirname, '..', 'spec-completeness-gate.cjs');
 const SESSION = 'test-scg-' + process.pid;
+const PROJECT_CWD = fs.mkdtempSync(path.join(os.tmpdir(), `soma-spec-gate-${SESSION}-`));
+
+after(() => {
+  fs.rmSync(PROJECT_CWD, { recursive: true, force: true });
+});
 
 function stateFile() { return path.join(os.tmpdir(), `soma-state-${SESSION}.json`); }
 function bypassMarker() { return path.join(os.tmpdir(), `soma-spec-bypass-${SESSION}.marker`); }
@@ -17,6 +22,7 @@ function bypassMarker() { return path.join(os.tmpdir(), `soma-spec-bypass-${SESS
 function run(command, extraEnv = {}) {
   const input = JSON.stringify({ tool_input: { command } });
   return spawnSync(process.execPath, [HOOK], {
+    cwd: PROJECT_CWD,
     input,
     env: { ...process.env, CK_SESSION_ID: SESSION, ...extraEnv },
     encoding: 'utf-8',

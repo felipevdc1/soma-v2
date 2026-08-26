@@ -817,6 +817,8 @@ git diff --check
 
 Expected: PASS. Identity mismatch performs no delete/unlink/source read; exact retention deletes marker last; the marker is ignored selectively; installer tests prove no manifest edit is required.
 
+Regression hook subprocesses must use an isolated fixture cwd: the repository's `.soma` runtime is legitimate state and must not contaminate legacy temp-fallback tests.
+
 - [ ] **Step 6: Commit production/docs only**
 
 ```bash
