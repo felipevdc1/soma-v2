@@ -54,8 +54,8 @@
  * @task T-09
  */
 
-const fs = require('node:fs');
-const { resolveSomaPaths } = require('./paths.cjs');
+const { assertSafeRunId } = require('./run-id.cjs');
+const { readExactRunState } = require('./state.cjs');
 
 // Mirrors gate.cjs's STEP_ORDER verbatim (report-bearing steps only,
 // excluding the two human-approval gates and the non-STEP terminal
@@ -137,7 +137,7 @@ function main() {
   const argv = process.argv.slice(2);
   const { run: runId } = parseArgs(argv);
 
-  if (!runId) {
+  if (runId === null) {
     fail(
       'MISSING_RUN_ID',
       '"soma run resume" requires --run <runId> explicitly — resolving via .soma.lock would ' +
@@ -147,24 +147,26 @@ function main() {
   }
 
   const projectRoot = process.cwd();
-  const { runStateFile } = resolveSomaPaths(projectRoot, runId);
-
-  if (!fs.existsSync(runStateFile)) {
-    fail(
-      'NO_SUCH_RUN',
-      `no state file at ${runStateFile} — nothing to resume for run "${runId}"`
-    );
-  }
-
+  let effectiveRunId;
   let state;
   try {
-    state = JSON.parse(fs.readFileSync(runStateFile, 'utf8'));
-  } catch (err) {
-    fail('CORRUPT_STATE', `${runStateFile} exists but is not valid JSON: ${err.message}`);
+    effectiveRunId = assertSafeRunId(runId);
+    ({ state } = readExactRunState({ projectRoot, runId: effectiveRunId, allowV2: true }));
+  } catch (error) {
+    const code = error && error.code && /^RUN_ID_/.test(error.code)
+      ? error.code
+      : 'RUN_ID_MISMATCH';
+    const rawMessage = error && error.message ? error.message : String(error);
+    const message = code === 'RUN_ID_IDENTITY_UNPROVABLE' && rawMessage === code
+      ? `${code}: no state file or exact identity evidence for run "${runId}"`
+      : rawMessage.startsWith(code)
+        ? rawMessage
+        : `${code}: ${rawMessage}`;
+    fail(code, message);
   }
 
   if (!Array.isArray(state.reports)) {
-    fail('CORRUPT_STATE', `${runStateFile}'s reports[] is not an array — cannot reconstitute a reentry point`);
+    fail('CORRUPT_STATE', `run state reports[] is not an array — cannot reconstitute a reentry point`);
   }
 
   const latest = latestStatusByStep(state.reports);
@@ -187,14 +189,14 @@ function main() {
   process.stdout.write(
     JSON.stringify({
       ok: true,
-      run_id: runId,
+      run_id: effectiveRunId,
       reentry,
       last_pass: lastPass,
       session_id: process.env.CK_SESSION_ID || process.env.CLAUDE_SESSION_ID || null,
     }) + '\n'
   );
   process.stdout.write(
-    `soma run resume: run "${runId}" reenters at ${reentry} (last pass: ${lastPass || 'none'})\n`
+    `soma run resume: run "${effectiveRunId}" reenters at ${reentry} (last pass: ${lastPass || 'none'})\n`
   );
   process.exit(0);
 }

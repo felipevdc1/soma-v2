@@ -44,7 +44,8 @@ const path = require('node:path');
 
 const { validate } = require('./schema.cjs');
 const { resolveSomaPaths, resolveRunIdFromLock } = require('./paths.cjs');
-const { appendReport } = require('./state.cjs');
+const { appendReport, readExactRunState } = require('./state.cjs');
+const { assertSafeRunId } = require('./run-id.cjs');
 const { warnIfLegacy } = require('./legacy.cjs');
 
 // ── soma-step-report/v1 (owned here, per schema.cjs's module doc: the 3
@@ -126,7 +127,7 @@ function parseArgs(argv) {
  * @returns {string} runId — never returns on failure, calls fail() and exits
  */
 function resolveRunId(projectRoot, explicitRun) {
-  if (explicitRun) return explicitRun;
+  if (explicitRun !== undefined) return explicitRun;
 
   const result = resolveRunIdFromLock(projectRoot);
   if (result.status === 'ok') return result.runId;
@@ -186,11 +187,21 @@ const projectRoot = process.cwd();
 warnIfLegacy(projectRoot);
 
 const runId = resolveRunId(projectRoot, args.run);
+let effectiveRunId;
+try {
+  effectiveRunId = assertSafeRunId(runId);
+  readExactRunState({ projectRoot, runId: effectiveRunId, allowV2: true });
+} catch (error) {
+  const code = error && error.code && /^RUN_ID_/.test(error.code)
+    ? error.code
+    : 'RUN_ID_MISMATCH';
+  fail(code, error && error.message ? error.message : String(error));
+}
 
 const nowIso = new Date().toISOString();
 const payload = {
   schema: 'soma-step-report/v1',
-  run_id: runId,
+  run_id: effectiveRunId,
   step: args.step,
   status: args.status,
   started_at: nowIso,
@@ -215,7 +226,7 @@ if (!selfCheck.valid) {
   );
 }
 
-const { runReportsDir } = resolveSomaPaths(projectRoot, runId);
+const { runReportsDir } = resolveSomaPaths(projectRoot, effectiveRunId);
 const filePath = path.join(runReportsDir, `${args.step}-report.json`);
 
 writeAtomic(filePath, JSON.stringify(payload, null, 2) + '\n');
@@ -233,7 +244,7 @@ writeAtomic(filePath, JSON.stringify(payload, null, 2) + '\n');
 // `filePath` above — one source of truth, so the two can't drift.
 const appendResult = appendReport({
   projectRoot,
-  runId,
+  runId: effectiveRunId,
   step: args.step,
   status: args.status,
   finishedAt: payload.finished_at,
@@ -247,6 +258,6 @@ if (!appendResult.ok) {
 }
 
 process.stdout.write(
-  JSON.stringify({ ok: true, path: filePath, run_id: runId, step: args.step, status: args.status }) + '\n'
+  JSON.stringify({ ok: true, path: filePath, run_id: effectiveRunId, step: args.step, status: args.status }) + '\n'
 );
 process.exit(0);

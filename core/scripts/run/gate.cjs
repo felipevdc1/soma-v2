@@ -42,6 +42,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { validate } = require('./schema.cjs');
 const { resolveSomaPaths, resolveRunIdFromLock } = require('./paths.cjs');
+const { readExactRunState } = require('./state.cjs');
+const { assertSafeRunId, assertExactRunId } = require('./run-id.cjs');
 const { warnIfLegacy } = require('./legacy.cjs');
 
 // ── Step order ──────────────────────────────────────────────────────────────
@@ -133,9 +135,27 @@ function parseArgs(argv) {
  * @returns {string|null} null when neither source resolves
  */
 function resolveRunId(cliRun, projectRoot) {
-  if (cliRun) return cliRun;
+  if (cliRun !== null) return cliRun;
   const result = resolveRunIdFromLock(projectRoot);
   return result.status === 'ok' ? result.runId : null;
+}
+
+function preflightRunIdentity(runId, projectRoot) {
+  try {
+    const exactRunId = assertSafeRunId(runId);
+    readExactRunState({ projectRoot, runId: exactRunId, allowV2: true });
+    return exactRunId;
+  } catch (error) {
+    const rawMessage = error && error.message ? error.message : String(error);
+    const prefixedCode = /^(RUN_ID_[A-Z_]+)(?::|$)/.exec(rawMessage);
+    const code = error && error.code && /^RUN_ID_/.test(error.code)
+      ? error.code
+      : prefixedCode
+        ? prefixedCode[1]
+        : 'RUN_ID_MISMATCH';
+    const message = prefixedCode ? rawMessage : `${code}: ${rawMessage}`;
+    fail(message, { code });
+  }
 }
 
 /**
@@ -160,13 +180,14 @@ function previousStep(step) {
 
 function runGateStep(args, projectRoot) {
   const runId = resolveRunId(args.run, projectRoot);
-  if (!runId) {
+  if (runId === null) {
     fail(
       `run não resolvido: informe --run <runId>, ou garanta .soma.lock legível em ${projectRoot} (soma-run.md §0.3)`
     );
     return;
   }
 
+  const exactRunId = preflightRunIdentity(runId, projectRoot);
   const prev = previousStep(args.step);
   if (prev.error) {
     fail(prev.error);
@@ -177,7 +198,7 @@ function runGateStep(args, projectRoot) {
     return;
   }
 
-  const { runReportsDir } = resolveSomaPaths(projectRoot, runId);
+  const { runReportsDir } = resolveSomaPaths(projectRoot, exactRunId);
   const reportPath = path.join(runReportsDir, `${prev.step}-report.json`);
 
   let raw;
@@ -205,6 +226,17 @@ function runGateStep(args, projectRoot) {
       step: prev.step,
       violations: result.violations,
     });
+    return;
+  }
+
+  try {
+    assertExactRunId(parsed.run_id, exactRunId);
+  } catch (error) {
+    fail(error && error.message ? error.message : String(error), { step: prev.step });
+    return;
+  }
+  if (parsed.step !== prev.step) {
+    fail(`RUN_ID_MISMATCH: report step does not match ${prev.step}`, { step: prev.step });
     return;
   }
 
@@ -247,19 +279,22 @@ function runGateValidate(args, projectRoot) {
   }
 
   const runId = resolveRunId(args.run, projectRoot);
-  if (!runId) {
+  if (runId === null) {
     fail(
       `run não resolvido: informe --run <runId>, ou garanta .soma.lock legível em ${projectRoot} (soma-run.md §0.3)`
     );
     return;
   }
 
-  const { runDispatchesDir } = resolveSomaPaths(projectRoot, runId);
+  const exactRunId = preflightRunIdentity(runId, projectRoot);
+  const { runDispatchesDir } = resolveSomaPaths(projectRoot, exactRunId);
   const metadataPath = path.join(runDispatchesDir, args.validate, 'metadata.json');
 
   const { allowed, reason } = checkValidatorAssignment({
     metadataPath,
     proposedValidator: args.validator,
+    expectedRunId: exactRunId,
+    expectedTaskId: args.validate,
   });
 
   if (!allowed) {

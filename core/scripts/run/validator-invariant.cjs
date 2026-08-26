@@ -39,12 +39,23 @@
  */
 
 const fs = require('node:fs');
+const { assertExactRunId } = require('./run-id.cjs');
 
 /**
- * @param {{metadataPath: string, proposedValidator: string}} args
+ * @param {{
+ *   metadataPath: string,
+ *   proposedValidator: string,
+ *   expectedRunId?: string,
+ *   expectedTaskId?: string,
+ * }} args
  * @returns {{allowed: boolean, reason: string|null}}
  */
-function checkValidatorAssignment({ metadataPath, proposedValidator }) {
+function checkValidatorAssignment({
+  metadataPath,
+  proposedValidator,
+  expectedRunId,
+  expectedTaskId,
+}) {
   let raw;
   try {
     raw = fs.readFileSync(metadataPath, 'utf8');
@@ -57,6 +68,18 @@ function checkValidatorAssignment({ metadataPath, proposedValidator }) {
     metadata = JSON.parse(raw);
   } catch (err) {
     return { allowed: false, reason: `metadata.json corrompido em ${metadataPath}: ${err.message}` };
+  }
+
+  if (expectedRunId !== undefined) {
+    try {
+      assertExactRunId(metadata.run_id, expectedRunId);
+    } catch (error) {
+      return { allowed: false, reason: error && error.message ? error.message : 'RUN_ID_MISMATCH' };
+    }
+  }
+
+  if (expectedTaskId !== undefined && metadata.task_id !== expectedTaskId) {
+    return { allowed: false, reason: 'RUN_ID_MISMATCH: metadata task_id does not match request' };
   }
 
   const executorAgent = metadata.executor_agent;

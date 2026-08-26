@@ -62,6 +62,7 @@ const path = require('node:path');
 
 const { validate } = require('./schema.cjs');
 const { resolveSomaPaths, resolveRunIdFromLock } = require('./paths.cjs');
+const { assertSafeRunId, reserveRunIdentity } = require('./run-id.cjs');
 
 const MAX_PROMPT_BYTES = 8000;
 const MAX_OUTPUT_BYTES = 4000;
@@ -133,7 +134,7 @@ function parseFlags(argv, knownFlags) {
  * @returns {string} runId — never returns on failure, calls fail() and exits
  */
 function resolveRunId(projectRoot, explicitRun) {
-  if (explicitRun) return explicitRun;
+  if (explicitRun !== undefined) return explicitRun;
 
   const result = resolveRunIdFromLock(projectRoot);
   if (result.status === 'ok') return result.runId;
@@ -144,6 +145,19 @@ function resolveRunId(projectRoot, explicitRun) {
     invalid_run_id: `--run não foi informado e .soma.lock em ${result.lockPath} não contém um runId válido. Informe --run <runId> explicitamente.`,
   };
   fail('RUN_UNRESOLVED', messages[result.status]);
+}
+
+function reserveExactRunIdentity(projectRoot, runId) {
+  try {
+    const exactRunId = assertSafeRunId(runId);
+    reserveRunIdentity({ projectRoot, runId: exactRunId, allowNew: true });
+    return exactRunId;
+  } catch (error) {
+    const code = error && error.code && /^RUN_ID_/.test(error.code)
+      ? error.code
+      : 'RUN_ID_IDENTITY_INSTALL_FAILED';
+    fail(code, error && error.message ? error.message : String(error));
+  }
 }
 
 /**
@@ -207,7 +221,6 @@ function cmdBegin(argv, projectRoot) {
   if (!args.task) fail('MISSING_ARG', '--task é obrigatório');
   if (!args.promptFile) fail('MISSING_ARG', '--prompt-file é obrigatório');
 
-  const runId = resolveRunId(projectRoot, args.run);
   const attempt = resolveAttempt(args.attempt);
   const promptBytes = readSourceBytes('--prompt-file', args.promptFile);
   if (attempt > MAX_ATTEMPT) {
@@ -215,12 +228,14 @@ function cmdBegin(argv, projectRoot) {
   }
   enforceBudget('--prompt-file', promptBytes.length, MAX_PROMPT_BYTES);
 
-  const dir = recordDir(projectRoot, runId, args.task, attempt);
+  const runId = resolveRunId(projectRoot, args.run);
+  const effectiveRunId = reserveExactRunIdentity(projectRoot, runId);
+  const dir = recordDir(projectRoot, effectiveRunId, args.task, attempt);
   const promptPath = path.join(dir, 'prompt.md');
   writeAtomic(promptPath, promptBytes);
 
   process.stdout.write(
-    JSON.stringify({ ok: true, path: promptPath, run_id: runId, task_id: args.task, attempt }) + '\n'
+    JSON.stringify({ ok: true, path: promptPath, run_id: effectiveRunId, task_id: args.task, attempt }) + '\n'
   );
   process.exit(0);
 }
@@ -234,7 +249,6 @@ function cmdEnd(argv, projectRoot) {
   if (!args.outputFile) fail('MISSING_ARG', '--output-file é obrigatório');
   if (!args.metadataFile) fail('MISSING_ARG', '--metadata-file é obrigatório');
 
-  const runId = resolveRunId(projectRoot, args.run);
   const attempt = resolveAttempt(args.attempt);
   if (attempt > MAX_ATTEMPT) {
     fail('DISPATCH_BUDGET_EXCEEDED', `--attempt excede o orçamento de ${MAX_ATTEMPT}: recebeu ${attempt}`);
@@ -256,6 +270,10 @@ function cmdEnd(argv, projectRoot) {
   } catch (err) {
     fail('METADATA_INVALID_JSON', `--metadata-file "${args.metadataFile}" não é JSON válido: ${err.message}`);
   }
+
+  const outputBytes = readSourceBytes('--output-file', args.outputFile);
+  enforceBudget('--output-file', outputBytes.length, MAX_OUTPUT_BYTES);
+  const runId = resolveRunId(projectRoot, args.run);
 
   const { valid, violations } = validate(DISPATCH_RECORD_SCHEMA, metadata);
   const extraViolations = [];
@@ -300,11 +318,8 @@ function cmdEnd(argv, projectRoot) {
     );
   }
 
-  // ── Only now: read the output source bytes and write both artifacts.
-  const outputBytes = readSourceBytes('--output-file', args.outputFile);
-  enforceBudget('--output-file', outputBytes.length, MAX_OUTPUT_BYTES);
-
-  const dir = recordDir(projectRoot, runId, args.task, attempt);
+  const effectiveRunId = reserveExactRunIdentity(projectRoot, runId);
+  const dir = recordDir(projectRoot, effectiveRunId, args.task, attempt);
   const outputPath = path.join(dir, 'output.md');
   const metadataPath = path.join(dir, 'metadata.json');
 
@@ -312,7 +327,7 @@ function cmdEnd(argv, projectRoot) {
   writeAtomic(metadataPath, JSON.stringify(metadata, null, 2) + '\n');
 
   process.stdout.write(
-    JSON.stringify({ ok: true, outputPath, metadataPath, run_id: runId, task_id: args.task, attempt }) + '\n'
+    JSON.stringify({ ok: true, outputPath, metadataPath, run_id: effectiveRunId, task_id: args.task, attempt }) + '\n'
   );
   process.exit(0);
 }
