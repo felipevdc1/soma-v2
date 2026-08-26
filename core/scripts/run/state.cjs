@@ -47,7 +47,7 @@ const { validate } = require('./schema.cjs');
 const { resolveSomaPaths, resolveRunIdFromLock } = require('./paths.cjs');
 const { warnIfLegacy } = require('./legacy.cjs');
 const { sweepExpiredArtifacts } = require('./retention.cjs');
-const { validateStateV3, migrateStateV2, mutateRunStateCas } = require('./recovery-store.cjs');
+const { validateStateV3, migrateStateV2, mutateRunStateCas, safeRunId } = require('./recovery-store.cjs');
 
 // ── soma-state/v2 schema (owned by T-08, per run/schema.cjs's docstring) ──
 // Only the fields whose type is unambiguous (never legitimately null) are
@@ -133,6 +133,7 @@ function isCasRetry(err) {
 }
 
 function mutateExistingState({ projectRoot, runId, transform }) {
+  if (!safeRunId(runId)) throw new Error('RECOVERY_STATE_RUN_ID_INVALID');
   const { runStateFile } = resolveSomaPaths(projectRoot, runId);
   let lastCasError;
   for (let attempt = 0; attempt < 32; attempt++) {
@@ -231,6 +232,7 @@ function resolveRunId(explicitRunId, projectRoot) {
 
 function cmdInit(runId, projectRoot) {
   if (!runId) fail('MISSING_RUN_ID', '"soma run state --init" requires --run <runId>');
+  if (!safeRunId(runId)) fail('RECOVERY_STATE_RUN_ID_INVALID', 'invalid run identity');
 
   warnIfLegacy(projectRoot);
   const { runStateFile } = resolveSomaPaths(projectRoot, runId);
@@ -277,6 +279,7 @@ function cmdSet(runId, newState, projectRoot) {
         'readable .soma.lock at the project root to resolve the active run'
     );
   }
+  if (!safeRunId(resolvedRunId)) fail('RECOVERY_STATE_RUN_ID_INVALID', 'invalid run identity');
 
   warnIfLegacy(projectRoot);
   const { runStateFile } = resolveSomaPaths(projectRoot, resolvedRunId);
@@ -368,6 +371,9 @@ function appendReport({ projectRoot, runId, step, status, finishedAt }) {
   }
   if (!step || !status || !finishedAt) {
     return { ok: false, reason: 'appendReport requires step, status, and finishedAt' };
+  }
+  if (!safeRunId(runId)) {
+    return { ok: false, reason: 'RECOVERY_STATE_RUN_ID_INVALID' };
   }
 
   const { runStateFile, runReportsDir } = resolveSomaPaths(projectRoot, runId);

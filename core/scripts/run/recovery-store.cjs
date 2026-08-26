@@ -678,5 +678,5 @@ function publishRecoveryGeneration({ projectRoot, runId, expectedStateSha256, ge
 
 module.exports = {
   validateStateV3, migrateStateV2, readStateV3, publishRecoveryGeneration,
-  mutateRunStateCas, projectPersistentBranch,
+  mutateRunStateCas, projectPersistentBranch, safeRunId,
 };
