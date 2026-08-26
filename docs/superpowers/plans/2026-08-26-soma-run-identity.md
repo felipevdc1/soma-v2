@@ -109,11 +109,13 @@ Stable universal failures are `RUN_ID_INVALID`, `RUN_ID_MISMATCH`, `RUN_ID_MARKE
 
 Pairs run strictly A, B, C, D. Inside each pair, RED commits first, GREEN commits second, and one integrated reviewer gates the pair. No production implementation runs in parallel. A RED author and its GREEN implementer must have different agent IDs. The GREEN implementer cannot edit, rename, skip or weaken the frozen tests or helper.
 
-Use run ID `run-260826-exact-identity`. Set `TASK_ID` to the concrete ID named by the task, save the exact prompt at `PROMPT_FILE="/tmp/${TASK_ID}.prompt.md"`, and run this before every spawn:
+Every plan dispatch uses the existing state-backed run `run-260825-universal-entry-7f3c2a`. Its pre-existing exact `soma-state/v2` state authorizes lazy canonical-marker adoption after Pair A GREEN without changing state bytes. Task A RED and GREEN still record their prompts and outputs through the current pre-marker `dispatch-record` behavior. The first marker-aware dispatch then finds the exact state, returns `adopted`, and continues on the same ledger. The Task A records are therefore not an ownerless dispatch-only legacy tree. This plan creates no new run.
+
+Set `TASK_ID` to the concrete ID named by the task, save the exact prompt at `PROMPT_FILE="/tmp/${TASK_ID}.prompt.md"`, and run this before every spawn:
 
 ```bash
 node core/scripts/run.cjs dispatch-record begin \
-  --run run-260826-exact-identity \
+  --run run-260825-universal-entry-7f3c2a \
   --task "$TASK_ID" \
   --attempt 1 \
   --prompt-file "$PROMPT_FILE"
@@ -125,7 +127,7 @@ The concrete task IDs are listed in each task. Prompt bytes must be at most 8,00
 OUTPUT_FILE="/tmp/${TASK_ID}.output.md"
 METADATA_FILE="/tmp/${TASK_ID}.metadata.json"
 node core/scripts/run.cjs dispatch-record end \
-  --run run-260826-exact-identity \
+  --run run-260825-universal-entry-7f3c2a \
   --task "$TASK_ID" \
   --attempt 1 \
   --output-file "$OUTPUT_FILE" \
@@ -186,7 +188,7 @@ The test helper owns fixture setup, canonical marker seeding, exact tree snapsho
 
 - Create: `core/scripts/__tests__/helpers/run-identity-fixture.cjs`
 - Create: `core/scripts/__tests__/run-id-core.test.cjs`
-- Create at runtime only: `.soma/dispatches/run-260826-exact-identity/T-RUN-ID-A-RED/red-proof.json`
+- Create at runtime only: `.soma/dispatches/run-260825-universal-entry-7f3c2a/T-RUN-ID-A-RED/red-proof.json`
 
 - [ ] **Step 1: Add the reusable exact non-mutation and alias helpers**
 
@@ -302,7 +304,7 @@ git commit -m "test(run): freeze exact identity core"
 
 - [ ] **Step 1: Verify immutable base and frozen oracle before execution**
 
-Set `RED_PROOF=.soma/dispatches/run-260826-exact-identity/T-RUN-ID-A-RED/red-proof.json`, run the proof reader above, then run the focused test.
+Set `RED_PROOF=.soma/dispatches/run-260825-universal-entry-7f3c2a/T-RUN-ID-A-RED/red-proof.json`, run the proof reader above, then run the focused test.
 
 Expected: `oracle hashes match`; the same RED identities reproduce. Run `git diff --exit-code HEAD -- core/scripts/__tests__/run-id-core.test.cjs core/scripts/__tests__/helpers/run-identity-fixture.cjs` before and after implementation.
 
@@ -382,7 +384,7 @@ Return `APPROVED` or findings mapped to an AC/invariant. One mapped correction m
 - Read: `core/scripts/__tests__/helpers/run-identity-fixture.cjs`
 - Read: `core/scripts/__tests__/fixtures/recovery/state/v2-valid.json`
 - Read: `core/scripts/__tests__/fixtures/recovery/state/v3-red-pending.json`
-- Create at runtime only: `.soma/dispatches/run-260826-exact-identity/T-RUN-ID-B-RED/red-proof.json`
+- Create at runtime only: `.soma/dispatches/run-260825-universal-entry-7f3c2a/T-RUN-ID-B-RED/red-proof.json`
 
 - [ ] **Step 1: Freeze R3 through R5 with exact non-mutation checks**
 
@@ -440,7 +442,7 @@ git commit -m "test(run): freeze state identity preflight"
 
 - [ ] **Step 1: Verify the Pair B oracle hashes before executing RED**
 
-Use the proof reader with `RED_PROOF=.soma/dispatches/run-260826-exact-identity/T-RUN-ID-B-RED/red-proof.json`. Verify `git diff --exit-code HEAD -- core/scripts/__tests__/run-id-state-recovery.test.cjs core/scripts/__tests__/helpers/run-identity-fixture.cjs`, then reproduce RED.
+Use the proof reader with `RED_PROOF=.soma/dispatches/run-260825-universal-entry-7f3c2a/T-RUN-ID-B-RED/red-proof.json`. Verify `git diff --exit-code HEAD -- core/scripts/__tests__/run-id-state-recovery.test.cjs core/scripts/__tests__/helpers/run-identity-fixture.cjs`, then reproduce RED.
 
 - [ ] **Step 2: Make marker and exact state proof precede every state outcome**
 
@@ -529,7 +531,7 @@ Return `APPROVED` or mapped findings. One same-executor correction is permitted;
 
 - Create: `core/scripts/__tests__/run-id-boundaries.test.cjs`
 - Read: `core/scripts/__tests__/helpers/run-identity-fixture.cjs`
-- Create at runtime only: `.soma/dispatches/run-260826-exact-identity/T-RUN-ID-C-RED/red-proof.json`
+- Create at runtime only: `.soma/dispatches/run-260825-universal-entry-7f3c2a/T-RUN-ID-C-RED/red-proof.json`
 
 - [ ] **Step 1: Freeze R6 report preflight**
 
@@ -684,7 +686,7 @@ Then inspect code for duplicated normalization, path creation before validation,
 
 - Create: `core/scripts/__tests__/run-id-retention-hook.test.cjs`
 - Read: `core/scripts/__tests__/helpers/run-identity-fixture.cjs`
-- Create at runtime only: `.soma/dispatches/run-260826-exact-identity/T-RUN-ID-D-RED/red-proof.json`
+- Create at runtime only: `.soma/dispatches/run-260825-universal-entry-7f3c2a/T-RUN-ID-D-RED/red-proof.json`
 
 - [ ] **Step 1: Freeze R11 retention three-way proof and deletion order**
 
