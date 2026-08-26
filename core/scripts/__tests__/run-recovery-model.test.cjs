@@ -334,3 +334,36 @@ test('classifyFinding preserves surrounding whitespace in otherwise valid identi
     }
   );
 });
+
+test('classifyFinding rejects U+0085 NEXT LINE as a requirement reference', () => {
+  assert.throws(
+    () => classifyFinding({ requirementRef: '\u0085', classification: 'TECHNICAL_DETERMINISTIC' }),
+    /requirementRef|NEW_EVIDENCE/i
+  );
+});
+
+test('classifyFinding rejects U+0085 NEXT LINE as a NEW_EVIDENCE boundary', () => {
+  assert.throws(
+    () =>
+      classifyFinding({
+        kind: 'NEW_EVIDENCE',
+        boundary: '\u0085',
+        minimalReproduction: minimalReproduction(),
+        observedResult: observedResult(),
+      }),
+    /NEW_EVIDENCE|boundary/i
+  );
+});
+
+test('classifyFinding rejects U+0085 NEXT LINE as a NEW_EVIDENCE error identity', () => {
+  assert.throws(
+    () =>
+      classifyFinding({
+        kind: 'NEW_EVIDENCE',
+        boundary: 'core/scripts/run/recovery-model.cjs#classifyFinding',
+        minimalReproduction: minimalReproduction(),
+        observedResult: { ...observedResult(), errorIdentity: '\u0085' },
+      }),
+    /NEW_EVIDENCE|observedResult/i
+  );
+});
