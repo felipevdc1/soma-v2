@@ -351,11 +351,13 @@ test('F4 pathname text cannot masquerade as a stable coded error', () => {
   const runId = 'safe-RUN_ID_MARKER_INVALID-run';
   const file = markerPath(projectRoot, runId);
   const originalOpenSync = fs.openSync;
+  let injected = 0;
   try {
     writeBytes(file, canonicalMarkerBytes(runId));
     const before = snapshotTree(projectRoot);
     fs.openSync = function injectMarkerEacces(openPath, ...args) {
-      if (openPath === file) {
+      if (openPath === file && injected === 0) {
+        injected += 1;
         const error = new Error(`EACCES: permission denied, open '${openPath}'`);
         error.code = 'EACCES';
         throw error;
@@ -368,6 +370,8 @@ test('F4 pathname text cannot masquerade as a stable coded error', () => {
       'RUN_ID_MARKER_INVALID',
       'F4 marker open EACCES did not fail'
     );
+    fs.openSync = originalOpenSync;
+    assert.equal(injected, 1, 'F4 marker open fault must fire exactly once');
     assertTreeUnchanged(projectRoot, before, 'F4 marker open failure must preserve bytes');
   } finally {
     fs.openSync = originalOpenSync;
