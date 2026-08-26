@@ -4,7 +4,7 @@
 
 **Goal:** Make `/soma-run` the only public entry for new, legacy, installed and monorepo projects, with a fixed shell boundary, a one-time request broker, read-only inspection and drift-bound continuation.
 
-**Architecture:** A fixed dynamic command prepares an owner-only slot bound to native `${CLAUDE_SESSION_ID}`. The adapter writes one `soma-entry-request/v1` containing exact `$ARGUMENTS` as `rawArguments`; a fixed consume call validates and claims it, then the CLI parser classifies the mode. No request value enters Bash. Handoff publishes facts without a digest; resume inspection computes `continuityDigest` after publication, and continue recomputes every input before any project lock or write. Entry returns baseline facts, while the orchestrator creates one `T-BASELINE` after `READY` and an executor runs it through dispatch records.
+**Architecture:** A fixed dynamic command scavenges any expired same-session entry, then prepares an owner-only TTL-bounded slot bound to native `${CLAUDE_SESSION_ID}`. The adapter attempts to write one `soma-entry-request/v1` containing exact `$ARGUMENTS` as `rawArguments`; its `finally` path invokes fixed consume after successful Write or fixed abort after failed or rejected Write. Consume validates and claims the request before the CLI parser classifies the mode. Host death may leave one inert TTL-bounded slot for deterministic next-prepare scavenging after expiry. No request value enters Bash. Handoff publishes facts without a digest; resume inspection computes `continuityDigest` after publication, and continue recomputes every input before any project lock or write. Entry returns baseline facts, while the orchestrator creates one `T-BASELINE` after `READY` and an executor runs it through dispatch records.
 
 **Tech Stack:** Node.js 22 CommonJS, `node:test`, built-in JUnit reporter, Git CLI through argument arrays, SHA-256 canonical JSON, existing SOMA install and sync components.
 
@@ -141,9 +141,9 @@ git commit -m "test(entry): capture structured failure identity"
 
 Validate the one envelope shape `{sessionId,requestId,capability,rawArguments}` and reject surplus fields, wrong types and oversize content. Verify that prepare rejects missing or malformed native session IDs, hashes the validated ID into a session directory, uses exact `0700` and `0600` modes, pre-creates an empty regular slot with no-follow plus `O_EXCL`, and emits at least 256 bits of capability.
 
-Assert the lease contains only session ID, random request ID/capability, exact path and expiry. It must not require mode or content hash before the Write. Prepare twice in one session fails or returns the same slot only while it is empty, intact and unexpired. Sessions A and B prepare concurrently into distinct directories; consume B never enumerates A.
+Assert the lease contains only session ID, random request ID/capability, exact path, bounded TTL and monotonic-safe creation and expiry timestamps. It must not require mode or content hash before the Write, and wall-clock adjustment must not extend it. Prepare twice in one session fails or returns the same slot only while it is empty, intact and unexpired. Sessions A and B prepare concurrently into distinct directories; consume B never enumerates A.
 
-Falsify traversal, parent symlink, request symlink, slot swap, wrong owner/mode, replay, two consumers, concurrent preparation, expired lease and hostile `rawArguments`. Exactly one consume wins by atomic claim. Inject errors after prepare, after Write and during consume. Send SIGINT, SIGTERM and SIGHUP to a child consumer. Assert no owned request directory remains and no project fixture was read. Document that tests cover corruption and normal cross-session isolation, not a sandbox against a hostile same-uid process.
+Falsify traversal, parent symlink, request symlink, slot swap, wrong owner/mode, replay, two consumers, concurrent preparation, expired lease and hostile `rawArguments`. Exactly one consume wins by atomic claim. Prove that failed or rejected Write selects abort and removes the slot, a consume error cleans in `finally`, repeated abort is harmless, and normally continuing flows leave zero slot. Kill the host after prepare and assert one inert slot may remain through its bounded TTL with no project, Git or run mutation. Assert consume after expiry fails closed, the next same-session prepare atomically renames/claims and removes the expired slot before creating another, and cleanup carrying an old lease snapshot cannot remove a new slot because `requestId` and `capability` do not match. Send SIGINT, SIGTERM and SIGHUP to a child consumer. Document that tests cover corruption and normal cross-session isolation, not a sandbox against a hostile same-uid process.
 
 - [ ] **Step 2: Run RED**
 
@@ -153,16 +153,17 @@ node --test core/scripts/__tests__/entry-request-schema.test.cjs core/scripts/__
 
 Expected: FAIL because broker modules and CLI forms are absent.
 
-- [ ] **Step 3: Implement fixed preparation and consumption**
+- [ ] **Step 3: Implement fixed preparation, consumption and abort**
 
 Register only these internal forms:
 
 ```text
 entry broker-prepare --session <native-session-id>
 entry broker-consume --session <native-session-id>
+entry broker-abort --session <native-session-id>
 ```
 
-Both forms require `--session <native-session-id>` from the fixed skill command template. Validate the bounded format before hashing or path access. Native session ID is the sole authority. Prepare creates a session directory, minimal lease and empty slot, then returns path, request ID, capability and expiry. Consume derives only the same session directory, creates an exclusive claim, opens the current slot no-follow, verifies owner/mode/type/schema/session/request/capability/expiry/size, computes the exact content hash, and removes the owned request directory in `finally`. Signal handlers enter the same cleanup path. Expired cleanup skips links, unknown owners and invalid structures.
+All three forms require `--session <native-session-id>` from fixed skill command templates. Validate the bounded format before hashing or path access. Native session ID is the sole authority. Prepare first claims any expired or invalid same-session slot by atomic rename and removes it, then creates a session directory, minimal lease and empty slot with a short bounded TTL and monotonic-safe timestamps. It returns path, request ID, capability and expiry. Consume derives only the same session directory, creates an exclusive claim, opens the current slot no-follow, verifies owner/mode/type/schema/session/request/capability/expiry/size, computes the exact content hash, and removes its claimed directory in `finally`. Abort claims without parsing or routing and performs the same cleanup. Cleanup in both commands is idempotent, and abort itself is idempotent. Every cleanup verifies the claimed lease snapshot's request ID and capability before removal, so an old cleanup cannot delete a newer lease. Signal handlers enter the same cleanup path. Host death may leave one inert slot; it expires without gaining mutation authority and the next prepare scavenges it before creating another.
 
 - [ ] **Step 4: Run GREEN and dispatcher regressions**
 
@@ -170,7 +171,7 @@ Both forms require `--session <native-session-id>` from the fixed skill command 
 node --test core/scripts/__tests__/entry-request-schema.test.cjs core/scripts/__tests__/entry-request-broker.test.cjs core/scripts/__tests__/soma-dispatcher.test.cjs
 ```
 
-Expected: PASS; sessions A/B cannot cross, one same-session consumer wins, replay fails, and the lease never predicts request fields.
+Expected: PASS; sessions A/B cannot cross, one same-session consumer wins, replay fails, normal flows leave zero slot, crash residue is TTL-bounded and scavenged, stale cleanup preserves a newer lease, and the lease never predicts request fields.
 
 - [ ] **Step 5: Commit**
 
@@ -468,7 +469,7 @@ Expected: PASS and drift always precedes project mutation.
 
 Assert the adapter contains `$ARGUMENTS`, frontmatter `disable-model-invocation: true`, and the fixed dynamic prepare command with only `${CLAUDE_SESSION_ID}` substitution. It must be at most 8,000 UTF-8 bytes and contain none of the 10-step headings. Each heading must exist once in the long reference. Reject any `UserPromptExpansion` transport.
 
-Use the real skill harness to give dynamic prepare and fixed consume the same native session ID. Instrument structured writes: preparation supplies pre-created path, request ID and capability; the adapter writes `{sessionId,requestId,capability,rawArguments}` and copies `$ARGUMENTS` byte-for-byte without classifying mode or calculating a hash. Consume Bash contains only the runtime session substitution. No Bash command contains `$ARGUMENTS`, request path, capability or parsed value.
+Use the real skill harness to give dynamic prepare and fixed consume/abort the same native session ID. Instrument structured writes: preparation supplies pre-created path, request ID and capability; the adapter writes `{sessionId,requestId,capability,rawArguments}` and copies `$ARGUMENTS` byte-for-byte without classifying mode or calculating a hash. After successful Write, the adapter invokes consume in `finally`; after failed or rejected Write, it invokes abort there instead. Consume and abort Bash contain only the runtime session substitution. No Bash command contains `$ARGUMENTS`, request path, capability or parsed value. Assert both cleanup paths are idempotent and leave zero slot while the turn continues.
 
 Exercise raw text containing objective, run ID, project, scope, handoff and digest syntax with quotes, `$()`, backticks, newlines and a sentinel. Assert the raw string round-trips, the CLI parser produces the expected mode and the sentinel is absent. This proves shell safety, not resistance to instructions the user intentionally gives Claude. Also test missing/mismatched session ID, sessions A/B and a slot swapped after prepare. The swap must fail before project/run mutation. Use a fake home and remove any `soma` shim from `PATH`.
 
@@ -484,7 +485,7 @@ Expected: FAIL because the adapter and install set do not implement the contract
 
 - [ ] **Step 3: Rewrite the adapter and finish the single reference**
 
-Add `disable-model-invocation: true`. The dynamic command prepares the session slot before Claude. The adapter copies `$ARGUMENTS` once into the structured envelope at the returned path, with matching session ID, request ID and capability. It does not classify the mode or calculate a hash. It then invokes fixed consume with the same native session ID and follows the CLI result. Print help, status and resume results and stop. Start stops unless result is `READY`; continue stops unless result is `CONTINUE_READY`. Only those states load the long reference once.
+Add `disable-model-invocation: true`. The dynamic command scavenges expired residue, then prepares the session slot before Claude. The adapter copies `$ARGUMENTS` once into the structured envelope at the returned path, with matching session ID, request ID and capability. It does not classify the mode or calculate a hash. In `finally`, it invokes fixed consume with the same native session ID after successful Write, or fixed abort after failed or rejected Write, and follows any consume result. Print help, status and resume results and stop. Start stops unless result is `READY`; continue stops unless result is `CONTINUE_READY`. Only those states load the long reference once.
 
 Keep the state machine body only in `soma-run-orchestration.md`. Its readiness section follows Task 5 ownership and dispatch rules. Add no hook.
 
@@ -519,7 +520,7 @@ Expected: PASS, no sentinel and full rollback parity.
 
 Current docs must name `/soma-run`, all public forms, native session binding, exact `rawArguments` transport, external ephemeral broker effects, project read-only guarantees, post-publication digest, two-step resume, fact-only handoff, orchestrator-owned `T-BASELINE`, executor mutation and installed absolute CLI. Document the same-uid limit and trusted user-intent model. Reject `/soma:run`, public alternate entry, inferred session identity, `UserPromptExpansion` transport, caller-selected broker paths and claims that resume inspection writes project state.
 
-The end-to-end matrix covers new non-Git, legacy dirty, installed and monorepo start; home and invalid scope rejection; real skill prepare/Write/consume with one native session ID; sessions A/B isolation; exact metacharacter and newline round-trip; CLI mode parsing; missing session ID; traversal, slot swap, replay, concurrent consume and signal cleanup; read-only byte and mtime identity; baseline-first gate; checkpoint crash recovery; fact-only handoff; pre-publication digest rejection; drift of every continuity category; zero lazy reads before readiness; one lazy read after readiness; transactional rollback and normal objective reachability.
+The end-to-end matrix covers new non-Git, legacy dirty, installed and monorepo start; home and invalid scope rejection; real skill prepare/Write/consume-or-abort with one native session ID; failed Write abort cleanup; consume failure cleanup; repeated abort; sessions A/B isolation; exact metacharacter and newline round-trip; CLI mode parsing; missing session ID; traversal, slot swap, replay, concurrent consume and signal cleanup; host kill after prepare leaving one inert TTL-bounded slot; consume rejection after expiry without project, Git or run mutation; next-prepare scavenging by atomic rename/claim; stale cleanup preserving a newer lease; read-only byte and mtime identity; baseline-first gate; checkpoint crash recovery; fact-only handoff; pre-publication digest rejection; drift of every continuity category; zero lazy reads before readiness; one lazy read after readiness; transactional rollback and normal objective reachability.
 
 - [ ] **Step 2: Run RED, update docs and wire only integration gaps**
 
@@ -568,9 +569,9 @@ git commit -m "test(entry): prove universal continuity boundary"
 ## Completion gate
 
 - [ ] AC-01 through AC-15 each map to a passing behavioral test above.
-- [ ] All modes use one raw envelope; Bash contains only fixed prepare/consume templates and native `${CLAUDE_SESSION_ID}` substitution.
+- [ ] All modes use one raw envelope; Bash contains only fixed prepare/consume/abort templates and native `${CLAUDE_SESSION_ID}` substitution.
 - [ ] The CLI parser alone classifies mode; `$ARGUMENTS` round-trips and never appears in Bash.
-- [ ] Native-session A/B isolation, traversal, slot swap, replay, concurrency, signal and residual cleanup tests pass.
+- [ ] Native-session A/B isolation, traversal, slot swap, replay, concurrency and signal tests pass; normal flows leave zero slot, while host interruption leaves at most one inert TTL-bounded slot that next prepare scavenges without stale cleanup touching a newer lease.
 - [ ] The lease contains only preparation-time facts; request hashing occurs during consume.
 - [ ] The skill disables model invocation and docs state the trusted user-intent and same-uid limits without a prompt-injection guarantee.
 - [ ] Help, status and resume preserve project bytes and mtimes, Git index, run state, locks and agent records.
