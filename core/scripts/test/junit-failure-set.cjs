@@ -166,22 +166,35 @@ function canonicalRepoRoot(repoRoot) {
   }
 }
 
+function canonicalPath(value) {
+  const raw = value.replace(/^file:\/\//, '');
+  try {
+    return normalizePath(fs.existsSync(raw) ? fs.realpathSync(raw) : raw);
+  } catch {
+    return normalizePath(raw);
+  }
+}
+
 function relativeFile(value, repoRoot) {
   if (!value) return '';
-  let file = normalizePath(value);
+  let file = canonicalPath(value);
   let root = canonicalRepoRoot(repoRoot);
   if (/^[A-Za-z]:\//.test(file) && root.startsWith('/')) file = file.slice(2);
   if (/^[A-Za-z]:\//.test(root) && file.startsWith('/')) root = root.slice(2);
   if (file === root) return '';
   if (file.startsWith(`${root}/`)) return file.slice(root.length + 1);
-  return file.replace(/^\/+/, '');
+  if (!/^(?:[A-Za-z]:)?\//.test(file) && !file.split('/').includes('..')) return file.replace(/^\.\//, '');
+  return '';
 }
 
 function sourceFrom(testcase, detail, repoRoot) {
-  if (testcase.attrs.file) return relativeFile(testcase.attrs.file, repoRoot);
   const location = /(?:file:\/\/)?((?:[A-Za-z]:)?[\\/][^\n():]*?\.(?:[cm]?js|jsx|tsx?|mjs|cjs)):(\d+)(?::\d+)?/g;
-  const match = location.exec(detail);
-  return match ? relativeFile(match[1], repoRoot) : '';
+  const candidates = [testcase.attrs.file, ...Array.from(detail.matchAll(location), match => match[1])];
+  for (const candidate of candidates) {
+    const file = relativeFile(candidate, repoRoot);
+    if (file) return file;
+  }
+  return '';
 }
 
 function normalizeDetail(detail, repoRoot) {
@@ -204,6 +217,24 @@ function sha256(value) {
   return crypto.createHash('sha256').update(value).digest('hex');
 }
 
+function stableMessage(value, repoRoot) {
+  return normalizeDetail(value, repoRoot)
+    .split('\n')
+    .find(line => !/^(?:#|not ok\b|---$|\.\.\.$|duration_ms:|type:|location:|failureType:|exitCode:|signal:|error:|code:)/.test(line)) || '';
+}
+
+function errorIdentity(detail, attrs, repoRoot) {
+  const concrete = /(?:^|\n)\s*cause:\s*([A-Za-z_$][\w.$]*(?:\s+\[[A-Z0-9_]+\])?)\s*:\s*([^\r\n]+)/g;
+  const match = concrete.exec(detail);
+  if (match) {
+    return { errorName: match[1], message: stableMessage(match[2], repoRoot) };
+  }
+  return {
+    errorName: attrs.type || 'failure',
+    message: stableMessage(detail, repoRoot),
+  };
+}
+
 function parseFailureSet(xml, { repoRoot } = {}) {
   if (!repoRoot || typeof repoRoot !== 'string') throw new TypeError('repoRoot is required');
   const root = parseXml(xml);
@@ -214,15 +245,14 @@ function parseFailureSet(xml, { repoRoot } = {}) {
       for (const child of node.children) {
         if (child.name !== 'failure' && child.name !== 'error') continue;
         const detail = normalizeDetail(child.text, repoRoot);
-        const messageSource = child.attrs.message || detail;
-        const message = normalizeDetail(messageSource, repoRoot).split('\n').find(Boolean) || '';
+        const identity = errorIdentity(child.text, child.attrs, repoRoot);
         const fullName = [node.attrs.classname, node.attrs.name].filter(Boolean).join(' ').trim();
         if (!fullName) throw malformed('failing testcase without a name');
         failures.push({
           fullName,
           file: sourceFrom(node, child.text, repoRoot),
-          errorName: child.attrs.type || child.name,
-          message,
+          errorName: identity.errorName,
+          message: identity.message,
           failureSha256: sha256(detail),
         });
       }
@@ -244,7 +274,7 @@ function parseFailureSet(xml, { repoRoot } = {}) {
     if (identities.has(identity)) throw new Error('Duplicate normalized failure identity');
     identities.add(identity);
   }
-  return { schema: 'soma-test-baseline/v1', failures };
+  return { $schema: 'soma-test-baseline/v1', failures };
 }
 
 function cli(argv) {
@@ -262,7 +292,7 @@ function cli(argv) {
   const xml = fs.readFileSync(values['--junit'], 'utf8');
   const baseline = parseFailureSet(xml, { repoRoot: values['--repo'] });
   const output = {
-    schema: baseline.schema,
+    $schema: baseline.$schema,
     candidateSha: values['--candidate'],
     command: COMMAND,
     exitCode: Number(values['--exit']),

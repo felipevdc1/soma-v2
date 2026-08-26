@@ -39,7 +39,8 @@ test('parseFailureSet normalizes duplicate short names, messages, paths, and tra
 
   const result = parseFailureSet(xml, { repoRoot });
 
-  assert.equal(result.schema, 'soma-test-baseline/v1');
+  assert.equal(result.$schema, 'soma-test-baseline/v1');
+  assert.ok(!Object.hasOwn(result, 'schema'));
   assert.equal(result.failures.length, 2);
   assert.deepEqual(result.failures.map(({ fullName, file, errorName, message }) => ({ fullName, file, errorName, message })), [
     { fullName: 'spec.alpha does work', file: 'core/scripts/alpha.test.cjs', errorName: 'AssertionError', message: 'first line' },
@@ -81,6 +82,32 @@ test('parseFailureSet makes a physically reported macOS worktree path repo-relat
   }
 });
 
+test('parseFailureSet ignores an external stack path and selects the first path contained by repoRoot', () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'soma-junit-source-'));
+  try {
+    const realRoot = fs.realpathSync(repoRoot);
+    const xml = fixture(`<testsuite><testcase name="source" classname="spec"><failure type="Error">bad\n at /outside/first.test.cjs:1:2\n at ${realRoot}/core/scripts/__tests__/phase4a-regression.test.cjs:99:4</failure></testcase></testsuite>`);
+    const result = parseFailureSet(xml, { repoRoot });
+    assert.equal(result.failures[0].file, 'core/scripts/__tests__/phase4a-regression.test.cjs');
+  } finally {
+    fs.rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test('parseFailureSet derives stable error identity from a concrete cause instead of JUnit runner boilerplate', () => {
+  const xml = fixture(`<testsuite><testcase name="phase4a" classname="test"><failure type="testCodeFailure" message="test failed">[Error [ERR_TEST_FAILURE]: test failed] {\n  failureType: 'testCodeFailure',\n  cause: AssertionError [ERR_ASSERTION]: Phase 2+3 baseline must have 0 failures\n      at TestContext.&lt;anonymous&gt; (/repo/core/scripts/__tests__/phase4a-regression.test.cjs:77:3)\n}\n# Subtest: TAP runner footer\nnot ok 62 - TAP boilerplate\n  ---\n  duration_ms: 41.4\n  ...</failure></testcase></testsuite>`);
+  const result = parseFailureSet(xml, { repoRoot: '/repo' });
+  assert.deepEqual(result.failures[0], {
+    fullName: 'test phase4a',
+    file: 'core/scripts/__tests__/phase4a-regression.test.cjs',
+    errorName: 'AssertionError [ERR_ASSERTION]',
+    message: 'Phase 2+3 baseline must have 0 failures',
+    failureSha256: result.failures[0].failureSha256,
+  });
+  assert.notEqual(result.failures[0].errorName, 'testCodeFailure');
+  assert.ok(!/TAP boilerplate|duration_ms|test failed/.test(result.failures[0].message));
+});
+
 test('parseFailureSet rejects malformed XML and duplicate normalized identities', () => {
   assert.throws(
     () => parseFailureSet('<testsuites><testcase>', { repoRoot: '/repo' }),
@@ -106,7 +133,7 @@ test('CLI writes a deterministic baseline with exact argv, candidate, exit code,
 
     const baseline = JSON.parse(fs.readFileSync(out, 'utf8'));
     assert.deepEqual(baseline, {
-      schema: 'soma-test-baseline/v1',
+      $schema: 'soma-test-baseline/v1',
       candidateSha: 'a75abe794cf0028675defa377533c8a93933e6e7',
       command: ['node', '--test', '--test-reporter=junit', 'core/scripts/__tests__/*.test.cjs', 'core/hooks/__tests__/*.test.cjs'],
       exitCode: 1,
@@ -119,6 +146,7 @@ test('CLI writes a deterministic baseline with exact argv, candidate, exit code,
       }],
       junitSha256: sha256(xml),
     });
+    assert.ok(!Object.hasOwn(baseline, 'schema'));
     assert.equal(fs.readFileSync(out, 'utf8'), `${JSON.stringify(baseline, null, 2)}\n`);
   } finally {
     fs.rmSync(temp, { recursive: true, force: true });
