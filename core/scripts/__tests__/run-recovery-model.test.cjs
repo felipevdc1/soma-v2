@@ -274,3 +274,63 @@ test('classifyFinding accepts only structurally valid NEW_EVIDENCE', () => {
     /NEW_EVIDENCE|command|fixtureSha256|resultSha256/i
   );
 });
+
+test('classifyFinding rejects a whitespace-only requirement reference', () => {
+  assert.throws(
+    () => classifyFinding({ requirementRef: '   ', classification: 'TECHNICAL_DETERMINISTIC' }),
+    /requirementRef|NEW_EVIDENCE/i
+  );
+});
+
+test('classifyFinding rejects a whitespace-only NEW_EVIDENCE boundary', () => {
+  const validEvidence = {
+    kind: 'NEW_EVIDENCE',
+    boundary: 'core/scripts/run/recovery-model.cjs#classifyFinding',
+    minimalReproduction: minimalReproduction(),
+    observedResult: observedResult(),
+  };
+
+  assert.throws(
+    () => classifyFinding({ ...validEvidence, boundary: '   ' }),
+    /NEW_EVIDENCE|boundary/i
+  );
+});
+
+test('classifyFinding rejects a whitespace-only NEW_EVIDENCE error identity', () => {
+  const validEvidence = {
+    kind: 'NEW_EVIDENCE',
+    boundary: 'core/scripts/run/recovery-model.cjs#classifyFinding',
+    minimalReproduction: minimalReproduction(),
+    observedResult: observedResult(),
+  };
+
+  assert.throws(
+    () =>
+      classifyFinding({
+        ...validEvidence,
+        observedResult: { ...validEvidence.observedResult, errorIdentity: '   ' },
+      }),
+    /NEW_EVIDENCE|observedResult/i
+  );
+});
+
+test('classifyFinding preserves surrounding whitespace in otherwise valid identifiers', () => {
+  const validEvidence = {
+    kind: 'NEW_EVIDENCE',
+    boundary: 'core/scripts/run/recovery-model.cjs#classifyFinding',
+    minimalReproduction: minimalReproduction(),
+    observedResult: observedResult(),
+  };
+
+  assert.deepEqual(
+    classifyFinding({ requirementRef: ' AC-02 ', classification: 'TECHNICAL_DETERMINISTIC' }),
+    { classification: 'TECHNICAL_DETERMINISTIC', requirementRef: ' AC-02 ' }
+  );
+  assert.deepEqual(
+    classifyFinding({ ...validEvidence, boundary: ' core/scripts/run/recovery-model.cjs#classifyFinding ' }),
+    {
+      classification: 'NORMATIVE_DECISION',
+      requirementRef: 'NEW_EVIDENCE: core/scripts/run/recovery-model.cjs#classifyFinding ',
+    }
+  );
+});
