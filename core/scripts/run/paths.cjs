@@ -19,6 +19,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const { safeRunId, assertSafeRunId } = require('./run-id.cjs');
 
 /**
  * @param {string} projectRoot absolute path to the project root
@@ -44,11 +45,13 @@ function isLegacyProject(projectRoot) {
  *   reportsDir: string,
  *   dispatchesDir: string,
  *   recoveryDir: string,
+ *   runIdentitiesDir: string,
  *   installStateFile: string,
  *   legacy: boolean,
  *   runReportsDir?: string,
  *   runDispatchesDir?: string,
  *   runStateFile?: string,
+ *   runIdentityFile?: string,
  * }}
  */
 function resolveSomaPaths(projectRoot, runId) {
@@ -56,6 +59,7 @@ function resolveSomaPaths(projectRoot, runId) {
   const reportsDir = path.join(somaDir, 'reports');
   const dispatchesDir = path.join(somaDir, 'dispatches');
   const recoveryDir = path.join(somaDir, 'recovery');
+  const runIdentitiesDir = path.join(somaDir, 'run-identities');
 
   const resolved = {
     projectRoot,
@@ -63,15 +67,18 @@ function resolveSomaPaths(projectRoot, runId) {
     reportsDir,
     dispatchesDir,
     recoveryDir,
+    runIdentitiesDir,
     installStateFile: path.join(somaDir, 'install-state.json'),
     legacy: isLegacyProject(projectRoot),
   };
 
-  if (runId) {
-    resolved.runReportsDir = path.join(reportsDir, runId);
-    resolved.runDispatchesDir = path.join(dispatchesDir, runId);
-    resolved.runRecoveryDir = path.join(recoveryDir, runId);
-    resolved.runStateFile = path.join(somaDir, `run-state-${runId}.json`);
+  if (arguments.length >= 2) {
+    const exactRunId = assertSafeRunId(runId);
+    resolved.runReportsDir = path.join(reportsDir, exactRunId);
+    resolved.runDispatchesDir = path.join(dispatchesDir, exactRunId);
+    resolved.runRecoveryDir = path.join(recoveryDir, exactRunId);
+    resolved.runStateFile = path.join(somaDir, `run-state-${exactRunId}.json`);
+    resolved.runIdentityFile = path.join(runIdentitiesDir, `${exactRunId}.json`);
   }
 
   return resolved;
@@ -128,7 +135,7 @@ function resolveRunIdFromLock(projectRoot) {
     return { status: 'invalid_json', lockPath };
   }
 
-  if (!lock || typeof lock.runId !== 'string' || lock.runId.length === 0) {
+  if (!lock || !safeRunId(lock.runId)) {
     return { status: 'invalid_run_id', lockPath };
   }
 
