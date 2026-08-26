@@ -161,6 +161,24 @@ test('evaluateNoProgress stops when the same fingerprint survives a rotated exec
   assert.match(result.reason, /same.*fingerprint|rotated.*executor/i);
 });
 
+test('evaluateNoProgress continues when the rotated executor closes the same fingerprint', () => {
+  const result = evaluateNoProgress({
+    fingerprint: 'same-finding',
+    generations: [
+      { previousOpen: ['same-finding'], currentOpen: ['same-finding'] },
+      { previousOpen: ['same-finding'], currentOpen: [] },
+    ],
+    executors: {
+      originalExecutor: 'executor-a',
+      rotatedExecutor: 'executor-b',
+      rotationsUsed: 1,
+      attemptsByExecutor: { 'executor-a': 2, 'executor-b': 2 },
+    },
+  });
+
+  assert.equal(result.stop, false);
+});
+
 test('evaluateNoProgress stops after two consecutive non-decreasing generations even when fingerprints change', () => {
   const result = evaluateNoProgress({
     fingerprint: 'newest-finding',
@@ -198,4 +216,61 @@ test('evaluateNoProgress does not let task or session names reset a progress his
   });
 
   assert.equal(result.stop, true);
+});
+
+test('fingerprintFinding excludes transient nested reproduction and result metadata', () => {
+  const cleanFinding = {
+    $schema: 'soma-finding-fingerprint/v1',
+    requirementRef: 'AC-06',
+    minimalReproduction: {
+      command: ['node', '--test', 'core/scripts/__tests__/run-recovery-model.test.cjs'],
+      fixtureSha256: 'a'.repeat(64),
+    },
+    boundary: 'core/scripts/run/recovery-model.cjs#fingerprintFinding',
+    observedResult: {
+      errorIdentity: 'ERR_ASSERTION',
+      resultSha256: 'b'.repeat(64),
+    },
+  };
+  const decoratedFinding = {
+    ...cleanFinding,
+    minimalReproduction: { ...cleanFinding.minimalReproduction, tapOrdinal: 42, durationMs: 11 },
+    observedResult: {
+      ...cleanFinding.observedResult,
+      title: 'prose must not identify a finding',
+      candidateSha: 'c'.repeat(40),
+    },
+  };
+
+  const clean = fingerprintFinding(cleanFinding);
+  const decorated = fingerprintFinding(decoratedFinding);
+
+  assert.deepEqual(decorated, clean);
+  assert.deepEqual(JSON.parse(decorated.canonicalJson), cleanFinding);
+});
+
+test('classifyFinding accepts only structurally valid NEW_EVIDENCE', () => {
+  const validEvidence = {
+    kind: 'NEW_EVIDENCE',
+    boundary: 'core/scripts/run/recovery-model.cjs#classifyFinding',
+    minimalReproduction: {
+      command: ['node', '--test', 'core/scripts/__tests__/run-recovery-model.test.cjs'],
+      fixtureSha256: 'd'.repeat(64),
+    },
+    observedResult: {
+      errorIdentity: 'ERR_ASSERTION',
+      resultSha256: 'e'.repeat(64),
+    },
+  };
+
+  assert.doesNotThrow(() => classifyFinding(validEvidence));
+  assert.throws(
+    () =>
+      classifyFinding({
+        ...validEvidence,
+        minimalReproduction: { command: [null], fixtureSha256: 'not-a-sha' },
+        observedResult: { errorIdentity: 'ERR_ASSERTION', resultSha256: 'also-not-a-sha' },
+      }),
+    /NEW_EVIDENCE|command|fixtureSha256|resultSha256/i
+  );
 });
