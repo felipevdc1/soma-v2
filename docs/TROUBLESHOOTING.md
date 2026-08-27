@@ -108,7 +108,7 @@ If the failure is a code logic issue, re-read the spec and amend `[NEEDS CLARIFI
 **Fix:** Wait for one of the running agents to complete before dispatching the next. Check in-flight agents:
 
 ```bash
-cat /tmp/soma-state-{sessionId}.json | jq '.in_flight_agents'
+cat .soma/run-state-<runId>.json | jq '.in_flight_agents'
 ```
 
 If you are on a machine where the thermal limit does not apply (e.g., a CI server or remote compute), create a bypass marker (requires explicit authorization):
@@ -269,7 +269,7 @@ When filing a bug, include:
 |---|---|
 | `~/.claude/logs/insight-coupling-{YYYY-MM-DD}.jsonl` | Insight-action coupling telemetry (schema `insight-coupling/v1`) |
 | `~/.claude/logs/article-xi-{YYYY-MM-DD}.jsonl` | Capture Before Defer telemetry |
-| `/tmp/soma-state-{sessionId}.json` | Active run state machine snapshot (ephemeral) |
+| `{project}/.soma/run-state-{runId}.json` | Durable active run state; diagnostics, checkpoints and handoffs remain under the same project `.soma/` tree |
 | `/tmp/soma-log-{runId}.jsonl` | Per-run event log including thermal bypass usage (ephemeral) |
 | `~/.soma-v2/.snapshots/{ISO-timestamp}/` | Rollback artifacts created by `rollback.cjs` (per write-mode operation) |
 | `~/.soma-v2-backups/{timestamp}/` | Full pre-install backups created by `install.sh` Phase 1 |

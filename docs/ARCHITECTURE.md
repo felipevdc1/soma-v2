@@ -173,7 +173,7 @@ IDLE
 
 ```bash
 touch /tmp/soma-diagnostic-{runId}-continue    # resume with hint
-touch /tmp/soma-diagnostic-{runId}-rollback    # revert all commits from this run
+touch /tmp/soma-diagnostic-{runId}-rollback    # request executor-owned rollback
 touch /tmp/soma-diagnostic-{runId}-replan      # return to Step 1 with spec amendments
 ```
 
@@ -199,6 +199,7 @@ SOMA maintains several layers of memory:
 
 **Project-level:**
 - `{project}/.soma/run-state-{runId}.json` — durable current state keyed by run, not session
+- `{project}/.soma/diagnostics/` — durable residual findings and named human decisions
 - `{project}/.soma/checkpoints/{runId}/{sequence}.json` — immutable transition evidence
 - `{project}/.soma/handoffs/{runId}/{generation}/` — authoritative JSON plus derived Markdown for exact resume
 - `{project}/FAMILY_DOC.md` — persistent cross-run memory shared by all agents on the project. Patterns, pitfalls, decisions, session logs. Every agent receives its relevant sections via `subagent-init.cjs`.

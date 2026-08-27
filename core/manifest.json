@@ -6,7 +6,7 @@
     {
       "id": "core.constitution",
       "path": "docs/constitution.md",
-      "sha256": "c17dde1bfe267e330c117d5e6af1ce37a74210afcc1bcdfbea149465e91794db",
+      "sha256": "234d56532ff8897d5a0bf5e42aec6a2cc413a0ce074a08ac91fd37d4dbd6e5da",
       "sourceMtime": "2026-05-05T00:00:00Z",
       "sourceSha256": "4ba48405dac980928d9154f7212bc191edfa1cd311df9972ba075862fbace6ae",
       "targets": [
@@ -60,7 +60,7 @@
     {
       "id": "core.10-step-protocol",
       "path": "docs/10-step-protocol.md",
-      "sha256": "eb5ed014b824498dcfa642885d3631bebeace576c5c850b4e4a995072253a0f6",
+      "sha256": "61f566e2b1e153ae5079102d3f7fa7973c0e6334942cea496811f02d64a7e5a3",
       "sourceMtime": null,
       "sourceSha256": null,
       "targets": [

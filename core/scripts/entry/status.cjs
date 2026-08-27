@@ -58,9 +58,26 @@ function exactRelative(projectRoot, absolutePath) {
   return path.relative(projectRoot, absolutePath).split(path.sep).join('/');
 }
 
+function durableDirectory(projectRoot, segments = []) {
+  let current = path.join(projectRoot, '.soma');
+  for (const segment of [null, ...segments]) {
+    if (segment !== null) current = path.join(current, segment);
+    const stat = fs.lstatSync(current);
+    if (stat.isSymbolicLink() || !stat.isDirectory()) {
+      throw new Error(`${current} is not a durable directory`);
+    }
+  }
+  return current;
+}
+
+function readDurableRegular(projectRoot, parentSegments, fileName) {
+  return readRegular(path.join(durableDirectory(projectRoot, parentSegments), fileName));
+}
+
 function readIdentityFacts(projectRoot, runId) {
-  const file = path.join(projectRoot, '.soma', 'run-identities', `${runId}.json`);
-  const bytes = readRegular(file);
+  const directory = durableDirectory(projectRoot, ['run-identities']);
+  const file = path.join(directory, `${runId}.json`);
+  const bytes = readDurableRegular(projectRoot, ['run-identities'], `${runId}.json`);
   let identity;
   try { identity = JSON.parse(bytes); }
   catch (error) { throw new Error(`run identity is invalid: ${error.message}`); }
@@ -73,17 +90,22 @@ function readIdentityFacts(projectRoot, runId) {
 }
 
 function readHandoffFacts(projectRoot, runId, observedState, observedIdentity) {
-  const parent = path.join(projectRoot, '.soma', 'handoffs', runId);
+  let parent;
+  try { parent = durableDirectory(projectRoot, ['handoffs', runId]); }
+  catch (error) {
+    if (error.code === 'ENOENT') return { checkpointSequence: null, handoffGeneration: null };
+    throw error;
+  }
   const generations = numericDirectories(parent);
   if (generations.length === 0) return { checkpointSequence: null, handoffGeneration: null };
   const generation = generations.at(-1);
-  const directory = path.join(parent, String(generation));
+  const directory = durableDirectory(projectRoot, ['handoffs', runId, String(generation)]);
   const handoffPath = path.join(directory, 'handoff.json');
-  const handoffBytes = readRegular(handoffPath);
+  const handoffBytes = readDurableRegular(projectRoot, ['handoffs', runId, String(generation)], 'handoff.json');
   let handoff;
   try { handoff = JSON.parse(handoffBytes); }
   catch (error) { throw new Error(`handoff JSON is invalid: ${error.message}`); }
-  const markdown = readRegular(path.join(directory, 'handoff.md')).toString('utf8');
+  const markdown = readDurableRegular(projectRoot, ['handoffs', runId, String(generation)], 'handoff.md').toString('utf8');
   const validation = validateHandoff(handoff);
   if (!validation.valid || handoff.runId !== runId || handoff.generation !== generation ||
       handoffBytes.toString('utf8') !== canonicalJson(handoff) ||
@@ -91,12 +113,16 @@ function readHandoffFacts(projectRoot, runId, observedState, observedIdentity) {
     throw new Error(`handoff is invalid: ${validation.violations.join('; ')}`);
   }
   const checkpointPath = path.resolve(projectRoot, handoff.checkpoint.path);
-  const checkpointRoot = path.join(projectRoot, '.soma', 'checkpoints', runId);
+  const checkpointRoot = durableDirectory(projectRoot, ['checkpoints', runId]);
   const relative = path.relative(checkpointRoot, checkpointPath);
   if (path.isAbsolute(relative) || relative.startsWith(`..${path.sep}`) || relative === '..') {
     throw new Error('checkpoint path escapes its durable run');
   }
-  const checkpointBytes = readRegular(checkpointPath);
+  const checkpointSegments = relative.split(path.sep);
+  const checkpointName = checkpointSegments.pop();
+  const checkpointBytes = readDurableRegular(
+    projectRoot, ['checkpoints', runId, ...checkpointSegments], checkpointName
+  );
   let checkpoint;
   try { checkpoint = JSON.parse(checkpointBytes); }
   catch (error) { throw new Error(`checkpoint is invalid: ${error.message}`); }
@@ -126,9 +152,12 @@ function readHandoffFacts(projectRoot, runId, observedState, observedIdentity) {
 }
 
 function durableStatus(projectRoot) {
-  const somaDir = path.join(projectRoot, '.soma');
+  let somaDir;
   let entries;
-  try { entries = fs.readdirSync(somaDir, { withFileTypes: true }); }
+  try {
+    somaDir = durableDirectory(projectRoot);
+    entries = fs.readdirSync(somaDir, { withFileTypes: true });
+  }
   catch (error) {
     if (error.code === 'ENOENT') return { state: 'NO_DURABLE_RUN' };
     return diagnostic('DURABLE_STATUS_INVALID', `durable status is invalid: ${error.message}`);
@@ -148,7 +177,7 @@ function durableStatus(projectRoot) {
   }
   try {
     const candidate = candidates[0];
-    const stateBytes = readRegular(candidate.file);
+    const stateBytes = readDurableRegular(projectRoot, [], path.basename(candidate.file));
     let state;
     try { state = JSON.parse(stateBytes); }
     catch (error) { throw new Error(`run state is invalid: ${error.message}`); }

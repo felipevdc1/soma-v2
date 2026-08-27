@@ -40,7 +40,7 @@ Pause and re-plan when:
 - One executor per task; duas tentativas maximum (initial plus one correction), sem escalation automática.
 - Run deterministic checks before one integrated reviewer. A second reviewer requires an independently declared risk and reads the same commit.
 - Record every dispatch with `soma run dispatch-record begin` before spawn and `dispatch-record end` before transition; conversational output is short and detailed proof stays in referenced artifacts.
-- A residual blocker after the correction writes `/tmp/soma-diagnostic-{runId}.json` with `candidate`, `proofs`, `residualFinding`, `nextDecision`, and `dispatchRecord`, then transitions to `PAUSED_DIAGNOSTIC`.
+- A residual blocker after the correction records `candidate`, `proofs`, `residualFinding`, `nextDecision`, and `dispatchRecord` in project `.soma/diagnostics/`, checkpoints and handoffs, then transitions to `PAUSED_DIAGNOSTIC`. `/tmp/soma-diagnostic-{runId}-{continue|rollback|replan}` is only a one-shot human control signal.
 
 ---
 
@@ -56,7 +56,7 @@ if count == 1: RETRY
   - Return to step.
 
 if count >= 2: STOP EFFICIENTLY
-  - Write /tmp/soma-diagnostic-{runId}.json with candidate, proofs, residualFinding, nextDecision, and dispatchRecord.
+  - Write candidate, proofs, residualFinding, nextDecision, and dispatchRecord to project `.soma/diagnostics/` and the matching `.soma/checkpoints/{runId}/` and `.soma/handoffs/{runId}/` records.
   - Transition to PAUSED_DIAGNOSTIC.
   - Preserve worktrees + logs + specs.
 ```

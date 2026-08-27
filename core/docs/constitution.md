@@ -250,7 +250,7 @@ Referência: `onde-t-salvo-os-idempotent-robin.md` §Human Gates.
 ## Article X — Stop eficiente e handoff durável
 
 ### (a) Statement
-Cada task tem no máximo **duas tentativas**: inicial e uma correção. Qualquer blocker residual após a correção transita para `PAUSED_DIAGNOSTIC`, sem escalation automática nem novo agente automático. O controller reutiliza `/tmp/soma-diagnostic-{runId}.json` como handoff durável com `candidate`, `proofs`, `residualFinding`, `nextDecision` e referência ao `dispatch-record` da tentativa.
+Cada task tem no máximo **duas tentativas**: inicial e uma correção. Qualquer blocker residual após a correção transita para `PAUSED_DIAGNOSTIC`, sem escalation automática nem novo agente automático. A autoridade durável da run é o projeto: `.soma/run-state-{runId}.json`, `.soma/diagnostics/`, `.soma/checkpoints/{runId}/` e `.soma/handoffs/{runId}/`, que preservam `candidate`, `proofs`, `residualFinding`, `nextDecision` e a referência ao `dispatch-record` da tentativa. Markers `/tmp/soma-diagnostic-{runId}-{continue|rollback|replan}` são somente sinais humanos one-shot, nunca handoff ou evidência.
 
 ### (b) Rationale
 Amendment 1.3.0 (Feature 025) reduz trabalho repetido sem reduzir a prova: uma correção testada é suficiente para distinguir um defeito local de um problema que exige decisão humana. O handoff preserva o candidato e as provas para retomada, sem criar ledger paralelo.
@@ -258,17 +258,17 @@ Amendment 1.3.0 (Feature 025) reduz trabalho repetido sem reduzir a prova: uma c
 Referência: CLAUDE.md Recovery Protocol; `feedback_agent_teams_workflow.md` R5; Failure Mode #5.
 
 ### (c) Enforcement mechanism (HARD)
-- Controller `soma-run` tracks failure count per step in `/tmp/soma-state-{sessionId}.json`:
+- Controller `soma-run` tracks failure count per step em `.soma/run-state-{runId}.json` e publica diagnóstico, checkpoint e handoff duráveis no mesmo projeto:
   ```json
   {"step": "4_WAVES", "attempts": [{"agent": "sonnet-1", "status": "FAILED", "reason": "..."}, ...]}
   ```
 - `attempts.length >= 2 && última tentativa failed` → transita `PAUSED_DIAGNOSTIC`.
-- O snapshot reutilizado em `/tmp/soma-diagnostic-{runId}.json` contém `candidate`, `proofs`, `residualFinding`, `nextDecision` e `dispatchRecord`.
+- O diagnóstico e handoff duráveis contêm `candidate`, `proofs`, `residualFinding`, `nextDecision` e `dispatchRecord`.
 
 ### (d) Violation handling
 - `PAUSED_DIAGNOSTIC` → the user decides via marker: `/tmp/soma-diagnostic-{runId}-{continue|rollback|replan}`.
   - `continue` → controller retoma com hint humano no contexto.
-  - `rollback` → controller reverte commits da run (reset para baseline SHA) + marca run como FAILED.
+  - `rollback` → o coordinator registra `dispatch-record begin`, despacha exatamente um `Agent` executor, aguarda `HEAD` e prova de status, registra `dispatch-record end` e então transita. O executor valida repository root, marker, escopo do worktree e `baselineSha` de 40 hex; só ele faz leituras ou mutações Git de rollback.
   - `replan` → controller volta pra Step 1, pedindo the user emendar spec.
 - Todo evento `PAUSED_DIAGNOSTIC` é logado no FAMILY_DOC do projeto (seção Pitfalls) automaticamente.
 

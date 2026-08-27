@@ -137,11 +137,14 @@ test('PAUSED_DIAGNOSTIC delegates rollback through one bounded executor contract
   const start = source.indexOf('## PAUSED_DIAGNOSTIC');
   const end = source.indexOf('## Worked example', start);
   const section = source.slice(start, end);
-  assert.match(section, /dispatch-record begin[\s\S]{0,700}Agent[\s\S]{0,700}dispatch-record end/i);
+  const begin = section.indexOf('dispatch-record begin');
+  const endRecord = section.indexOf('dispatch-record end');
+  assert.ok(begin >= 0 && endRecord > begin, 'dispatch record brackets the rollback Agent');
+  assert.equal((section.match(/\bAgent\b/g) || []).length, 1, 'rollback dispatches exactly one Agent');
   assert.match(section, /executor[\s\S]{0,260}git reset --hard <baselineSha>/i);
   assert.match(section, /baselineSha[\s\S]{0,180}\^\[0-9a-f\]\{40\}\$/i);
   assert.match(section, /repository root[\s\S]{0,260}(?:marker|worktree scope)/i);
   assert.match(section, /HEAD[\s\S]{0,180}status proof/i);
   assert.match(section, /(?:failure|falhar)[\s\S]{0,180}PAUSED_DIAGNOSTIC[\s\S]{0,180}no automatic (?:extra )?agent/i);
-  assert.doesNotMatch(section, /coordinator[^\n]{0,120}git reset/i);
+  assert.doesNotMatch(section, /(?:coordinator|controller)[\s\S]{0,120}git (?:reset|revert)/i);
 });

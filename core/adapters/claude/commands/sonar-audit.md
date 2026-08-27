@@ -28,7 +28,7 @@ Ele verifica separação de responsabilidades, drift contra o plano, qualidade d
 - Qualquer CRITICAL ou `spec_violation` antes de uma correção → Step 9 para uma única correção e revalidação.
 - Blocker residual após a correção → `PAUSED_DIAGNOSTIC`; não despache novo agente automaticamente.
 
-O handoff durável reutiliza `/tmp/soma-diagnostic-{runId}.json`, com:
+O handoff durável usa os artefatos do projeto `.soma/diagnostics/`, `.soma/checkpoints/{runId}/` e `.soma/handoffs/{runId}/`, com:
 
 ```json
 {

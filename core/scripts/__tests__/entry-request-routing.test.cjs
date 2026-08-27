@@ -203,6 +203,67 @@ test('status preserves a valid pre-handoff run with null durable generations', (
   } finally { fs.rmSync(project, { recursive: true, force: true }); }
 });
 
+test('status rejects symlinked durable ancestors and leaf identity without mutating either tree', () => {
+  const project = temp('soma-entry-status-symlink-');
+  const external = temp('soma-entry-status-external-');
+  initRepo(project);
+  const runId = 'run-status-symlink';
+  const state = {
+    $schema: 'soma-state/v2', runId, sessionId: 's', startedAt: '2026-08-27T00:00:00Z',
+    currentState: 'PAUSED_DIAGNOSTIC', lastTransitionAt: '2026-08-27T00:01:00Z',
+    activeDispatchIds: [], failureCountsByStep: {}, fixLoopIterations: 0,
+    snapshots: [], humanGatesApproved: {}, decisions: [], reports: [],
+  };
+  const identity = `${JSON.stringify({ $schema: 'soma-run-identity/v1', runId }, null, 2)}\n`;
+  const writeRun = soma => {
+    fs.mkdirSync(path.join(soma, 'run-identities'), { recursive: true });
+    fs.writeFileSync(path.join(soma, `run-state-${runId}.json`), `${JSON.stringify(state)}\n`);
+    fs.writeFileSync(path.join(soma, 'run-identities', `${runId}.json`), identity);
+  };
+  const cases = [
+    ['soma root', () => {
+      const externalSoma = path.join(external, 'soma-root');
+      writeRun(externalSoma);
+      fs.symlinkSync(externalSoma, path.join(project, '.soma'), 'dir');
+    }],
+    ['run identities ancestor', () => {
+      const soma = path.join(project, '.soma');
+      fs.mkdirSync(soma, { recursive: true });
+      fs.writeFileSync(path.join(soma, `run-state-${runId}.json`), `${JSON.stringify(state)}\n`);
+      const externalIdentities = path.join(external, 'identities-ancestor');
+      fs.mkdirSync(externalIdentities, { recursive: true });
+      fs.writeFileSync(path.join(externalIdentities, `${runId}.json`), identity);
+      fs.symlinkSync(externalIdentities, path.join(soma, 'run-identities'), 'dir');
+    }],
+    ['identity leaf', () => {
+      const soma = path.join(project, '.soma');
+      fs.mkdirSync(path.join(soma, 'run-identities'), { recursive: true });
+      fs.writeFileSync(path.join(soma, `run-state-${runId}.json`), `${JSON.stringify(state)}\n`);
+      const externalIdentity = path.join(external, 'identity-leaf.json');
+      fs.writeFileSync(externalIdentity, identity);
+      fs.symlinkSync(externalIdentity, path.join(soma, 'run-identities', `${runId}.json`));
+    }],
+  ];
+  try {
+    for (const [label, arrange] of cases) {
+      fs.rmSync(path.join(project, '.soma'), { recursive: true, force: true });
+      fs.rmSync(external, { recursive: true, force: true });
+      fs.mkdirSync(external, { recursive: true });
+      arrange();
+      const projectBefore = snapshotFiles(project);
+      const externalBefore = snapshotFiles(external);
+      const result = routeEntryRequest({ mode: 'status', project }, { cwd: project });
+      assert.equal(result.run.state, 'DURABLE_STATUS_INVALID', label);
+      assert.match(result.run.diagnostic, /symlink|durable|identity/i, label);
+      assert.deepEqual(snapshotFiles(project), projectBefore, label);
+      assert.deepEqual(snapshotFiles(external), externalBefore, label);
+    }
+  } finally {
+    fs.rmSync(project, { recursive: true, force: true });
+    fs.rmSync(external, { recursive: true, force: true });
+  }
+});
+
 test('status diagnoses corrupt or ambiguous durable state without guessing or mutating', () => {
   const project = temp('soma-entry-status-invalid-');
   initRepo(project);

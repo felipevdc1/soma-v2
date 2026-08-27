@@ -16,6 +16,17 @@ const SONAR = path.join(ROOT, 'adapters', 'claude', 'commands', 'sonar-audit.md'
 const AMENDMENT = path.join(ROOT, 'docs', 'constitution-amendments', '1.3.0-efficient-orchestration.md');
 const MANIFEST = path.join(ROOT, 'manifest.json');
 const TROUBLESHOOTING = path.resolve(ROOT, '..', 'docs', 'TROUBLESHOOTING.md');
+const PROJECT_ROOT = path.resolve(ROOT, '..');
+const GOVERNING_SOURCES = [
+  path.join(ROOT, 'docs', 'constitution.md'),
+  path.join(ROOT, 'docs', '10-step-protocol.md'),
+  path.join(ROOT, 'docs', 'constitution-amendments', '1.3.0-efficient-orchestration.md'),
+  path.join(ROOT, 'adapters', 'claude', 'commands', 'sonar-audit.md'),
+  CLAUDE_RUN,
+  TROUBLESHOOTING,
+  path.join(PROJECT_ROOT, 'docs', 'QUICKSTART.md'),
+  path.join(PROJECT_ROOT, 'docs', 'ARCHITECTURE.md'),
+];
 
 function read(file) {
   return fs.readFileSync(file, 'utf8');
@@ -101,4 +112,14 @@ test('troubleshooting documents the exhausted initial attempt plus one correctio
   assert.doesNotMatch(section, /Task stuck after 3 agent failures/i);
   assert.doesNotMatch(section, /3 consecutive failures[\s\S]{0,160}PAUSED_DIAGNOSTIC/i);
   assert.doesNotMatch(section, /\/tmp\/soma-state-\{sessionId\}\.json/i);
+});
+
+test('active governing sources make project .soma the only durable run authority', () => {
+  for (const file of GOVERNING_SOURCES) {
+    const source = read(file);
+    assert.match(source, /\.soma\/(?:run-state-|diagnostics|checkpoints|handoffs)/, file);
+    assert.doesNotMatch(source, /\/tmp\/soma-state-\{sessionId\}\.json/, file);
+    assert.doesNotMatch(source, /\/tmp\/soma-diagnostic-\{runId\}\.json/, file);
+    assert.doesNotMatch(source, /(?:coordinator|controller)[\s\S]{0,160}git (?:reset|revert)/i, file);
+  }
 });

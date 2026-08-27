@@ -251,6 +251,7 @@ function buildFamilyDocContent(cwd, budgetChars) {
 
 function buildSpecAcContent(prompt, budgetChars) {
   try {
+    // Legacy /tmp state is best-effort compatibility context, never run authority.
     const sessionId = process.env.CLAUDE_SESSION_ID || process.env.CK_SESSION_ID || '';
     if (!sessionId) return null;
     let state;
@@ -275,7 +276,7 @@ function buildSpecAcContent(prompt, budgetChars) {
     if (!collected.length) return null;
     const body = collected.join('\n');
     const snippet = body.length > budgetChars ? body.slice(0, budgetChars) + '\n… [truncated]' : body;
-    return `## Spec ACs (${ids.join(', ')})\n${snippet}`;
+    return `## Non-authoritative compatibility context — Spec ACs (${ids.join(', ')})\n${snippet}`;
   } catch (_) { return null; }
 }
 

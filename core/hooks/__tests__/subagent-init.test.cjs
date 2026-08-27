@@ -90,6 +90,7 @@ test('4. soma-state + task-id in prompt → matching ACs injected', () => {
     assert.ok(result.includes('AC-01'), 'includes AC-01');
     assert.ok(result.includes('AC-02'), 'includes AC-02');
     assert.ok(!result.includes('AC-03'), 'does not include T-2 ACs');
+    assert.match(result, /non-authoritative compatibility context/i);
   } finally {
     delete process.env.CLAUDE_SESSION_ID;
     unlinkSafe(specPath);
