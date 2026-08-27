@@ -2,8 +2,8 @@
 
 const HANDOFF_KEYS = [
   '$schema', 'blocker', 'checkpoint', 'commitProofs', 'currentState', 'dispatches',
-  'generation', 'git', 'nextDecision', 'nextTask', 'proofs', 'resumeCommand',
-  'runId', 'runState', 'tasks',
+  'generation', 'git', 'lastCompletedTask', 'nextDecision', 'nextTask', 'proofs',
+  'resumeCommand', 'runId', 'runIdentity', 'runState', 'tasks',
 ];
 
 function validSha(value) {
@@ -19,10 +19,12 @@ function validateHandoff(value) {
   if (!Number.isInteger(value.generation) || value.generation < 1) violations.push('generation is invalid');
   if (!value.checkpoint || !validSha(value.checkpoint.sha256) || !Number.isInteger(value.checkpoint.sequence) || typeof value.checkpoint.path !== 'string') violations.push('checkpoint is invalid');
   if (!value.runState || !validSha(value.runState.sha256) || typeof value.runState.path !== 'string') violations.push('runState is invalid');
+  if (!value.runIdentity || !validSha(value.runIdentity.sha256) || typeof value.runIdentity.path !== 'string') violations.push('runIdentity is invalid');
   if (!value.git || !validSha(value.git.dirtyDigest)) violations.push('git facts are invalid');
   if (!Array.isArray(value.dispatches) || !Array.isArray(value.proofs) || !Array.isArray(value.tasks) || !Array.isArray(value.commitProofs)) violations.push('handoff arrays are invalid');
   if (value.resumeCommand !== `/soma-run --resume ${value.runId}`) violations.push('resumeCommand is invalid');
   if (!(value.nextTask === null || typeof value.nextTask === 'string')) violations.push('nextTask is invalid');
+  if (!(value.lastCompletedTask === null || typeof value.lastCompletedTask === 'string')) violations.push('lastCompletedTask is invalid');
   return { valid: violations.length === 0, violations };
 }
 
@@ -33,6 +35,7 @@ function renderHandoffMarkdown(handoff) {
     `Checkpoint: ${handoff.checkpoint.sequence}`,
     `State: ${handoff.currentState}`,
     `Next task: ${handoff.nextTask === null ? 'none' : handoff.nextTask}`,
+    `Last completed task: ${handoff.lastCompletedTask === null ? 'none' : handoff.lastCompletedTask}`,
     `Git HEAD: ${handoff.git.head === null ? 'none' : handoff.git.head}`,
     '',
     'Resume exactly with:',

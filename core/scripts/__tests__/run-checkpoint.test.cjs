@@ -3,7 +3,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
-const { spawnSync } = require('node:child_process');
+const { spawn, spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -22,6 +22,17 @@ function git(cwd, args) {
 
 function sha(bytes) {
   return crypto.createHash('sha256').update(bytes).digest('hex');
+}
+
+function spawnRun(args, cwd) {
+  return new Promise(resolve => {
+    const child = spawn('node', [RUN_CLI, ...args], { cwd, encoding: 'utf8' });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', chunk => { stdout += chunk; });
+    child.stderr.on('data', chunk => { stderr += chunk; });
+    child.on('close', status => resolve({ status, stdout, stderr }));
+  });
 }
 
 function makeFixture(runId = 'run-lean-checkpoint') {
@@ -89,6 +100,8 @@ test('checkpoint derives hashes, closed dispatches, proofs and Git facts into im
     assert.equal(checkpoint.$schema, 'soma-checkpoint/v1');
     assert.equal(checkpoint.runId, fixture.runId);
     assert.equal(checkpoint.sequence, 1);
+    assert.equal(checkpoint.lastCompletedTask, 'T-1');
+    assert.deepEqual(checkpoint.tasks.map(task => task.id), ['T-1', 'T-2']);
     assert.equal(checkpoint.runState.sha256, sha(fs.readFileSync(fixture.statePath)));
     assert.equal(checkpoint.dispatches.length, 1);
     assert.equal(checkpoint.dispatches[0].taskId, 'T-1');
@@ -159,5 +172,66 @@ test('checkpoint accepts only the exact soma-checkpoint-input/v1 shape and match
     }
   } finally {
     fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test('checkpoint refuses nextTask null while work remains unless blocker and named nextDecision make the pause explicit', () => {
+  const fixture = makeFixture('run-checkpoint-task-coherence');
+  try {
+    for (const invalid of [
+      { ...fixture.input, nextTask: null },
+      { ...fixture.input, nextTask: null, blocker: 'waiting', nextDecision: null },
+      { ...fixture.input, nextTask: 'T-missing' },
+      { ...fixture.input, nextTask: 'T-1' },
+    ]) {
+      fs.writeFileSync(fixture.inputPath, JSON.stringify(invalid));
+      const result = run(['checkpoint', '--run', fixture.runId, '--input-file', fixture.inputPath], fixture.root);
+      assert.notEqual(result.status, 0, JSON.stringify(invalid));
+      assert.match(result.stderr, /CHECKPOINT_INPUT_INVALID/);
+    }
+    fs.writeFileSync(fixture.inputPath, JSON.stringify({
+      ...fixture.input, nextTask: null, blocker: 'awaiting policy', nextDecision: 'Choose policy A or B',
+    }));
+    assert.equal(run(['checkpoint', '--run', fixture.runId, '--input-file', fixture.inputPath], fixture.root).status, 0);
+  } finally {
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test('same-sequence concurrent checkpoint publishers produce one immutable winner', async () => {
+  const fixture = makeFixture('run-checkpoint-concurrent');
+  try {
+    const { reserveRunIdentity } = require('../run/run-id.cjs');
+    reserveRunIdentity({ projectRoot: fixture.root, runId: fixture.runId, allowNew: true });
+    const results = await Promise.all([
+      spawnRun(['checkpoint', '--run', fixture.runId, '--input-file', fixture.inputPath], fixture.root),
+      spawnRun(['checkpoint', '--run', fixture.runId, '--input-file', fixture.inputPath], fixture.root),
+    ]);
+    assert.deepEqual(results.map(item => item.status).sort(), [0, 2]);
+    const loser = results.find(item => item.status === 2);
+    assert.match(loser.stderr, /CHECKPOINT_IMMUTABLE/);
+    const checkpointPath = path.join(fixture.root, '.soma', 'checkpoints', fixture.runId, '1.json');
+    assert.doesNotThrow(() => JSON.parse(fs.readFileSync(checkpointPath, 'utf8')));
+  } finally {
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test('dirty filtering ignores a nested projectRoot .soma relative to the actual Git root', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'soma-checkpoint-workspace-'));
+  const workspace = path.join(root, 'packages', 'app');
+  fs.mkdirSync(path.join(workspace, '.soma', 'runtime'), { recursive: true });
+  git(root, ['init', '-q']);
+  git(root, ['config', 'user.email', 'soma@example.test']);
+  git(root, ['config', 'user.name', 'SOMA Test']);
+  fs.writeFileSync(path.join(root, 'tracked.txt'), 'baseline\n');
+  git(root, ['add', 'tracked.txt']); git(root, ['commit', '-qm', 'baseline']);
+  fs.writeFileSync(path.join(workspace, '.soma', 'runtime', 'state.json'), '{}\n');
+  try {
+    const { readContinuityGitFacts } = require('../run/checkpoint.cjs');
+    const facts = readContinuityGitFacts(workspace);
+    assert.equal(facts.dirtyEntries.some(entry => entry.path.startsWith('packages/app/.soma/')), false);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
   }
 });

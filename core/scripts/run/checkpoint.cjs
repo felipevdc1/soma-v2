@@ -45,6 +45,12 @@ function contained(projectRoot, candidate) {
   return relative === '' || (!path.isAbsolute(relative) && relative !== '..' && !relative.startsWith(`..${path.sep}`));
 }
 
+const TERMINAL_TASK_STATUSES = new Set(['pass', 'passed', 'done']);
+
+function nonBlank(value) {
+  return typeof value === 'string' && /\S/.test(value);
+}
+
 function readProof(projectRoot, rawPath, extra = {}) {
   if (typeof rawPath !== 'string' || rawPath.length === 0) {
     throw codedError('PROOF_PATH_INVALID', 'proof path must be a non-empty string');
@@ -81,7 +87,6 @@ function validateCheckpointInput(input, runId) {
     throw codedError('CHECKPOINT_INPUT_INVALID', 'checkpoint input fields are invalid or runId does not match --run');
   }
   const taskIds = new Set();
-  const terminalStatuses = new Set(['pass', 'passed', 'done']);
   for (const task of input.tasks) {
     if (!task || typeof task !== 'object' || Array.isArray(task) ||
         Object.keys(task).sort().join('\0') !== ['attempts', 'id', 'status'].join('\0') ||
@@ -94,9 +99,17 @@ function validateCheckpointInput(input, runId) {
   }
   if (input.nextTask !== null) {
     const next = input.tasks.find(task => task.id === input.nextTask);
-    if (!next || terminalStatuses.has(next.status)) {
+    if (!next || TERMINAL_TASK_STATUSES.has(next.status)) {
       throw codedError('CHECKPOINT_INPUT_INVALID', 'nextTask must name an unfinished task');
     }
+  }
+  const unfinished = input.tasks.filter(task => !TERMINAL_TASK_STATUSES.has(task.status));
+  if (input.nextTask === null && unfinished.length > 0 &&
+      !(nonBlank(input.blocker) && nonBlank(input.nextDecision))) {
+    throw codedError(
+      'CHECKPOINT_INPUT_INVALID',
+      'nextTask may be null with unfinished tasks only when blocker and nextDecision name the pause'
+    );
   }
 }
 
@@ -179,11 +192,13 @@ function collectProofs(projectRoot, state) {
   return proofs.sort((a, b) => Buffer.from(a.path).compare(Buffer.from(b.path)));
 }
 
-function ignoredContinuityPath(filePath) {
-  return filePath === '.soma.lock' ||
-    filePath.startsWith('.soma/checkpoints/') ||
-    filePath.startsWith('.soma/handoffs/') ||
-    filePath.startsWith('.soma/diagnostics/');
+function gitRelativePath(root, absolute) {
+  return path.relative(root, absolute).split(path.sep).join('/');
+}
+
+function ignoredContinuityPath(filePath, somaRelative, lockRelative) {
+  return filePath === lockRelative || filePath === somaRelative ||
+    filePath.startsWith(`${somaRelative}/`);
 }
 
 function gitBlobHash(root, filePath, staged) {
@@ -201,7 +216,9 @@ function gitBlobHash(root, filePath, staged) {
 }
 
 function readContinuityGitFacts(projectRoot) {
-  const root = gitRoot(projectRoot);
+  let canonicalProjectRoot;
+  try { canonicalProjectRoot = fs.realpathSync(projectRoot); } catch (_) { canonicalProjectRoot = projectRoot; }
+  const root = gitRoot(canonicalProjectRoot);
   if (!root) {
     return { branch: null, dirtyDigest: sha256(Buffer.from('[]')), dirtyEntries: [], head: null };
   }
@@ -209,6 +226,8 @@ function readContinuityGitFacts(projectRoot) {
   if (result.status !== 0) throw codedError('GIT_READ_FAILED', result.stderr.trim() || 'cannot inspect Git status');
   const raw = result.stdout.split('\0').filter(Boolean);
   const entries = [];
+  const somaRelative = gitRelativePath(root, path.join(canonicalProjectRoot, '.soma'));
+  const lockRelative = gitRelativePath(root, path.join(canonicalProjectRoot, '.soma.lock'));
   for (let index = 0; index < raw.length; index += 1) {
     const record = raw[index];
     const status = record.slice(0, 2);
@@ -218,7 +237,7 @@ function readContinuityGitFacts(projectRoot) {
       sourcePath = raw[++index];
     }
     filePath = filePath.split(path.sep).join('/');
-    if (ignoredContinuityPath(filePath)) continue;
+    if (ignoredContinuityPath(filePath, somaRelative, lockRelative)) continue;
     entries.push({
       indexSha256: status[0] !== ' ' && status[0] !== '?' ? gitBlobHash(root, filePath, true) : null,
       path: filePath,
@@ -257,6 +276,24 @@ function readRunStateWithoutMutation(projectRoot, runId) {
   return { state, stateBytes, runStateFile };
 }
 
+function readRunIdentity(projectRoot, runId) {
+  const { runIdentityFile } = resolveSomaPaths(projectRoot, runId);
+  let stat;
+  try { stat = fs.lstatSync(runIdentityFile); }
+  catch (_) { throw codedError('RUN_ID_IDENTITY_UNPROVABLE', 'run identity marker is missing'); }
+  if (stat.isSymbolicLink() || !stat.isFile()) {
+    throw codedError('RUN_ID_MARKER_INVALID', 'run identity marker must be a regular file');
+  }
+  const bytes = fs.readFileSync(runIdentityFile);
+  let marker;
+  try { marker = JSON.parse(bytes); }
+  catch (_) { throw codedError('RUN_ID_MARKER_INVALID', 'run identity marker is invalid JSON'); }
+  if (!marker || marker.$schema !== 'soma-run-identity/v1' || marker.runId !== runId) {
+    throw codedError('RUN_ID_MARKER_INVALID', 'run identity marker contradicts the run');
+  }
+  return { path: relativePath(projectRoot, runIdentityFile), sha256: sha256(bytes) };
+}
+
 function buildCheckpoint({ projectRoot, runId, input, readOnly = false }) {
   assertSafeRunId(runId);
   validateCheckpointInput(input, runId);
@@ -269,12 +306,16 @@ function buildCheckpoint({ projectRoot, runId, input, readOnly = false }) {
   const dispatches = collectDispatches(projectRoot, runId, state);
   const proofs = collectProofs(projectRoot, state);
   const git = readContinuityGitFacts(projectRoot);
-  const tasks = [...input.tasks].sort((a, b) => Buffer.from(a.id).compare(Buffer.from(b.id)));
+  const runIdentity = readRunIdentity(projectRoot, runId);
+  const tasks = input.tasks.map(task => ({ ...task }));
+  const completed = tasks.filter(task => TERMINAL_TASK_STATUSES.has(task.status));
+  const lastCompletedTask = completed.length === 0 ? null : completed[completed.length - 1].id;
   const commitProofs = dispatches.map(({ baseSha, taskId, attempt }) => ({ baseSha, taskId, attempt }));
   return {
     $schema: 'soma-checkpoint/v1', blocker: input.blocker, commitProofs,
-    currentState: input.currentState, dispatches, git, nextDecision: input.nextDecision,
-    nextTask: input.nextTask, proofs, runId,
+    currentState: input.currentState, dispatches, git, lastCompletedTask,
+    nextDecision: input.nextDecision,
+    nextTask: input.nextTask, proofs, runId, runIdentity,
     runState: { path: relativePath(projectRoot, resolveSomaPaths(projectRoot, runId).runStateFile), sha256: sha256(stateBytes) },
     sequence: input.sequence, tasks,
   };
@@ -290,12 +331,17 @@ function publishCheckpoint({ projectRoot, runId, input }) {
     throw codedError('CHECKPOINT_SEQUENCE_DECREASED', 'checkpoint sequence cannot decrease');
   }
   const destination = path.join(runCheckpointsDir, `${input.sequence}.json`);
-  if (fs.existsSync(destination)) throw codedError('CHECKPOINT_IMMUTABLE', `checkpoint already exists: ${input.sequence}`);
   const temporary = path.join(runCheckpointsDir, `.${input.sequence}.${process.pid}.${crypto.randomBytes(6).toString('hex')}.tmp`);
   fs.writeFileSync(temporary, canonicalJson(checkpoint), { flag: 'wx' });
   try {
-    if (fs.existsSync(destination)) throw codedError('CHECKPOINT_IMMUTABLE', `checkpoint already exists: ${input.sequence}`);
-    fs.renameSync(temporary, destination);
+    try {
+      fs.linkSync(temporary, destination);
+    } catch (error) {
+      if (error && error.code === 'EEXIST') {
+        throw codedError('CHECKPOINT_IMMUTABLE', `checkpoint already exists: ${input.sequence}`);
+      }
+      throw error;
+    }
   } finally {
     try { fs.unlinkSync(temporary); } catch (_) {}
   }
@@ -332,5 +378,5 @@ if (require.main === module) main();
 module.exports = {
   buildCheckpoint, canonicalJson, canonicalValue, collectDispatches, collectProofs,
   publishCheckpoint, readContinuityGitFacts, readRunStateWithoutMutation,
-  sha256, validateCheckpointInput,
+  readRunIdentity, sha256, validateCheckpointInput,
 };

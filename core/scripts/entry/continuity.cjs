@@ -4,7 +4,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const { canonicalJson, sha256 } = require('../run/checkpoint.cjs');
-const { verifyCheckpointInputs } = require('../run/handoff.cjs');
+const { handoffGenerations, verifyCheckpointInputs } = require('../run/handoff.cjs');
 const { renderHandoffMarkdown, validateHandoff } = require('../run/handoff-schema.cjs');
 const { resolveSomaPaths } = require('../run/paths.cjs');
 const { safeRunId } = require('../run/run-id.cjs');
@@ -36,8 +36,7 @@ function resolveRun(projectRoot, requestedRunId) {
 
 function readLatestHandoff(projectRoot, runId) {
   const { runHandoffsDir } = resolveSomaPaths(projectRoot, runId);
-  const generations = regularDirectories(runHandoffsDir).map(name => /^(\d+)$/.exec(name)).filter(Boolean)
-    .map(match => Number(match[1])).sort((a, b) => a - b);
+  const generations = handoffGenerations(runHandoffsDir);
   if (generations.length === 0) throw codedError('RESUME_NOT_FOUND', `no durable handoff exists for ${runId}`);
   const generation = generations[generations.length - 1];
   const dir = path.join(runHandoffsDir, String(generation));
@@ -78,8 +77,10 @@ function verifyResume(projectRoot, record) {
     blocker: checkpoint.blocker, commitProofs: checkpoint.commitProofs,
     currentState: checkpoint.currentState, dispatches: checkpoint.dispatches,
     git: checkpoint.git,
+    lastCompletedTask: checkpoint.lastCompletedTask,
     nextDecision: checkpoint.nextDecision, nextTask: checkpoint.nextTask,
-    proofs: checkpoint.proofs, runState: checkpoint.runState, tasks: checkpoint.tasks,
+    proofs: checkpoint.proofs, runIdentity: checkpoint.runIdentity,
+    runState: checkpoint.runState, tasks: checkpoint.tasks,
   };
   if (canonicalJson(expectedHandoff) !== canonicalJson(record.handoff)) throw codedError('HANDOFF_DRIFT', 'handoff facts contradict checkpoint');
   return checkpoint;
@@ -102,14 +103,112 @@ function persistDrift(projectRoot, runId, error) {
   return diagnostic;
 }
 
-function acquireLock(projectRoot, runId, sessionId) {
-  const lock = {
-    runId, sessionId: sessionId || `pid-${process.ppid}`, startedAt: new Date().toISOString(),
-  };
-  writeAtomic(path.join(projectRoot, '.soma.lock'), Buffer.from(canonicalJson(lock)));
+const LOCK_KEYS = [
+  '$schema', 'executionScope', 'handoffGeneration', 'runId', 'sessionId', 'startedAt',
+];
+const LEGACY_LOCK_KEYS = ['runId', 'sessionId', 'startedAt'];
+
+function exactKeys(value, expected) {
+  return value && typeof value === 'object' && !Array.isArray(value) &&
+    Object.keys(value).sort().join('\0') === [...expected].sort().join('\0');
 }
 
-function resumeContinuity({ projectRoot, requestedRunId, sessionId }) {
+function parseLock(bytes) {
+  let value;
+  try { value = JSON.parse(bytes); } catch (_) { return null; }
+  if (exactKeys(value, LEGACY_LOCK_KEYS) && safeRunId(value.runId) &&
+      typeof value.sessionId === 'string' && value.sessionId.length > 0 &&
+      typeof value.startedAt === 'string') {
+    return { kind: 'legacy', value };
+  }
+  if (exactKeys(value, LOCK_KEYS) && value.$schema === 'soma-run-lock/v1' &&
+      safeRunId(value.runId) && typeof value.sessionId === 'string' && value.sessionId.length > 0 &&
+      typeof value.startedAt === 'string' && typeof value.executionScope === 'string' &&
+      value.executionScope.length > 0 && Number.isInteger(value.handoffGeneration) &&
+      value.handoffGeneration >= 0) {
+    return { kind: 'current', value };
+  }
+  return null;
+}
+
+function readExistingLock(lockPath) {
+  let stat;
+  try { stat = fs.lstatSync(lockPath); } catch (_) { return null; }
+  if (stat.isSymbolicLink() || !stat.isFile()) return { bytes: null, parsed: null };
+  const bytes = fs.readFileSync(lockPath);
+  return { bytes, parsed: parseLock(bytes) };
+}
+
+function busyLock(runId, message) {
+  return { status: 'busy', result: { status: 'RESUME_BUSY', retrySafe: true, runId, diagnostic: message } };
+}
+
+function acquireLock({ projectRoot, runId, sessionId, handoffGeneration, executionScope }) {
+  const effectiveSessionId = sessionId || `pid-${process.ppid}`;
+  const lock = {
+    $schema: 'soma-run-lock/v1', executionScope, handoffGeneration, runId,
+    sessionId: effectiveSessionId, startedAt: new Date().toISOString(),
+  };
+  const lockPath = path.join(projectRoot, '.soma.lock');
+  const { somaDir } = resolveSomaPaths(projectRoot);
+  fs.mkdirSync(somaDir, { recursive: true });
+  const temporary = path.join(somaDir, `.run-lock.${process.pid}.${crypto.randomBytes(6).toString('hex')}.tmp`);
+  fs.writeFileSync(temporary, canonicalJson(lock), { flag: 'wx' });
+  try {
+    try {
+      fs.linkSync(temporary, lockPath);
+      return { status: 'acquired' };
+    } catch (error) {
+      if (!error || error.code !== 'EEXIST') throw error;
+    }
+
+    const existing = readExistingLock(lockPath);
+    if (!existing || !existing.parsed || existing.parsed.value.runId !== runId) {
+      return busyLock(runId, 'RUN_LOCK_CONFLICT: existing lock is malformed or belongs to another run');
+    }
+    if (existing.parsed.kind === 'current') {
+      const current = existing.parsed.value;
+      if (current.handoffGeneration === handoffGeneration &&
+          current.sessionId === effectiveSessionId && current.executionScope === executionScope) {
+        return { status: 'idempotent' };
+      }
+      if (current.handoffGeneration >= handoffGeneration) {
+        return busyLock(runId, 'RUN_LOCK_BUSY: another session owns the current handoff generation');
+      }
+    }
+
+    const claimPath = path.join(somaDir, '.run-lock-replace.claim');
+    let claim;
+    try {
+      claim = fs.openSync(claimPath, 'wx', 0o600);
+    } catch (error) {
+      if (error && error.code === 'EEXIST') {
+        return busyLock(runId, 'RUN_LOCK_BUSY: stale-lock replacement is already in progress');
+      }
+      throw error;
+    }
+    try {
+      fs.writeFileSync(claim, canonicalJson({ handoffGeneration, runId, sessionId: effectiveSessionId }));
+      fs.closeSync(claim);
+      claim = undefined;
+      const confirmed = readExistingLock(lockPath);
+      if (!confirmed || !confirmed.bytes || !confirmed.bytes.equals(existing.bytes)) {
+        return busyLock(runId, 'RUN_LOCK_BUSY: lock changed during stale-lock replacement');
+      }
+      fs.renameSync(temporary, lockPath);
+      return { status: 'replaced' };
+    } finally {
+      if (claim !== undefined) fs.closeSync(claim);
+      fs.rmSync(claimPath, { force: true });
+    }
+  } catch (error) {
+    return busyLock(runId, `RUN_LOCK_BUSY: ${error.message}`);
+  } finally {
+    fs.rmSync(temporary, { force: true });
+  }
+}
+
+function resumeContinuity({ projectRoot, requestedRunId, sessionId, executionScope = projectRoot }) {
   let runId;
   try {
     runId = resolveRun(projectRoot, requestedRunId);
@@ -119,10 +218,15 @@ function resumeContinuity({ projectRoot, requestedRunId, sessionId }) {
   try {
     const record = readLatestHandoff(projectRoot, runId);
     const checkpoint = verifyResume(projectRoot, record);
-    acquireLock(projectRoot, runId, sessionId);
+    const lock = acquireLock({
+      projectRoot, runId, sessionId, executionScope,
+      handoffGeneration: record.generation,
+    });
+    if (lock.status === 'busy') return lock.result;
     return {
       status: 'RESUME_READY', runId, reentryState: checkpoint.currentState,
       nextTask: checkpoint.nextTask, handoffGeneration: record.generation,
+      executionScope,
     };
   } catch (error) {
     const diagnostic = persistDrift(projectRoot, runId, error);
@@ -130,4 +234,6 @@ function resumeContinuity({ projectRoot, requestedRunId, sessionId }) {
   }
 }
 
-module.exports = { readLatestHandoff, resolveRun, resumeContinuity, verifyResume };
+module.exports = {
+  acquireLock, parseLock, readLatestHandoff, resolveRun, resumeContinuity, verifyResume,
+};

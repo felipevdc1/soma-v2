@@ -60,16 +60,28 @@ function verifyCheckpointInputs(projectRoot, record) {
   return current;
 }
 
-function nextGeneration(runHandoffsDir) {
+function handoffGenerations(runHandoffsDir) {
   let entries = [];
   try { entries = fs.readdirSync(runHandoffsDir, { withFileTypes: true }); } catch (_) {}
   const generations = [];
+  let privateResidues = 0;
   for (const entry of entries) {
     const match = /^(\d+)$/.exec(entry.name);
+    const ownResidue = entry.isDirectory() && /^\.\d+\.\d+\.[a-f0-9]{12}\.tmp$/.test(entry.name);
+    if (ownResidue) {
+      privateResidues += 1;
+      if (privateResidues > 32) throw codedError('HANDOFF_STORAGE_INVALID', 'too many private handoff residues');
+      continue;
+    }
     if (!entry.isDirectory() || !match) throw codedError('HANDOFF_STORAGE_INVALID', `unexpected handoff entry: ${entry.name}`);
     generations.push(Number(match[1]));
   }
-  return generations.length === 0 ? 1 : Math.max(...generations) + 1;
+  return generations.sort((a, b) => a - b);
+}
+
+function nextGeneration(runHandoffsDir) {
+  const generations = handoffGenerations(runHandoffsDir);
+  return generations.length === 0 ? 1 : generations[generations.length - 1] + 1;
 }
 
 function buildHandoff(projectRoot, runId, generation, checkpointRecord) {
@@ -82,9 +94,11 @@ function buildHandoff(projectRoot, runId, generation, checkpointRecord) {
     },
     commitProofs: checkpoint.commitProofs, currentState: checkpoint.currentState,
     dispatches: checkpoint.dispatches, generation, git: readContinuityGitFacts(projectRoot),
+    lastCompletedTask: checkpoint.lastCompletedTask,
     nextDecision: checkpoint.nextDecision, nextTask: checkpoint.nextTask,
     proofs: checkpoint.proofs, resumeCommand: `/soma-run --resume ${runId}`,
-    runId, runState: checkpoint.runState, tasks: checkpoint.tasks,
+    runId, runIdentity: checkpoint.runIdentity, runState: checkpoint.runState,
+    tasks: checkpoint.tasks,
   };
   const validation = validateHandoff(handoff);
   if (!validation.valid) throw codedError('HANDOFF_INVALID', validation.violations.join('; '));
@@ -107,7 +121,14 @@ function publishHandoff({ projectRoot, runId }) {
   try {
     fs.writeFileSync(jsonPath, canonicalJson(handoff), { flag: 'wx' });
     fs.writeFileSync(markdownPath, renderHandoffMarkdown(handoff), { flag: 'wx' });
-    fs.renameSync(temporary, destination);
+    try {
+      fs.renameSync(temporary, destination);
+    } catch (error) {
+      if (error && ['EEXIST', 'ENOTEMPTY'].includes(error.code)) {
+        throw codedError('HANDOFF_IMMUTABLE', `handoff generation already exists: ${generation}`);
+      }
+      throw error;
+    }
   } catch (error) {
     fs.rmSync(temporary, { recursive: true, force: true });
     throw error;
@@ -134,5 +155,6 @@ function main() {
 if (require.main === module) main();
 
 module.exports = {
-  buildHandoff, checkpointInput, publishHandoff, readLatestCheckpoint, verifyCheckpointInputs,
+  buildHandoff, checkpointInput, handoffGenerations, nextGeneration, publishHandoff,
+  readLatestCheckpoint, verifyCheckpointInputs,
 };

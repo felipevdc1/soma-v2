@@ -2,7 +2,7 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { spawnSync } = require('node:child_process');
+const { spawn, spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -11,6 +11,17 @@ const RUN_CLI = path.resolve(__dirname, '..', 'run.cjs');
 
 function run(args, cwd) {
   return spawnSync('node', [RUN_CLI, ...args], { cwd, encoding: 'utf8', timeout: 15000 });
+}
+
+function spawnRun(args, cwd) {
+  return new Promise(resolve => {
+    const child = spawn('node', [RUN_CLI, ...args], { cwd });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', chunk => { stdout += chunk; });
+    child.stderr.on('data', chunk => { stderr += chunk; });
+    child.on('close', status => resolve({ status, stdout, stderr }));
+  });
 }
 
 function git(cwd, args) {
@@ -48,7 +59,7 @@ function fixture(runId = 'run-lean-handoff') {
   const inputPath = path.join(root, 'checkpoint.json');
   fs.writeFileSync(inputPath, JSON.stringify({
     $schema: 'soma-checkpoint-input/v1', runId, sequence: 1, currentState: 'STEP_4_WAVES', nextTask: 'T-2',
-    tasks: [{ id: 'T-2', status: 'pending', attempts: 0 }, { id: 'T-1', status: 'passed', attempts: 1 }],
+    tasks: [{ id: 'T-1', status: 'passed', attempts: 1 }, { id: 'T-2', status: 'pending', attempts: 0 }],
     blocker: null, nextDecision: null,
   }));
   const checkpoint = run(['checkpoint', '--run', runId, '--input-file', inputPath], root);
@@ -73,6 +84,7 @@ test('handoff publishes immutable authoritative JSON and derived Markdown with e
     assert.equal(handoff.runId, fx.runId);
     assert.equal(handoff.generation, 1);
     assert.equal(handoff.nextTask, 'T-2');
+    assert.equal(handoff.lastCompletedTask, 'T-1');
     assert.equal(handoff.tasks.find(task => task.id === 'T-1').status, 'passed');
     assert.match(handoff.checkpoint.sha256, /^[a-f0-9]{64}$/);
     assert.match(handoff.runState.sha256, /^[a-f0-9]{64}$/);
@@ -86,6 +98,44 @@ test('handoff publishes immutable authoritative JSON and derived Markdown with e
     assert.equal(second.status, 0, second.stderr);
     assert.equal(JSON.parse(second.stdout).generation, 2);
     assert.deepEqual(fs.readFileSync(jsonPath), firstJson, 'prior handoff generations must remain immutable');
+  } finally {
+    fs.rmSync(fx.root, { recursive: true, force: true });
+  }
+});
+
+test('handoff ignores bounded private crash residue but fails closed on unexpected entries', () => {
+  const residue = fixture('run-handoff-residue');
+  try {
+    const handoffs = path.join(residue.root, '.soma', 'handoffs', residue.runId);
+    fs.mkdirSync(path.join(handoffs, '.1.999.a1b2c3d4e5f6.tmp'), { recursive: true });
+    let result = run(['handoff', '--run', residue.runId], residue.root);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(JSON.parse(result.stdout).generation, 1);
+    fs.mkdirSync(path.join(handoffs, 'unexpected-entry'));
+    result = run(['handoff', '--run', residue.runId], residue.root);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /HANDOFF_STORAGE_INVALID/);
+  } finally {
+    fs.rmSync(residue.root, { recursive: true, force: true });
+  }
+});
+
+test('concurrent handoff publishers never overwrite a generation', async () => {
+  const fx = fixture('run-handoff-concurrent');
+  try {
+    const results = await Promise.all(Array.from({ length: 4 }, () =>
+      spawnRun(['handoff', '--run', fx.runId], fx.root)
+    ));
+    const successes = results.filter(item => item.status === 0).map(item => JSON.parse(item.stdout));
+    assert.ok(successes.length >= 1);
+    assert.equal(new Set(successes.map(item => item.generation)).size, successes.length);
+    for (const result of results.filter(item => item.status !== 0)) {
+      assert.match(result.stderr, /HANDOFF_IMMUTABLE/);
+    }
+    for (const success of successes) {
+      const handoff = JSON.parse(fs.readFileSync(success.jsonPath, 'utf8'));
+      assert.equal(handoff.generation, success.generation);
+    }
   } finally {
     fs.rmSync(fx.root, { recursive: true, force: true });
   }

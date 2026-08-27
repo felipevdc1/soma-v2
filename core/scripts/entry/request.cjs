@@ -44,8 +44,8 @@ function routeEntryRequest(parsed, context = {}) {
   if (parsed.mode === 'resume') {
     const resumeContinuity = context.resumeContinuity || defaultResumeContinuity;
     return resumeContinuity({
-      projectRoot: resolution.scope, requestedRunId: parsed.runId,
-      sessionId: context.sessionId,
+      projectRoot: resolution.projectRoot, requestedRunId: parsed.runId,
+      executionScope: resolution.scope, sessionId: context.sessionId,
     });
   }
   if (parsed.mode === 'start') {
