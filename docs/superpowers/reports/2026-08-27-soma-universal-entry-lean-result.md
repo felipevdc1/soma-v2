@@ -81,3 +81,16 @@ Claude Code smoke used exactly one bounded `claude -p '/soma-run --help'` call i
 The deterministic installed-runtime adoption smoke used no model call in `/tmp/soma-adoption-live-Qi9AbK`, which began as a Git project without `.soma`. The entry route returned `READY` (`adopted: true`, `baselineRequired: true`), created `soma-adoption/v1` plus `install-state.json`, and the installed status route returned `STATUS_SHOWN`, `adoption: installed`, and `NO_DURABLE_RUN`.
 
 No rollback occurred. Activation is committed, but the overall live-smoke proof remains blocked solely by the CLI's empty captured response.
+
+## Permission-safe adapter correction activation
+
+Candidate `7981bd7f4c8a1bb362112c98c1bdba1379b28407` scopes the Claude adapter to `Edit(~/.soma-v2/state/entry-mailbox-v1/**)` and `Read(~/.claude/references/soma-run-orchestration.md)`. The corrected quality review was approved after checking the installed Claude Code 2.1.247 permission documentation and binary evidence that Edit rules cover built-in file-editing tools, including Write.
+
+Fresh preflight found recovery `NONE`, clean tracked candidate state, valid installer syntax and no active Claude Code CLI. The two Claude.app Chrome native hosts remained nonblocking. Exactly one corrective `bash install.sh --force-overwrite` transaction ran:
+
+- Transaction `1787861135989-63809-d071e13d3ad5606e`, journal `/Users/felipevdc1/.soma-v2-backups/1787861135989-63809-d071e13d3ad5606e/transaction.json`, reached `COMMITTED`.
+- Post-commit recovery returned `NONE`; no active pointer or lock remained. No rollback occurred.
+- One installed target changed: `~/.claude/commands/soma-run.md`, SHA-256 `b7eb8823a876331f605d96284ceb87af3844bcd4405c1fc976a298d855666569`, byte-identical to the candidate source.
+- Installed Claude and Codex sync dry-runs reported `All entries in sync. No actions needed.` Doctor exited 0 with no errors or warnings; its only informational finding remains the preserved worktree-local `file_never_installed` state.
+
+The required one normal-permission `claude -p '/soma-run --help'` call was attempted in a fresh temporary Git project with no `.soma`, with output redirected to `claude-smoke.txt`. The command runner returned no output and left neither a live Claude process nor a discoverable temporary transcript directory. Consequently it does not prove command discovery, permission behavior, `REQUEST_PREPARED`/`HELP_SHOWN`, or mailbox cleanup. No second model call was made. This is the sole residual blocker for real-smoke completion.
