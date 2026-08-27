@@ -45,6 +45,9 @@ const SESSION_B = 'claude-session-B';
 const ALT_REQUEST_ID = 'fedcba9876543210fedcba9876543210';
 const ALT_CAPABILITY = 'fedcba9876543210'.repeat(4);
 const CHILD_TIMEOUT_MS = 10_000;
+const PREPARE_CLAIM_SCHEMA = 'soma-entry-prepare-claim/v1';
+const PREPARE_ID_A = 'a'.repeat(32);
+const PREPARE_ID_B = 'b'.repeat(32);
 
 function modeOf(file) {
   return fs.lstatSync(file).mode & 0o777;
@@ -348,6 +351,65 @@ function assertNoClaim(prepared) {
   assert.equal(fs.existsSync(claimPathOf(prepared)), false, 'identity rejection created a claim');
 }
 
+function prepareClaimPath(sessionDir) {
+  return path.join(sessionDir, '.prepare.claim');
+}
+
+function prepareClaimEvidence({
+  sessionId = SESSION_A,
+  prepareId = PREPARE_ID_A,
+  createdMonotonicMs = 1_000,
+  ttlMs = DEFAULT_TTL_MS,
+  ...overrides
+} = {}) {
+  return {
+    $schema: PREPARE_CLAIM_SCHEMA,
+    sessionId,
+    prepareId,
+    ttlMs,
+    createdMonotonicMs,
+    expiresMonotonicMs: createdMonotonicMs + ttlMs,
+    ...overrides,
+  };
+}
+
+function writeOwnerOnlyJson(file, value) {
+  fs.writeFileSync(file, `${JSON.stringify(value)}\n`, { mode: 0o600, flag: 'wx' });
+  fs.chmodSync(file, 0o600);
+}
+
+function brokerForFixture(fixture, options = {}) {
+  return createRequestBroker({
+    runtimeRoot: fixture.runtimeRoot,
+    uid: UID,
+    fsOps: options.fsOps || fs,
+    nowMonotonicMs: () => fixture.clock.monotonicMs,
+    nowWallMs: () => fixture.clock.wallMs,
+    randomBytes: options.randomBytes || deterministicRandom(110),
+    ttlMs: options.ttlMs === undefined ? DEFAULT_TTL_MS : options.ttlMs,
+  });
+}
+
+function createPreparedSlot(sessionDir, evidence) {
+  const slotDir = path.join(sessionDir, evidence.requestId);
+  const requestPath = path.join(slotDir, 'request.json');
+  fs.mkdirSync(slotDir, { mode: 0o700 });
+  fs.chmodSync(slotDir, 0o700);
+  writeOwnerOnlyJson(path.join(slotDir, 'lease.json'), {
+    $schema: 'soma-entry-lease/v1',
+    sessionId: evidence.sessionId,
+    requestId: evidence.requestId,
+    capability: evidence.capability,
+    requestPath,
+    ttlMs: evidence.ttlMs,
+    createdMonotonicMs: evidence.createdMonotonicMs,
+    expiresMonotonicMs: evidence.expiresMonotonicMs,
+  });
+  fs.writeFileSync(requestPath, '', { mode: 0o600, flag: 'wx' });
+  fs.chmodSync(requestPath, 0o600);
+  return { ...evidence, requestPath };
+}
+
 test('prepare hashes the native session, creates exact owner-only layout, and emits a minimal lease', async () => {
   const opens = [];
   const fixture = makeFixture({
@@ -488,6 +550,71 @@ test('prepare twice never creates a second live slot and may reuse only an empty
     );
   } finally {
     fixture.cleanup();
+  }
+});
+
+for (const [evidence, plant] of [
+  ['claim', prepared => writeOwnerOnlyJson(claimPathOf(prepared), identityOf(prepared))],
+  ['nested prepare claim', prepared => writeOwnerOnlyJson(
+    path.join(slotDirOf(prepared), '.prepare.claim'),
+    prepareClaimEvidence({ sessionId: prepared.sessionId })
+  )],
+  ['unknown file', prepared => fs.writeFileSync(
+    path.join(slotDirOf(prepared), 'unexpected-evidence'),
+    'diagnostic bytes\n',
+    { mode: 0o600, flag: 'wx' }
+  )],
+  ['unknown directory', prepared => fs.mkdirSync(
+    path.join(slotDirOf(prepared), 'unexpected-evidence'),
+    { mode: 0o700 }
+  )],
+]) {
+  test(`live empty slot with ${evidence} is corrupt, preserved, and never reused`, async () => {
+    const fixture = makeFixture();
+    try {
+      const prepared = await fixture.broker.prepare({ sessionId: SESSION_A });
+      plant(prepared);
+      const before = snapshotTree(slotDirOf(prepared));
+      const error = await captureError(
+        () => fixture.broker.prepare({ sessionId: SESSION_A })
+      );
+      assert.equal(error?.code, 'BROKER_CORRUPT', `${evidence} returned the old live identity`);
+      assertTreeUnchanged(slotDirOf(prepared), before, `${evidence} live slot changed on rejection`);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+}
+
+test('live empty request inode swapped during reuse inspection fails closed and is preserved', async () => {
+  const fixture = makeFixture();
+  const exchange = fs.mkdtempSync(path.join(os.tmpdir(), 'soma-entry-reuse-swap-'));
+  try {
+    const prepared = await fixture.broker.prepare({ sessionId: SESSION_A });
+    const replacement = path.join(exchange, 'replacement-request');
+    const parked = path.join(exchange, 'authenticated-request');
+    fs.writeFileSync(replacement, '', { mode: 0o600, flag: 'wx' });
+    fs.chmodSync(replacement, 0o600);
+    let swapped = false;
+    let swappedSnapshot;
+    const swapFs = tracingFs(
+      () => {},
+      (operation, args) => {
+        if (swapped || !operationIs(operation, 'lstat') || args[0] !== prepared.requestPath) return;
+        swapped = true;
+        fs.renameSync(prepared.requestPath, parked);
+        fs.renameSync(replacement, prepared.requestPath);
+        swappedSnapshot = snapshotTree(slotDirOf(prepared));
+      }
+    );
+    const broker = brokerForFixture(fixture, { fsOps: swapFs });
+    const error = await captureError(() => broker.prepare({ sessionId: SESSION_A }));
+    assert.equal(swapped, true, 'reuse inspection never reached the request identity boundary');
+    assertTreeUnchanged(slotDirOf(prepared), swappedSnapshot, 'swapped request changed after rejection');
+    assert.equal(error?.code, 'BROKER_CORRUPT', 'swapped request inode returned the old live identity');
+  } finally {
+    fixture.cleanup();
+    fs.rmSync(exchange, { recursive: true, force: true });
   }
 });
 
@@ -1556,6 +1683,187 @@ test('host SIGKILL after prepare leaves one inert bounded slot and no project au
   }
 });
 
+test('SIGKILL in the prepare critical section leaves only recoverable TTL evidence', async () => {
+  const runtimeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'soma-entry-prepare-kill-'));
+  const project = fs.mkdtempSync(path.join(os.tmpdir(), 'soma-entry-prepare-kill-project-'));
+  const ready = path.join(os.tmpdir(), `soma-entry-prepare-kill-${process.pid}-${Date.now()}.ready`);
+  fs.chmodSync(runtimeRoot, 0o700);
+  try {
+    fs.mkdirSync(path.join(project, '.git'), { mode: 0o700 });
+    fs.mkdirSync(path.join(project, '.soma', 'runs'), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(project, 'sentinel'), 'project bytes\n');
+    fs.writeFileSync(path.join(project, '.git', 'index'), 'git index bytes\n');
+    fs.writeFileSync(path.join(project, '.soma', 'runs', 'state.json'), 'run bytes\n');
+    const projectBefore = snapshotTree(project);
+    const childSource = String.raw`
+      'use strict';
+      const rawFs = require('node:fs');
+      const path = require('node:path');
+      const { createRequestBroker } = require(process.argv[1]);
+      const ready = process.argv[4];
+      const descriptorPaths = new Map();
+
+      function stopAfterDurableClaim() {
+        rawFs.writeFileSync(ready, 'durable', { flag: 'wx' });
+        const cell = new Int32Array(new SharedArrayBuffer(4));
+        for (;;) Atomics.wait(cell, 0, 0, 1_000);
+      }
+
+      function wrapHandle(handle, file) {
+        if (path.basename(file) !== '.prepare.claim') return handle;
+        return new Proxy(handle, {
+          get(target, property, receiver) {
+            if (property === 'close') {
+              return async (...args) => {
+                await target.close(...args);
+                stopAfterDurableClaim();
+              };
+            }
+            const value = Reflect.get(target, property, receiver);
+            return typeof value === 'function' ? value.bind(target) : value;
+          },
+        });
+      }
+
+      const fsOps = new Proxy(rawFs, {
+        get(target, property, receiver) {
+          if (property === 'promises') {
+            return new Proxy(rawFs.promises, {
+              get(promisesTarget, promisesProperty, promisesReceiver) {
+                if (promisesProperty === 'open') {
+                  return async (file, ...args) => wrapHandle(
+                    await promisesTarget.open(file, ...args),
+                    file
+                  );
+                }
+                const value = Reflect.get(promisesTarget, promisesProperty, promisesReceiver);
+                return typeof value === 'function' ? value.bind(promisesTarget) : value;
+              },
+            });
+          }
+          if (property === 'openSync') {
+            return (file, ...args) => {
+              const descriptor = rawFs.openSync(file, ...args);
+              descriptorPaths.set(descriptor, file);
+              return descriptor;
+            };
+          }
+          if (property === 'closeSync') {
+            return descriptor => {
+              const file = descriptorPaths.get(descriptor);
+              descriptorPaths.delete(descriptor);
+              rawFs.closeSync(descriptor);
+              if (typeof file === 'string' && path.basename(file) === '.prepare.claim') {
+                stopAfterDurableClaim();
+              }
+            };
+          }
+          const value = Reflect.get(target, property, receiver);
+          return typeof value === 'function' ? value.bind(target) : value;
+        },
+      });
+
+      const broker = createRequestBroker({
+        runtimeRoot: process.argv[2],
+        fsOps,
+        nowMonotonicMs: () => 1_000,
+        nowWallMs: () => 1_700_000_000_000,
+        ttlMs: 100,
+      });
+      broker.prepare({ sessionId: process.argv[3] }).catch(error => {
+        process.stderr.write(JSON.stringify({ code: error.code, message: error.message }) + '\n');
+      });
+    `;
+    const child = spawn(process.execPath, [
+      '-e', childSource, BROKER_MODULE, runtimeRoot, SESSION_A, ready,
+    ], { stdio: ['ignore', 'ignore', 'pipe'] });
+    let stderr = '';
+    child.stderr.setEncoding('utf8');
+    child.stderr.on('data', chunk => { stderr += chunk; });
+    const exit = new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        child.kill('SIGKILL');
+        reject(new Error(`prepare critical-section child timed out: ${stderr}`));
+      }, CHILD_TIMEOUT_MS);
+      child.once('error', error => {
+        clearTimeout(timer);
+        reject(error);
+      });
+      child.once('exit', (code, signal) => {
+        clearTimeout(timer);
+        resolve({ code, signal });
+      });
+    });
+    await waitForPath(ready);
+    child.kill('SIGKILL');
+    const childResult = await exit;
+    assert.equal(childResult.signal, 'SIGKILL');
+
+    const sessionDir = path.join(runtimeRoot, 'soma-entry', String(UID), sha256(SESSION_A));
+    const lockPath = prepareClaimPath(sessionDir);
+    const defects = [];
+    const entries = fs.readdirSync(sessionDir).sort();
+    if (entries.length !== 1 || entries[0] !== '.prepare.claim') {
+      defects.push(`unexpected critical-section residue: ${entries.join(',')}`);
+    }
+    const lockStat = fs.lstatSync(lockPath);
+    if (!lockStat.isFile() || lockStat.isSymbolicLink() || lockStat.uid !== UID || modeOf(lockPath) !== 0o600) {
+      defects.push('prepare claim owner, mode, or regular-file type is invalid');
+    }
+    let evidence;
+    try {
+      evidence = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+    } catch (_error) {
+      defects.push('prepare claim does not contain JSON identity/TTL evidence');
+    }
+    if (evidence) {
+      const expectedKeys = [
+        '$schema',
+        'createdMonotonicMs',
+        'expiresMonotonicMs',
+        'prepareId',
+        'sessionId',
+        'ttlMs',
+      ];
+      if (JSON.stringify(Object.keys(evidence).sort()) !== JSON.stringify(expectedKeys)) {
+        defects.push('prepare claim field set is not bounded');
+      }
+      if (evidence.$schema !== PREPARE_CLAIM_SCHEMA || evidence.sessionId !== SESSION_A ||
+          !/^[0-9a-f]{32}$/.test(evidence.prepareId || '') ||
+          !Number.isSafeInteger(evidence.ttlMs) || evidence.ttlMs <= 0 || evidence.ttlMs > MAX_TTL_MS ||
+          evidence.createdMonotonicMs !== 1_000 ||
+          evidence.expiresMonotonicMs !== evidence.createdMonotonicMs + evidence.ttlMs) {
+        defects.push('prepare claim identity or monotonic TTL evidence is invalid');
+      }
+    }
+    assertTreeUnchanged(project, projectBefore, 'prepare critical-section death mutated project/Git/run');
+
+    const clock = makeClock(1_101);
+    const recoveryBroker = createRequestBroker({
+      runtimeRoot,
+      uid: UID,
+      fsOps: fs,
+      nowMonotonicMs: () => clock.monotonicMs,
+      nowWallMs: () => clock.wallMs,
+      randomBytes: deterministicRandom(120),
+      ttlMs: 100,
+    });
+    let recovered;
+    const recoveryError = await captureError(async () => {
+      recovered = await recoveryBroker.prepare({ sessionId: SESSION_A });
+    });
+    if (recoveryError) defects.push(`expired orphan stayed blocked: ${recoveryError.code}`);
+    if (recovered && (!fs.existsSync(slotDirOf(recovered)) || fs.existsSync(lockPath))) {
+      defects.push('expired orphan recovery did not leave exactly the new slot');
+    }
+    assert.deepEqual(defects, [], defects.join('; '));
+  } finally {
+    fs.rmSync(ready, { force: true });
+    fs.rmSync(runtimeRoot, { recursive: true, force: true });
+    fs.rmSync(project, { recursive: true, force: true });
+  }
+});
+
 test('next prepare atomically rename-claims and removes only a valid expired slot before R2', async () => {
   const events = [];
   const clock = makeClock();
@@ -1590,6 +1898,36 @@ test('next prepare atomically rename-claims and removes only a valid expired slo
     fixture.cleanup();
   }
 });
+
+for (const [evidence, plant] of [
+  ['claim', prepared => writeOwnerOnlyJson(claimPathOf(prepared), identityOf(prepared))],
+  ['unknown file', prepared => fs.writeFileSync(
+    path.join(slotDirOf(prepared), 'unexpected-evidence'),
+    'expired diagnostic bytes\n',
+    { mode: 0o600, flag: 'wx' }
+  )],
+  ['unknown directory', prepared => fs.mkdirSync(
+    path.join(slotDirOf(prepared), 'unexpected-evidence'),
+    { mode: 0o700 }
+  )],
+]) {
+  test(`expired slot with ${evidence} is corrupt evidence and is never scavenged`, async () => {
+    const fixture = makeFixture();
+    try {
+      const prepared = await fixture.broker.prepare({ sessionId: SESSION_A });
+      fixture.clock.monotonicMs = readLease(prepared).expiresMonotonicMs + 1;
+      plant(prepared);
+      const before = snapshotTree(slotDirOf(prepared));
+      const error = await captureError(
+        () => fixture.broker.prepare({ sessionId: SESSION_A })
+      );
+      assert.equal(error?.code, 'BROKER_CORRUPT', `${evidence} expired slot was scavenged`);
+      assertTreeUnchanged(slotDirOf(prepared), before, `${evidence} expired evidence changed`);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+}
 
 for (const corruption of ['invalid-schema', 'wrong-mode', 'symlink']) {
   test(`expired ${corruption} residue returns BROKER_CORRUPT and is never scavenged`, async () => {
@@ -1643,6 +1981,184 @@ test('expired wrong-owner residue is diagnostic evidence and is not scavenged', 
     const before = snapshotTree(fixture.runtimeRoot);
     await assertRejected(() => broker.prepare({ sessionId: SESSION_A }), 'BROKER_CORRUPT');
     assertTreeUnchanged(fixture.runtimeRoot, before, 'wrong-owner residue was scavenged');
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('live valid prepare claim is bounded evidence and returns BROKER_BUSY unchanged', async () => {
+  const fixture = makeFixture();
+  try {
+    const seed = await fixture.broker.prepare({ sessionId: SESSION_A });
+    const sessionDir = sessionDirOf(seed);
+    fs.rmSync(slotDirOf(seed), { recursive: true, force: false });
+    const claim = prepareClaimEvidence({
+      sessionId: seed.sessionId,
+      createdMonotonicMs: fixture.clock.monotonicMs,
+      ttlMs: 100,
+    });
+    const lockPath = prepareClaimPath(sessionDir);
+    writeOwnerOnlyJson(lockPath, claim);
+    const before = snapshotTree(sessionDir);
+    await assertRejected(
+      () => fixture.broker.prepare({ sessionId: SESSION_A }),
+      'BROKER_BUSY'
+    );
+    assertTreeUnchanged(sessionDir, before, 'live prepare claim changed while reporting busy');
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('expired valid prepare claim is atomically scavenged before the next slot', async () => {
+  const fixture = makeFixture();
+  try {
+    const seed = await fixture.broker.prepare({ sessionId: SESSION_A });
+    const sessionDir = sessionDirOf(seed);
+    fs.rmSync(slotDirOf(seed), { recursive: true, force: false });
+    const lockPath = prepareClaimPath(sessionDir);
+    writeOwnerOnlyJson(lockPath, prepareClaimEvidence({
+      sessionId: seed.sessionId,
+      createdMonotonicMs: fixture.clock.monotonicMs,
+      ttlMs: 100,
+    }));
+    fixture.clock.monotonicMs += 101;
+    const events = [];
+    const broker = brokerForFixture(fixture, {
+      fsOps: tracingFs((operation, args) => {
+        if (['rename', 'rm', 'unlink', 'mkdir'].some(name => operationIs(operation, name))) {
+          events.push([operation, ...args]);
+        }
+      }),
+    });
+    let recovered;
+    const error = await captureError(async () => {
+      recovered = await broker.prepare({ sessionId: SESSION_A });
+    });
+    assert.equal(error, undefined, `expired valid prepare claim stayed busy: ${error?.code}`);
+    const renameIndex = events.findIndex(([operation, from]) =>
+      operationIs(operation, 'rename') && from === lockPath
+    );
+    assert.ok(renameIndex >= 0, 'expired prepare claim was not atomically rename-claimed');
+    assert.equal(fs.existsSync(lockPath), false, 'expired prepare claim survived recovery');
+    assert.ok(recovered?.requestPath, 'recovery did not create the next slot');
+    assert.equal(fs.existsSync(slotDirOf(recovered)), true);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+for (const corruption of [
+  'malformed',
+  'invalid-identity-ttl',
+  'symlink',
+  'wrong-mode',
+  'wrong-owner',
+  'non-regular',
+  'unexpected-evidence',
+]) {
+  test(`${corruption} prepare claim returns BROKER_CORRUPT and remains untouched`, async () => {
+    const fixture = makeFixture();
+    try {
+      const seed = await fixture.broker.prepare({ sessionId: SESSION_A });
+      const sessionDir = sessionDirOf(seed);
+      fs.rmSync(slotDirOf(seed), { recursive: true, force: false });
+      const lockPath = prepareClaimPath(sessionDir);
+      const valid = prepareClaimEvidence({
+        sessionId: seed.sessionId,
+        createdMonotonicMs: fixture.clock.monotonicMs,
+        ttlMs: 100,
+      });
+      let fsOps = fs;
+      if (corruption === 'malformed') {
+        fs.writeFileSync(lockPath, '{ malformed prepare claim', { mode: 0o600, flag: 'wx' });
+      } else if (corruption === 'invalid-identity-ttl') {
+        writeOwnerOnlyJson(lockPath, {
+          ...valid,
+          prepareId: 'A'.repeat(32),
+          ttlMs: MAX_TTL_MS + 1,
+          expiresMonotonicMs: valid.createdMonotonicMs + 1,
+          surplus: true,
+        });
+      } else if (corruption === 'symlink') {
+        const external = path.join(fixture.runtimeRoot, 'external-prepare-claim');
+        writeOwnerOnlyJson(external, valid);
+        fs.symlinkSync(external, lockPath);
+      } else if (corruption === 'wrong-mode') {
+        writeOwnerOnlyJson(lockPath, valid);
+        fs.chmodSync(lockPath, 0o640);
+      } else if (corruption === 'wrong-owner') {
+        writeOwnerOnlyJson(lockPath, valid);
+        fsOps = withStatIdentityOverride(
+          fs,
+          lockPath,
+          stat => spoofStat(stat, { uid: UID + 1 })
+        );
+      } else if (corruption === 'non-regular') {
+        fs.mkdirSync(lockPath, { mode: 0o700 });
+      } else {
+        writeOwnerOnlyJson(lockPath, valid);
+        fs.writeFileSync(
+          path.join(sessionDir, 'unexpected-prepare-evidence'),
+          'diagnostic bytes\n',
+          { mode: 0o600, flag: 'wx' }
+        );
+      }
+      const before = snapshotTree(fixture.runtimeRoot);
+      const broker = brokerForFixture(fixture, { fsOps });
+      const error = await captureError(() => broker.prepare({ sessionId: SESSION_A }));
+      assert.equal(error?.code, 'BROKER_CORRUPT', `${corruption} prepare claim returned busy`);
+      assertTreeUnchanged(
+        fixture.runtimeRoot,
+        before,
+        `${corruption} prepare claim changed during rejection`
+      );
+    } finally {
+      fixture.cleanup();
+    }
+  });
+}
+
+test('delayed P1 release cannot remove P2 prepare claim or newer slot', async () => {
+  let replaced = false;
+  let p2Prepared;
+  let p2Before;
+  let p2ClaimBytes;
+  const delayedFs = tracingFs((operation, args) => {
+    const target = args[0];
+    const targetsPrepareClaim = typeof target === 'string' &&
+      path.basename(target) === '.prepare.claim' &&
+      (operationIs(operation, 'unlink') || operationIs(operation, 'rm') || operationIs(operation, 'rename'));
+    if (replaced || !targetsPrepareClaim || !fs.existsSync(target)) return;
+    replaced = true;
+    const sessionDir = path.dirname(target);
+    fs.renameSync(target, `${target}.p1-retired`);
+    const p2Claim = prepareClaimEvidence({
+      prepareId: PREPARE_ID_B,
+      createdMonotonicMs: 1_001,
+      ttlMs: 100,
+    });
+    writeOwnerOnlyJson(target, p2Claim);
+    p2ClaimBytes = fs.readFileSync(target);
+    p2Prepared = createPreparedSlot(sessionDir, {
+      sessionId: SESSION_A,
+      requestId: 'c'.repeat(32),
+      capability: 'd'.repeat(64),
+      ttlMs: 100,
+      createdMonotonicMs: 1_001,
+      expiresMonotonicMs: 1_101,
+    });
+    p2Before = snapshotTree(slotDirOf(p2Prepared));
+  });
+  const fixture = makeFixture({ fsOps: delayedFs });
+  try {
+    const p1 = await fixture.broker.prepare({ sessionId: SESSION_A });
+    assert.equal(replaced, true, 'P1 release boundary was not observed');
+    const lockPath = prepareClaimPath(sessionDirOf(p1));
+    const claimPreserved = fs.existsSync(lockPath) &&
+      fs.readFileSync(lockPath).equals(p2ClaimBytes);
+    assert.equal(claimPreserved, true, 'delayed P1 release removed P2 prepare claim');
+    assertTreeUnchanged(slotDirOf(p2Prepared), p2Before, 'delayed P1 release changed P2 slot');
   } finally {
     fixture.cleanup();
   }
