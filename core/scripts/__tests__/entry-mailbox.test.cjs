@@ -241,6 +241,34 @@ test('mailbox abort is idempotent and sessions stay isolated', async () => {
   }
 });
 
+test('native selection fails closed on foreign, ambiguous, or claimed residue', async () => {
+  const f = await fixture();
+  try {
+    const prepared = await f.mailbox.prepare({ sessionId: SESSION });
+    const requestDir = path.dirname(prepared.requestPath);
+    const leasePath = path.join(requestDir, 'lease.json');
+    const foreign = JSON.parse(await fs.readFile(leasePath, 'utf8'));
+    foreign.sessionId = 'claude.foreign:1';
+    await fs.writeFile(leasePath, JSON.stringify(foreign), { mode: 0o600 });
+    await assert.rejects(f.mailbox.selectNative({ sessionId: SESSION }), { code: 'MAILBOX_INVALID' });
+    assert.ok(await fs.stat(requestDir));
+
+    await fs.writeFile(leasePath, JSON.stringify({
+      schema: 'soma-entry-lease/v1', sessionId: SESSION, requestId: prepared.requestId,
+      createdAt: foreign.createdAt, expiresAt: foreign.expiresAt,
+    }), { mode: 0o600 });
+    await fs.mkdir(path.join(path.dirname(requestDir), 'b'.repeat(32)), { mode: 0o700 });
+    await assert.rejects(f.mailbox.selectNative({ sessionId: SESSION }), { code: 'MAILBOX_INVALID' });
+    await fs.rm(path.join(path.dirname(requestDir), 'b'.repeat(32)), { recursive: true, force: true });
+
+    await fs.rename(requestDir, `${requestDir}.claimed`);
+    await assert.rejects(f.mailbox.selectNative({ sessionId: SESSION }), { code: 'MAILBOX_INVALID' });
+    assert.ok(await fs.stat(`${requestDir}.claimed`));
+  } finally {
+    await f.cleanup();
+  }
+});
+
 test('request envelope accepts only its exact bounded schema', () => {
   const requestId = 'a'.repeat(32);
   assert.deepEqual(

@@ -1,19 +1,25 @@
 ---
 description: Start, inspect or resume the durable SOMA workflow
 argument-hint: '"objective" | --help | --status [--project path] | --resume [runId] [--project path]'
+allowed-tools:
+  - Bash(exec node ~/.soma-v2/scripts/soma.cjs entry native prepare)
+  - Bash(exec node ~/.soma-v2/scripts/soma.cjs entry native consume)
+  - Bash(exec node ~/.soma-v2/scripts/soma.cjs entry native abort)
+  - Write
+  - Read
 ---
 
 You are the thin `/soma-run` adapter. Transport the request, route the structured result and do nothing else here.
 
 ## 1. Prepare
 
-Run this fixed Bash command. `${CLAUDE_SESSION_ID}` is native runtime data. Do not infer a fallback.
+Run this fixed command. Node reads and validates `CLAUDE_SESSION_ID` inside Node; do not infer a fallback.
 
 ```bash
-node "${HOME}/.soma-v2/scripts/soma.cjs" entry prepare --session "${CLAUDE_SESSION_ID}"
+exec node ~/.soma-v2/scripts/soma.cjs entry native prepare
 ```
 
-Require the returned session ID to match `^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$` and request ID to match `^[a-f0-9]{32}$`. If either fails, stop without composing another command.
+Require `REQUEST_PREPARED` and use the returned `requestPath` only with Write. Node owns the validated session and request identity inside Node; never put either identity in a command.
 
 ## 2. Write the envelope
 
@@ -24,22 +30,22 @@ Use the structured Write tool on the exact returned `requestPath`. Write one JSO
 - `"requestId"`: the validated prepare result
 - `"rawArguments": the exact `$ARGUMENTS` value`, JSON-encoded as data
 
-Do not parse, normalize, quote for a shell, interpolate into Bash or execute the argument text.
+Do not parse, normalize, quote for a shell, interpolate into a command or execute the argument text.
 
 ## 3. Consume or abort
 
-Separate Bash calls share no model-defined shell variables. After grammar validation, replace each placeholder below with the exact validated identifier rendered as a POSIX single-quoted literal. The accepted grammars contain no single quote, so this rendering is exact and needs no escaping. Never infer, shorten or reformat either value. In a `finally` path:
+Separate calls share no model-defined shell variables. In a `finally` path:
 
 - after a successful Write, run the fixed consume command;
 - after a failed or rejected Write, or if consume cannot be invoked, run the fixed abort command;
 - never put objective, request path, project path, run ID or argument text into either command.
 
 ```bash
-node "${HOME}/.soma-v2/scripts/soma.cjs" entry consume --session '<validated-session-id>' --request-id '<validated-request-id>' --owner-pid "$PPID"
+exec node ~/.soma-v2/scripts/soma.cjs entry native consume
 ```
 
 ```bash
-node "${HOME}/.soma-v2/scripts/soma.cjs" entry abort --session '<validated-session-id>' --request-id '<validated-request-id>'
+exec node ~/.soma-v2/scripts/soma.cjs entry native abort
 ```
 
 ## 4. Route once

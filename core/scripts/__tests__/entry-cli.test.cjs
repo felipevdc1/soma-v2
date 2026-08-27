@@ -93,6 +93,37 @@ test('consume rejects an invalid owner PID before claiming a valid mailbox reque
   }
 });
 
+test('native forms validate Claude session inside Node and select only one unclaimed request', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'soma-entry-native-cli-'));
+  try {
+    for (const sessionId of [undefined, '', '../foreign']) {
+      const result = run(['entry', 'native', 'prepare'], {
+        SOMA_ENTRY_ROOT: root,
+        ...(sessionId === undefined ? {} : { CLAUDE_SESSION_ID: sessionId }),
+      });
+      assert.equal(result.status, 2, result.stderr);
+      assert.equal(JSON.parse(result.stderr).error, 'INVALID_SESSION_ID');
+    }
+
+    const sessionId = 'claude.native:selection';
+    const prepared = run(['entry', 'native', 'prepare'], { SOMA_ENTRY_ROOT: root, CLAUDE_SESSION_ID: sessionId });
+    assert.equal(prepared.status, 0, prepared.stderr);
+    const request = JSON.parse(prepared.stdout);
+    fs.writeFileSync(request.requestPath, JSON.stringify({
+      $schema: 'soma-entry-request/v1', sessionId, requestId: request.requestId, rawArguments: '--help',
+    }));
+    const consumed = run(['entry', 'native', 'consume'], { SOMA_ENTRY_ROOT: root, CLAUDE_SESSION_ID: sessionId });
+    assert.equal(consumed.status, 0, consumed.stderr);
+    assert.equal(JSON.parse(consumed.stdout).status, 'HELP_SHOWN');
+
+    const absent = run(['entry', 'native', 'abort'], { SOMA_ENTRY_ROOT: root, CLAUDE_SESSION_ID: 'claude.native:absent' });
+    assert.equal(absent.status, 2, absent.stderr);
+    assert.equal(JSON.parse(absent.stderr).error, 'MAILBOX_NOT_FOUND');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('consume start emits one JSON result even when adoption runs the callable installer', () => {
   withFakeHome('soma-entry-start-home-', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'soma-entry-start-'));

@@ -177,7 +177,36 @@ function createMailbox(options = {}) {
     await fs.rm(requestDirectory(root, sessionId, requestId), { recursive: true, force: true });
   }
 
-  return { prepare, consume, abort };
+  async function selectNative({ sessionId }) {
+    assertSession(sessionId);
+    const sessionDir = sessionDirectory(root, sessionId);
+    let entries;
+    try {
+      entries = await fs.readdir(sessionDir);
+    } catch (err) {
+      if (err.code === 'ENOENT') throw mailboxError('MAILBOX_NOT_FOUND', 'Mailbox request was not found');
+      throw err;
+    }
+    if (entries.length === 0) throw mailboxError('MAILBOX_NOT_FOUND', 'Mailbox request was not found');
+    if (entries.length !== 1) throw mailboxError('MAILBOX_INVALID', 'Mailbox session has ambiguous residue');
+    const match = /^([a-f0-9]{32})$/.exec(entries[0]);
+    if (!match) throw mailboxError('MAILBOX_INVALID', 'Mailbox session has invalid residue');
+    const requestId = match[1];
+    await validateRequestDirectory(requestDirectory(root, sessionId, requestId), sessionId, requestId);
+    return { sessionId, requestId };
+  }
+
+  async function consumeNative({ sessionId }, parseEnvelope) {
+    const selected = await selectNative({ sessionId });
+    return consume(selected, parseEnvelope);
+  }
+
+  async function abortNative({ sessionId }) {
+    const selected = await selectNative({ sessionId });
+    await abort(selected);
+  }
+
+  return { prepare, consume, abort, selectNative, consumeNative, abortNative };
 }
 
 module.exports = { TTL_MS, createMailbox };

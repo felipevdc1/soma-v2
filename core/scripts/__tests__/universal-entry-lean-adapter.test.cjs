@@ -26,20 +26,32 @@ test('thin adapter transports raw arguments only through the structured envelope
   assert.doesNotMatch(source, /UserPromptExpansion|eval\b|bash\s+-c/);
 });
 
-test('adapter uses fixed prepare, consume and abort shapes with validated runtime identities', () => {
+test('adapter has an exact permission-safe allowlist and fixed native Bash shapes', () => {
   const source = read(ADAPTER);
-  assert.match(source, /entry prepare --session "\$\{CLAUDE_SESSION_ID\}"/);
-  assert.match(source, /\^\[A-Za-z0-9\]\[A-Za-z0-9\._:-\]\{0,127\}\$/);
-  assert.match(source, /\^\[a-f0-9\]\{32\}\$/);
-  assert.match(source, /entry consume --session '<validated-session-id>' --request-id '<validated-request-id>' --owner-pid "\$PPID"/);
-  assert.match(source, /entry abort --session '<validated-session-id>' --request-id '<validated-request-id>'/);
-  assert.doesNotMatch(source, /SOMA_SESSION_ID|SOMA_REQUEST_ID/);
-  assert.match(source, /POSIX single-quoted literal/i);
+  const tools = source.match(/^allowed-tools:\n((?:  - .+\n)+)/m);
+  assert.ok(tools, 'adapter must declare its restrictive allowed-tools');
+  assert.deepEqual(tools[1].trim().split('\n').map(line => line.trim().slice(2)), [
+    'Bash(exec node ~/.soma-v2/scripts/soma.cjs entry native prepare)',
+    'Bash(exec node ~/.soma-v2/scripts/soma.cjs entry native consume)',
+    'Bash(exec node ~/.soma-v2/scripts/soma.cjs entry native abort)',
+    'Write',
+    'Read',
+  ]);
+  const bashLines = [...source.matchAll(/```bash\n([^\n]+)\n```/g)].map(match => match[1]);
+  assert.deepEqual(bashLines, [
+    'exec node ~/.soma-v2/scripts/soma.cjs entry native prepare',
+    'exec node ~/.soma-v2/scripts/soma.cjs entry native consume',
+    'exec node ~/.soma-v2/scripts/soma.cjs entry native abort',
+  ]);
+  assert.doesNotMatch(source, /\$\{(?:HOME|CLAUDE_SESSION_ID)\}|\$HOME|\$PPID|\$\(/);
+  assert.doesNotMatch(source, /\bBash\b(?!\()/);
+  assert.match(source, /CLAUDE_SESSION_ID[^\n]*inside Node/i);
+  assert.match(source, /request identity[^\n]*inside Node/i);
   assert.match(source, /finally/i);
   assert.match(source, /Write tool/);
 });
 
-test('documented adapter consume shape works across separate Bash calls', (t) => {
+test('documented native adapter commands work across separate Bash calls', (t) => {
   const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), 'soma-adapter-shape-'));
   t.after(() => fs.rmSync(sandbox, { recursive: true, force: true }));
   const entryRoot = path.join(sandbox, 'mailbox');
@@ -47,18 +59,15 @@ test('documented adapter consume shape works across separate Bash calls', (t) =>
   fs.mkdirSync(project);
   const cli = path.join(CORE, 'scripts', 'soma.cjs');
   const env = { ...process.env, SOMA_ENTRY_ROOT: entryRoot, SOMA_PROJECT_CWD: project };
-  const prepared = spawnSync('node', [cli, 'entry', 'prepare', '--session', 'adapter.native:41'], { encoding: 'utf8', env });
+  env.CLAUDE_SESSION_ID = 'adapter.native:41';
+  const prepared = spawnSync('/bin/sh', ['-c', `exec node ${JSON.stringify(cli)} entry native prepare`], { encoding: 'utf8', env });
   assert.equal(prepared.status, 0, prepared.stderr);
   const slot = JSON.parse(prepared.stdout);
   fs.writeFileSync(slot.requestPath, JSON.stringify({
     $schema: 'soma-entry-request/v1', sessionId: slot.sessionId,
     requestId: slot.requestId, rawArguments: '--help',
   }));
-  const consumeShape = read(ADAPTER).match(/```bash\n([^\n]*entry consume[^\n]*)\n```/)[1]
-    .replace('"${HOME}/.soma-v2/scripts/soma.cjs"', `'${cli}'`)
-    .replace("'<validated-session-id>'", `'${slot.sessionId}'`)
-    .replace("'<validated-request-id>'", `'${slot.requestId}'`);
-  const consumed = spawnSync('bash', ['-c', consumeShape], { encoding: 'utf8', env });
+  const consumed = spawnSync('/bin/sh', ['-c', `exec node ${JSON.stringify(cli)} entry native consume`], { encoding: 'utf8', env });
   assert.equal(consumed.status, 0, consumed.stderr);
   assert.equal(JSON.parse(consumed.stdout).status, 'HELP_SHOWN');
 });

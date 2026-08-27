@@ -117,9 +117,13 @@ if (!subcmd) {
 // Delegate to script via spawnSync
 const scriptPath = path.join(__dirname, subcmd.script);
 const childArgs  = argv.slice(1); // strip subcommand, pass rest verbatim
+const childEnv = firstArg === 'entry' && childArgs[0] === 'native'
+  ? { ...process.env, SOMA_ENTRY_NATIVE_OWNER_PID: String(process.ppid) }
+  : process.env;
 
 const result = spawnSync('node', [scriptPath, ...childArgs], {
   stdio: 'inherit',
+  env: childEnv,
 });
 
 // Propagate exit code (or signal)

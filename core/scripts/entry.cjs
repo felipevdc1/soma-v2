@@ -4,7 +4,7 @@
 const { createMailbox } = require('./entry/mailbox.cjs');
 const { parseRawArguments } = require('./entry/raw-arguments.cjs');
 const { routeEntryRequest } = require('./entry/request.cjs');
-const { error } = require('./entry/request-schema.cjs');
+const { error, isSessionId } = require('./entry/request-schema.cjs');
 
 function parseFlags(argv, required, optional = []) {
   const values = {};
@@ -34,6 +34,24 @@ function positivePid(value) {
   return pid;
 }
 
+function nativeSessionId(env) {
+  if (!isSessionId(env.CLAUDE_SESSION_ID)) {
+    throw error('INVALID_SESSION_ID', 'CLAUDE_SESSION_ID is required and must be valid');
+  }
+  return env.CLAUDE_SESSION_ID;
+}
+
+function nativeOwnerPid(env) {
+  return positivePid(env.SOMA_ENTRY_NATIVE_OWNER_PID || String(process.ppid));
+}
+
+function route(bytes, { env, sessionId, ownerPid }) {
+  return routeEntryRequest(
+    parseRawArguments(JSON.parse(bytes.toString('utf8')).rawArguments),
+    { cwd: env.SOMA_PROJECT_CWD || process.cwd(), home: env.HOME, sessionId, ownerPid }
+  );
+}
+
 async function run(argv = process.argv.slice(2), env = process.env) {
   const [verb, ...rest] = argv;
   const mailbox = createMailbox({ root: env.SOMA_ENTRY_ROOT });
@@ -47,19 +65,29 @@ async function run(argv = process.argv.slice(2), env = process.env) {
     const ownerPid = Object.hasOwn(flags, '--owner-pid') ? positivePid(flags['--owner-pid']) : undefined;
     const result = await mailbox.consume(
       { sessionId: flags['--session'], requestId: flags['--request-id'] },
-      bytes => routeEntryRequest(
-        parseRawArguments(JSON.parse(bytes.toString('utf8')).rawArguments),
-        {
-          cwd: env.SOMA_PROJECT_CWD || process.cwd(), home: env.HOME,
-          sessionId: flags['--session'], ownerPid,
-        }
-      )
+      bytes => route(bytes, { env, sessionId: flags['--session'], ownerPid })
     );
     return result;
   }
   if (verb === 'abort') {
     const flags = parseFlags(rest, ['--session', '--request-id']);
     await mailbox.abort({ sessionId: flags['--session'], requestId: flags['--request-id'] });
+    return { status: 'REQUEST_ABORTED' };
+  }
+  if (verb === 'native') {
+    if (rest.length !== 1 || !['prepare', 'consume', 'abort'].includes(rest[0])) {
+      throw error('INVALID_ARGUMENTS', 'Invalid native entry command arguments');
+    }
+    const sessionId = nativeSessionId(env);
+    if (rest[0] === 'prepare') {
+      const prepared = await mailbox.prepare({ sessionId });
+      return { status: 'REQUEST_PREPARED', ...prepared };
+    }
+    if (rest[0] === 'consume') {
+      const ownerPid = nativeOwnerPid(env);
+      return mailbox.consumeNative({ sessionId }, bytes => route(bytes, { env, sessionId, ownerPid }));
+    }
+    await mailbox.abortNative({ sessionId });
     return { status: 'REQUEST_ABORTED' };
   }
   throw error('INVALID_ARGUMENTS', 'Unknown entry command');

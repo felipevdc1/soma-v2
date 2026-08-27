@@ -448,13 +448,13 @@ test('missing and ambiguous resume are stable read-only errors; help and status 
   }
 });
 
-test('shell PPID and native session reach the canonical lock through the public internal CLI path', () => {
+test('native entry forwards the live exec parent identity to the canonical lock', () => {
   const fx = fixture('run-resume-shell-owner');
   const mailboxRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'soma-entry-shell-mailbox-'));
   const sessionId = 'claude.native:shell-42';
   try {
-    const prepared = spawnSync(process.execPath, [SOMA_CLI, 'entry', 'prepare', '--session', sessionId], {
-      encoding: 'utf8', env: { ...process.env, SOMA_ENTRY_ROOT: mailboxRoot },
+    const prepared = spawnSync('/bin/sh', ['-c', 'exec node "$SOMA" entry native prepare'], {
+      encoding: 'utf8', env: { ...process.env, SOMA: SOMA_CLI, SOMA_ENTRY_ROOT: mailboxRoot, CLAUDE_SESSION_ID: sessionId },
     });
     assert.equal(prepared.status, 0, prepared.stderr);
     const request = JSON.parse(prepared.stdout);
@@ -462,11 +462,10 @@ test('shell PPID and native session reach the canonical lock through the public 
       $schema: 'soma-entry-request/v1', sessionId, requestId: request.requestId,
       rawArguments: `--resume ${fx.runId} --project "${fx.root}"`,
     }));
-    const consumed = spawnSync('/bin/sh', ['-c', '"$NODE" "$SOMA" entry consume --session "$SESSION" --request-id "$REQUEST" --owner-pid "$PPID"'], {
+    const consumed = spawnSync('/bin/sh', ['-c', 'exec node "$SOMA" entry native consume'], {
       encoding: 'utf8',
       env: {
-        ...process.env, HOME: path.join(fx.root, 'not-home'), NODE: process.execPath,
-        SOMA: SOMA_CLI, SESSION: sessionId, REQUEST: request.requestId,
+        ...process.env, HOME: path.join(fx.root, 'not-home'), SOMA: SOMA_CLI, CLAUDE_SESSION_ID: sessionId,
         SOMA_ENTRY_ROOT: mailboxRoot, SOMA_PROJECT_CWD: fx.root,
       },
     });

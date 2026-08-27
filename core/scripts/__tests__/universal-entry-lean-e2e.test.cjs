@@ -50,18 +50,22 @@ function mailboxRequest(soma, project, env, sessionId, rawArguments, ownerPid) {
   return { slot, result: runNode(soma, args, project, env) };
 }
 
-function installedAdapterRequest(soma, adapter, project, env, sessionId, rawArguments, ownerPid) {
-  const prepared = expectOk(runNode(soma, ['entry', 'prepare', '--session', sessionId], project, env));
+function installedAdapterRequest(soma, adapter, project, env, sessionId, rawArguments) {
+  assert.match(fs.readFileSync(adapter, 'utf8'), /exec node ~\/\.soma-v2\/scripts\/soma\.cjs entry native prepare/);
+  const nativeEnv = { ...env, CLAUDE_SESSION_ID: sessionId };
+  const prepared = expectOk(command('/bin/sh', ['-c', 'exec node ~/.soma-v2/scripts/soma.cjs entry native prepare'], {
+    cwd: project, env: nativeEnv,
+  }));
   const slot = JSON.parse(prepared.stdout);
   fs.writeFileSync(slot.requestPath, JSON.stringify({
     $schema: 'soma-entry-request/v1', sessionId, requestId: slot.requestId, rawArguments,
   }));
-  let commandShape = fs.readFileSync(adapter, 'utf8').match(/```bash\n([^\n]*entry consume[^\n]*)\n```/)[1]
-    .replace('"${HOME}/.soma-v2/scripts/soma.cjs"', `'${soma}'`)
-    .replace("'<validated-session-id>'", `'${sessionId}'`)
-    .replace("'<validated-request-id>'", `'${slot.requestId}'`);
-  if (ownerPid !== undefined) commandShape = commandShape.replace('"$PPID"', String(ownerPid));
-  return { slot, result: command('bash', ['-c', commandShape], { cwd: project, env }) };
+  return {
+    slot,
+    result: command('/bin/sh', ['-c', 'exec node ~/.soma-v2/scripts/soma.cjs entry native consume'], {
+      cwd: project, env: nativeEnv,
+    }),
+  };
 }
 
 test('fake-home install adopts, checkpoints, hands off and resumes the exact next task', (t) => {
@@ -79,6 +83,10 @@ test('fake-home install adopts, checkpoints, hands off and resumes the exact nex
   const reference = path.join(home, '.claude', 'references', 'soma-run-orchestration.md');
   assert.equal(fs.existsSync(adapter), true);
   assert.equal(fs.existsSync(reference), true);
+  assert.deepEqual(
+    fs.readFileSync(adapter),
+    fs.readFileSync(path.join(home, '.soma-v2', 'adapters', 'claude', 'commands', 'soma-run.md'))
+  );
 
   const sentinel = path.join(project, 'sentinel');
   const hostile = `"objective with $(touch ${sentinel})"`;
