@@ -104,9 +104,15 @@ function persistDrift(projectRoot, runId, error) {
 }
 
 const LOCK_KEYS = [
-  '$schema', 'executionScope', 'handoffGeneration', 'runId', 'sessionId', 'startedAt',
+  '$schema', 'executionScope', 'handoffGeneration', 'ownerPid', 'runId', 'sessionId', 'startedAt',
 ];
 const LEGACY_LOCK_KEYS = ['runId', 'sessionId', 'startedAt'];
+const PRIOR_LOCK_KEYS = [
+  '$schema', 'executionScope', 'handoffGeneration', 'runId', 'sessionId', 'startedAt',
+];
+const CLAIM_KEYS = [
+  '$schema', 'handoffGeneration', 'ownerPid', 'runId', 'sessionId', 'startedAt',
+];
 
 function exactKeys(value, expected) {
   return value && typeof value === 'object' && !Array.isArray(value) &&
@@ -121,14 +127,44 @@ function parseLock(bytes) {
       typeof value.startedAt === 'string') {
     return { kind: 'legacy', value };
   }
-  if (exactKeys(value, LOCK_KEYS) && value.$schema === 'soma-run-lock/v1' &&
+  if (exactKeys(value, PRIOR_LOCK_KEYS) && value.$schema === 'soma-run-lock/v1' &&
       safeRunId(value.runId) && typeof value.sessionId === 'string' && value.sessionId.length > 0 &&
       typeof value.startedAt === 'string' && typeof value.executionScope === 'string' &&
       value.executionScope.length > 0 && Number.isInteger(value.handoffGeneration) &&
       value.handoffGeneration >= 0) {
+    return { kind: 'legacy-current', value };
+  }
+  if (exactKeys(value, LOCK_KEYS) && value.$schema === 'soma-run-lock/v1' &&
+      safeRunId(value.runId) && typeof value.sessionId === 'string' && value.sessionId.length > 0 &&
+      typeof value.startedAt === 'string' && typeof value.executionScope === 'string' &&
+      value.executionScope.length > 0 && Number.isInteger(value.handoffGeneration) &&
+      value.handoffGeneration >= 0 && Number.isSafeInteger(value.ownerPid) && value.ownerPid > 0) {
     return { kind: 'current', value };
   }
   return null;
+}
+
+function parseClaim(bytes) {
+  let value;
+  try { value = JSON.parse(bytes); } catch (_) { return null; }
+  if (!exactKeys(value, CLAIM_KEYS) || value.$schema !== 'soma-run-lock-claim/v1' ||
+      !safeRunId(value.runId) || typeof value.sessionId !== 'string' || value.sessionId.length === 0 ||
+      typeof value.startedAt !== 'string' || !Number.isInteger(value.handoffGeneration) ||
+      value.handoffGeneration < 0 || !Number.isSafeInteger(value.ownerPid) || value.ownerPid <= 0) {
+    return null;
+  }
+  return value;
+}
+
+function processAlive(pid, killProcess = process.kill) {
+  try {
+    killProcess(pid, 0);
+    return true;
+  } catch (error) {
+    if (error && error.code === 'EPERM') return true;
+    if (error && error.code === 'ESRCH') return false;
+    throw error;
+  }
 }
 
 function readExistingLock(lockPath) {
@@ -143,17 +179,65 @@ function busyLock(runId, message) {
   return { status: 'busy', result: { status: 'RESUME_BUSY', retrySafe: true, runId, diagnostic: message } };
 }
 
-function acquireLock({ projectRoot, runId, sessionId, handoffGeneration, executionScope }) {
+function readClaim(claimPath) {
+  let stat;
+  try { stat = fs.lstatSync(claimPath); } catch (_) { return null; }
+  if (stat.isSymbolicLink() || !stat.isFile()) return { bytes: null, parsed: null };
+  const bytes = fs.readFileSync(claimPath);
+  return { bytes, parsed: parseClaim(bytes) };
+}
+
+function acquireReplacementClaim({ claimPath, claimTemporary, claimBytes, ownerPid, runId }) {
+  try {
+    fs.linkSync(claimTemporary, claimPath);
+    return { status: 'acquired' };
+  } catch (error) {
+    if (!error || error.code !== 'EEXIST') throw error;
+  }
+  const existing = readClaim(claimPath);
+  if (!existing || !existing.bytes || !existing.parsed) {
+    return busyLock(runId, 'RUN_LOCK_BUSY: replacement claim is malformed');
+  }
+  if (existing.parsed.ownerPid !== ownerPid && processAlive(existing.parsed.ownerPid)) {
+    return busyLock(runId, 'RUN_LOCK_BUSY: stale-lock replacement is owned by a live process');
+  }
+  const confirmed = readClaim(claimPath);
+  if (!confirmed || !confirmed.bytes || !confirmed.bytes.equals(existing.bytes)) {
+    return busyLock(runId, 'RUN_LOCK_BUSY: replacement claim changed during recovery');
+  }
+  try {
+    fs.unlinkSync(claimPath);
+    fs.linkSync(claimTemporary, claimPath);
+    return { status: 'acquired' };
+  } catch (error) {
+    if (error && (error.code === 'ENOENT' || error.code === 'EEXIST')) {
+      return busyLock(runId, 'RUN_LOCK_BUSY: replacement claim changed during recovery');
+    }
+    throw error;
+  }
+}
+
+function removeOwnedClaim(claimPath, claimBytes) {
+  const current = readClaim(claimPath);
+  if (current && current.bytes && current.bytes.equals(claimBytes)) fs.rmSync(claimPath, { force: true });
+}
+
+function acquireLock({ projectRoot, runId, sessionId, handoffGeneration, executionScope, ownerPid = process.ppid }) {
+  if (!Number.isSafeInteger(ownerPid) || ownerPid <= 0) {
+    return busyLock(runId, 'RUN_LOCK_CONFLICT: ownerPid must be a positive safe integer');
+  }
   const effectiveSessionId = sessionId || `pid-${process.ppid}`;
   const lock = {
     $schema: 'soma-run-lock/v1', executionScope, handoffGeneration, runId,
-    sessionId: effectiveSessionId, startedAt: new Date().toISOString(),
+    ownerPid, sessionId: effectiveSessionId, startedAt: new Date().toISOString(),
   };
   const lockPath = path.join(projectRoot, '.soma.lock');
-  const { somaDir } = resolveSomaPaths(projectRoot);
+  const { diagnosticsDir, somaDir } = resolveSomaPaths(projectRoot);
   fs.mkdirSync(somaDir, { recursive: true });
   const temporary = path.join(somaDir, `.run-lock.${process.pid}.${crypto.randomBytes(6).toString('hex')}.tmp`);
   fs.writeFileSync(temporary, canonicalJson(lock), { flag: 'wx' });
+  let claimPath;
+  let claimBytes;
   try {
     try {
       fs.linkSync(temporary, lockPath);
@@ -166,31 +250,30 @@ function acquireLock({ projectRoot, runId, sessionId, handoffGeneration, executi
     if (!existing || !existing.parsed || existing.parsed.value.runId !== runId) {
       return busyLock(runId, 'RUN_LOCK_CONFLICT: existing lock is malformed or belongs to another run');
     }
-    if (existing.parsed.kind === 'current') {
-      const current = existing.parsed.value;
-      if (current.handoffGeneration === handoffGeneration &&
-          current.sessionId === effectiveSessionId && current.executionScope === executionScope) {
-        return { status: 'idempotent' };
-      }
-      if (current.handoffGeneration >= handoffGeneration) {
-        return busyLock(runId, 'RUN_LOCK_BUSY: another session owns the current handoff generation');
-      }
+    if (existing.parsed.kind !== 'current') {
+      return busyLock(runId, 'RUN_LOCK_CONFLICT: existing lock has no provable process owner');
+    }
+    const current = existing.parsed.value;
+    if (current.handoffGeneration === handoffGeneration && current.sessionId === effectiveSessionId &&
+        current.executionScope === executionScope && current.ownerPid === ownerPid) {
+      return { status: 'idempotent' };
+    }
+    if (current.ownerPid !== ownerPid && processAlive(current.ownerPid)) {
+      return busyLock(runId, 'RUN_LOCK_BUSY: another live process owns the run lock');
     }
 
-    const claimPath = path.join(somaDir, '.run-lock-replace.claim');
-    let claim;
+    fs.mkdirSync(diagnosticsDir, { recursive: true });
+    claimPath = path.join(diagnosticsDir, '.run-lock-replace.claim');
+    const claim = {
+      $schema: 'soma-run-lock-claim/v1', handoffGeneration, ownerPid, runId,
+      sessionId: effectiveSessionId, startedAt: new Date().toISOString(),
+    };
+    claimBytes = Buffer.from(canonicalJson(claim));
+    const claimTemporary = path.join(diagnosticsDir, `.run-lock-claim.${process.pid}.${crypto.randomBytes(6).toString('hex')}.tmp`);
+    fs.writeFileSync(claimTemporary, claimBytes, { flag: 'wx', mode: 0o600 });
     try {
-      claim = fs.openSync(claimPath, 'wx', 0o600);
-    } catch (error) {
-      if (error && error.code === 'EEXIST') {
-        return busyLock(runId, 'RUN_LOCK_BUSY: stale-lock replacement is already in progress');
-      }
-      throw error;
-    }
-    try {
-      fs.writeFileSync(claim, canonicalJson({ handoffGeneration, runId, sessionId: effectiveSessionId }));
-      fs.closeSync(claim);
-      claim = undefined;
+      const claimResult = acquireReplacementClaim({ claimPath, claimTemporary, claimBytes, ownerPid, runId });
+      if (claimResult.status === 'busy') return claimResult;
       const confirmed = readExistingLock(lockPath);
       if (!confirmed || !confirmed.bytes || !confirmed.bytes.equals(existing.bytes)) {
         return busyLock(runId, 'RUN_LOCK_BUSY: lock changed during stale-lock replacement');
@@ -198,17 +281,17 @@ function acquireLock({ projectRoot, runId, sessionId, handoffGeneration, executi
       fs.renameSync(temporary, lockPath);
       return { status: 'replaced' };
     } finally {
-      if (claim !== undefined) fs.closeSync(claim);
-      fs.rmSync(claimPath, { force: true });
+      fs.rmSync(claimTemporary, { force: true });
     }
   } catch (error) {
     return busyLock(runId, `RUN_LOCK_BUSY: ${error.message}`);
   } finally {
+    if (claimPath && claimBytes) removeOwnedClaim(claimPath, claimBytes);
     fs.rmSync(temporary, { force: true });
   }
 }
 
-function resumeContinuity({ projectRoot, requestedRunId, sessionId, executionScope = projectRoot }) {
+function resumeContinuity({ projectRoot, requestedRunId, sessionId, executionScope = projectRoot, ownerPid = process.ppid }) {
   let runId;
   try {
     runId = resolveRun(projectRoot, requestedRunId);
@@ -219,7 +302,7 @@ function resumeContinuity({ projectRoot, requestedRunId, sessionId, executionSco
     const record = readLatestHandoff(projectRoot, runId);
     const checkpoint = verifyResume(projectRoot, record);
     const lock = acquireLock({
-      projectRoot, runId, sessionId, executionScope,
+      projectRoot, runId, sessionId, executionScope, ownerPid,
       handoffGeneration: record.generation,
     });
     if (lock.status === 'busy') return lock.result;
@@ -235,5 +318,5 @@ function resumeContinuity({ projectRoot, requestedRunId, sessionId, executionSco
 }
 
 module.exports = {
-  acquireLock, parseLock, readLatestHandoff, resolveRun, resumeContinuity, verifyResume,
+  acquireLock, parseClaim, parseLock, processAlive, readLatestHandoff, resolveRun, resumeContinuity, verifyResume,
 };

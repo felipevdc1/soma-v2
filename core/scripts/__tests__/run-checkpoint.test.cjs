@@ -217,20 +217,28 @@ test('same-sequence concurrent checkpoint publishers produce one immutable winne
   }
 });
 
-test('dirty filtering ignores a nested projectRoot .soma relative to the actual Git root', () => {
+test('dirty filtering ignores only nested runtime continuity paths and keeps durable SOMA files', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'soma-checkpoint-workspace-'));
   const workspace = path.join(root, 'packages', 'app');
-  fs.mkdirSync(path.join(workspace, '.soma', 'runtime'), { recursive: true });
+  fs.mkdirSync(path.join(workspace, '.soma', 'checkpoints', 'run-nested'), { recursive: true });
   git(root, ['init', '-q']);
   git(root, ['config', 'user.email', 'soma@example.test']);
   git(root, ['config', 'user.name', 'SOMA Test']);
   fs.writeFileSync(path.join(root, 'tracked.txt'), 'baseline\n');
   git(root, ['add', 'tracked.txt']); git(root, ['commit', '-qm', 'baseline']);
-  fs.writeFileSync(path.join(workspace, '.soma', 'runtime', 'state.json'), '{}\n');
+  fs.writeFileSync(path.join(workspace, '.soma', 'checkpoints', 'run-nested', '1.json'), '{}\n');
+  fs.writeFileSync(path.join(workspace, '.soma', 'install-state.json'), '{"status":"complete"}\n');
   try {
     const { readContinuityGitFacts } = require('../run/checkpoint.cjs');
     const facts = readContinuityGitFacts(workspace);
-    assert.equal(facts.dirtyEntries.some(entry => entry.path.startsWith('packages/app/.soma/')), false);
+    assert.equal(
+      facts.dirtyEntries.some(entry => entry.path === 'packages/app/.soma/checkpoints/run-nested/1.json'),
+      false
+    );
+    assert.equal(
+      facts.dirtyEntries.some(entry => entry.path === 'packages/app/.soma/install-state.json'),
+      true
+    );
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

@@ -197,8 +197,11 @@ function gitRelativePath(root, absolute) {
 }
 
 function ignoredContinuityPath(filePath, somaRelative, lockRelative) {
-  return filePath === lockRelative || filePath === somaRelative ||
-    filePath.startsWith(`${somaRelative}/`);
+  if (filePath === lockRelative) return true;
+  return ['checkpoints', 'handoffs', 'diagnostics'].some(directory => {
+    const prefix = `${somaRelative}/${directory}`;
+    return filePath === prefix || filePath.startsWith(`${prefix}/`);
+  });
 }
 
 function gitBlobHash(root, filePath, staged) {

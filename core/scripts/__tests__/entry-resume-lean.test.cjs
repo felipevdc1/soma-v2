@@ -9,6 +9,7 @@ const path = require('node:path');
 
 const RUN_CLI = path.resolve(__dirname, '..', 'run.cjs');
 const { routeEntryRequest } = require('../entry/request.cjs');
+const { processAlive, resumeContinuity } = require('../entry/continuity.cjs');
 
 function command(args, cwd) {
   return spawnSync('node', [RUN_CLI, ...args], { cwd, encoding: 'utf8', timeout: 15000 });
@@ -33,6 +34,7 @@ function fixture(runId = 'run-entry-resume', options = {}) {
   }
   git(root, ['add', 'tracked.txt']); git(root, ['commit', '-qm', 'baseline']);
   fs.mkdirSync(path.join(root, '.soma'), { recursive: true });
+  fs.writeFileSync(path.join(root, '.soma', 'install-state.json'), '{"status":"complete"}\n');
   const proof = `.soma/proofs/${runId}/T-1.txt`;
   fs.mkdirSync(path.join(root, path.dirname(proof)), { recursive: true });
   fs.writeFileSync(path.join(root, proof), 'proof\n');
@@ -69,6 +71,45 @@ function resume(fx, runId = fx.runId) {
   );
 }
 
+function resumeAs(fx, sessionId, ownerPid) {
+  return resumeContinuity({
+    projectRoot: fs.realpathSync(fx.root), requestedRunId: fx.runId,
+    executionScope: fs.realpathSync(fx.scope), sessionId, ownerPid,
+  });
+}
+
+function exitedPid() {
+  const result = spawnSync(process.execPath, ['-e', '']);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(Number.isInteger(result.pid), true);
+  return result.pid;
+}
+
+function writeCurrentLock(fx, values = {}) {
+  const lock = {
+    $schema: 'soma-run-lock/v1', executionScope: fs.realpathSync(fx.scope),
+    handoffGeneration: 1, ownerPid: process.pid, runId: fx.runId,
+    sessionId: 'existing-session', startedAt: '2026-08-27T10:00:00Z',
+    ...values,
+  };
+  const lockPath = path.join(fx.root, '.soma.lock');
+  fs.writeFileSync(lockPath, JSON.stringify(lock));
+  return lockPath;
+}
+
+function writeClaim(fx, values = {}) {
+  const claim = {
+    $schema: 'soma-run-lock-claim/v1', handoffGeneration: 1,
+    ownerPid: process.pid, runId: fx.runId, sessionId: 'claim-session',
+    startedAt: '2026-08-27T10:00:00Z', ...values,
+  };
+  const claimDir = path.join(fx.root, '.soma', 'diagnostics');
+  fs.mkdirSync(claimDir, { recursive: true });
+  const claimPath = path.join(claimDir, '.run-lock-replace.claim');
+  fs.writeFileSync(claimPath, JSON.stringify(claim));
+  return claimPath;
+}
+
 test('a new session resumes the exact unfinished task and never returns passed tasks', () => {
   const fx = fixture();
   try {
@@ -81,6 +122,7 @@ test('a new session resumes the exact unfinished task and never returns passed t
     const lock = JSON.parse(fs.readFileSync(path.join(fx.root, '.soma.lock'), 'utf8'));
     assert.equal(lock.runId, fx.runId);
     assert.equal(lock.sessionId, 'new-session');
+    assert.equal(lock.ownerPid, process.ppid);
   } finally {
     fs.rmSync(fx.root, { recursive: true, force: true });
   }
@@ -102,22 +144,19 @@ test('declared workspace resumes from repository continuity while preserving wor
   }
 });
 
-test('run lock is idempotent for one session, busy for a competitor, and never clobbered', () => {
+test('run lock is idempotent for one owner and a live foreign owner stays busy without clobbering bytes', () => {
   const fx = fixture('run-resume-lock');
   try {
-    const first = resume(fx);
+    const first = resumeAs(fx, 'owned-session', process.pid);
     assert.equal(first.status, 'RESUME_READY');
     const lockPath = path.join(fx.root, '.soma.lock');
     const bytes = fs.readFileSync(lockPath);
     const stat = fs.statSync(lockPath, { bigint: true });
-    const same = resume(fx);
+    const same = resumeAs(fx, 'owned-session', process.pid);
     assert.equal(same.status, 'RESUME_READY');
     assert.deepEqual(fs.readFileSync(lockPath), bytes);
     assert.equal(fs.statSync(lockPath, { bigint: true }).mtimeNs, stat.mtimeNs);
-    const competitor = routeEntryRequest(
-      { mode: 'resume', runId: fx.runId, project: fx.root },
-      { cwd: fx.root, home: path.join(fx.root, 'not-home'), sessionId: 'other-session' }
-    );
+    const competitor = resumeAs(fx, 'other-session', process.ppid);
     assert.equal(competitor.status, 'RESUME_BUSY');
     assert.deepEqual(fs.readFileSync(lockPath), bytes);
   } finally {
@@ -125,10 +164,23 @@ test('run lock is idempotent for one session, busy for a competitor, and never c
   }
 });
 
-test('newer immutable handoff replaces only same-run legacy or prior-generation locks', () => {
+test('a different session from the same Claude owner process may take over the lock', () => {
+  const fx = fixture('run-resume-same-owner');
+  try {
+    assert.equal(resumeAs(fx, 'session-a', process.pid).status, 'RESUME_READY');
+    assert.equal(resumeAs(fx, 'session-b', process.pid).status, 'RESUME_READY');
+    const lock = JSON.parse(fs.readFileSync(path.join(fx.root, '.soma.lock'), 'utf8'));
+    assert.equal(lock.sessionId, 'session-b');
+    assert.equal(lock.ownerPid, process.pid);
+  } finally {
+    fs.rmSync(fx.root, { recursive: true, force: true });
+  }
+});
+
+test('legacy locks without provable process ownership fail closed and remain byte-identical', () => {
   for (const [name, lock] of [
     ['legacy', runId => ({ runId, sessionId: 'old-session', startedAt: '2026-08-26T00:00:00Z' })],
-    ['prior', runId => ({
+    ['prior-current-schema', runId => ({
       $schema: 'soma-run-lock/v1', runId, sessionId: 'old-session', startedAt: '2026-08-26T00:00:00Z',
       handoffGeneration: 0, executionScope: '/old/scope',
     })],
@@ -137,12 +189,10 @@ test('newer immutable handoff replaces only same-run legacy or prior-generation 
     try {
       const lockPath = path.join(fx.root, '.soma.lock');
       fs.writeFileSync(lockPath, JSON.stringify(lock(fx.runId)));
+      const before = fs.readFileSync(lockPath);
       const result = resume(fx);
-      assert.equal(result.status, 'RESUME_READY', name);
-      const current = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
-      assert.equal(current.$schema, 'soma-run-lock/v1');
-      assert.equal(current.handoffGeneration, 1);
-      assert.equal(current.sessionId, 'new-session');
+      assert.equal(result.status, 'RESUME_BUSY', name);
+      assert.deepEqual(fs.readFileSync(lockPath), before, name);
     } finally {
       fs.rmSync(fx.root, { recursive: true, force: true });
     }
@@ -168,7 +218,7 @@ test('malformed and conflicting locks fail closed and remain byte-identical', ()
   }
 });
 
-function spawnResume(fx, sessionId) {
+function spawnResume(fx, sessionId, ownProcess = false) {
   const continuity = path.resolve(__dirname, '..', 'entry', 'continuity.cjs');
   const payload = {
     projectRoot: fs.realpathSync(fx.root), requestedRunId: fx.runId,
@@ -176,7 +226,9 @@ function spawnResume(fx, sessionId) {
   };
   const script = `
     const { resumeContinuity } = require(${JSON.stringify(continuity)});
-    process.stdout.write(JSON.stringify(resumeContinuity(${JSON.stringify(payload)})));
+    const payload = ${JSON.stringify(payload)};
+    if (${JSON.stringify(ownProcess)}) payload.ownerPid = process.pid;
+    process.stdout.write(JSON.stringify(resumeContinuity(payload)));
   `;
   return new Promise(resolve => {
     const child = spawn('node', ['-e', script], { cwd: fx.root });
@@ -191,7 +243,7 @@ function spawnResume(fx, sessionId) {
 test('concurrent resume contenders yield one ready owner and one stable busy result', async () => {
   const fx = fixture('run-resume-concurrent-lock');
   try {
-    const children = await Promise.all([spawnResume(fx, 'session-a'), spawnResume(fx, 'session-b')]);
+    const children = await Promise.all([spawnResume(fx, 'session-a', true), spawnResume(fx, 'session-b', true)]);
     assert.deepEqual(children.map(child => child.status), [0, 0]);
     const statuses = children.map(child => JSON.parse(child.stdout).status).sort();
     assert.deepEqual(statuses, ['RESUME_BUSY', 'RESUME_READY']);
@@ -202,6 +254,66 @@ test('concurrent resume contenders yield one ready owner and one stable busy res
   }
 });
 
+test('a dead lock owner is replaced by exactly one concurrent process', async () => {
+  const fx = fixture('run-resume-dead-owner');
+  try {
+    const deadOwnerPid = exitedPid();
+    assert.equal(processAlive(deadOwnerPid), false);
+    writeCurrentLock(fx, { ownerPid: deadOwnerPid, sessionId: 'crashed-session' });
+    const children = await Promise.all([
+      spawnResume(fx, 'replacement-a', true),
+      spawnResume(fx, 'replacement-b', true),
+    ]);
+    assert.deepEqual(children.map(child => child.status), [0, 0]);
+    assert.deepEqual(children.map(child => JSON.parse(child.stdout).status).sort(), ['RESUME_BUSY', 'RESUME_READY']);
+    const lock = JSON.parse(fs.readFileSync(path.join(fx.root, '.soma.lock'), 'utf8'));
+    assert.ok(['replacement-a', 'replacement-b'].includes(lock.sessionId));
+  } finally {
+    fs.rmSync(fx.root, { recursive: true, force: true });
+  }
+});
+
+test('replacement claims recover only for the same or a dead owner and fail closed otherwise', () => {
+  for (const [name, claimValue, expected] of [
+    ['same-owner', { ownerPid: process.pid }, 'RESUME_READY'],
+    ['dead-owner', { ownerPid: exitedPid() }, 'RESUME_READY'],
+    ['live-foreign', { ownerPid: process.ppid }, 'RESUME_BUSY'],
+    ['malformed', '{not-json', 'RESUME_BUSY'],
+  ]) {
+    const fx = fixture(`run-claim-${name}`);
+    try {
+      writeCurrentLock(fx, { ownerPid: exitedPid(), sessionId: 'crashed-lock-owner' });
+      const claimPath = typeof claimValue === 'string'
+        ? path.join(fx.root, '.soma', 'diagnostics', '.run-lock-replace.claim')
+        : writeClaim(fx, claimValue);
+      if (typeof claimValue === 'string') {
+        fs.mkdirSync(path.dirname(claimPath), { recursive: true });
+        fs.writeFileSync(claimPath, claimValue);
+      }
+      const claimBefore = fs.readFileSync(claimPath);
+      const lockBefore = fs.readFileSync(path.join(fx.root, '.soma.lock'));
+      const result = resumeAs(fx, 'replacement-session', process.pid);
+      assert.equal(result.status, expected, name);
+      if (expected === 'RESUME_BUSY') {
+        assert.deepEqual(fs.readFileSync(claimPath), claimBefore, name);
+        assert.deepEqual(fs.readFileSync(path.join(fx.root, '.soma.lock')), lockBefore, name);
+      } else {
+        assert.equal(fs.existsSync(claimPath), false, name);
+        assert.equal(JSON.parse(fs.readFileSync(path.join(fx.root, '.soma.lock'), 'utf8')).ownerPid, process.pid);
+      }
+    } finally {
+      fs.rmSync(fx.root, { recursive: true, force: true });
+    }
+  }
+});
+
+test('process liveness treats EPERM as alive and ESRCH as dead', () => {
+  const error = code => Object.assign(new Error(code), { code });
+  assert.equal(processAlive(123, () => { throw error('EPERM'); }), true);
+  assert.equal(processAlive(123, () => { throw error('ESRCH'); }), false);
+  assert.throws(() => processAlive(123, () => { throw error('EIO'); }), /EIO/);
+});
+
 test('resume rereads durable inputs and persists RESUME_DRIFT before creating a lock', () => {
   for (const [name, mutate] of [
     ['Git dirty content', fx => fs.writeFileSync(path.join(fx.root, 'tracked.txt'), 'changed\n')],
@@ -209,6 +321,7 @@ test('resume rereads durable inputs and persists RESUME_DRIFT before creating a 
       fs.writeFileSync(path.join(fx.root, 'tracked.txt'), 'new commit\n');
       git(fx.root, ['add', 'tracked.txt']); git(fx.root, ['commit', '-qm', 'new head']);
     }],
+    ['install state', fx => fs.writeFileSync(path.join(fx.root, '.soma', 'install-state.json'), '{"status":"changed"}\n')],
     ['run state bytes', fx => fs.appendFileSync(fx.statePath, ' ')],
     ['dispatch bytes', fx => fs.appendFileSync(path.join(fx.root, '.soma', 'dispatches', fx.runId, 'T-1', 'prompt.md'), 'changed\n')],
     ['run identity', fx => fs.unlinkSync(path.join(fx.root, '.soma', 'run-identities', `${fx.runId}.json`))],
