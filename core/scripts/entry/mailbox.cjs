@@ -104,7 +104,6 @@ function createMailbox(options = {}) {
         const active = /^([a-f0-9]{32})(\.claimed)?$/.exec(entry);
         if (!active) throw mailboxError('MAILBOX_INVALID', 'Mailbox session has unexpected residue');
         const activeDir = contained(root, path.join(sessionDir, entry));
-        if (active[2]) throw mailboxError('MAILBOX_BUSY', 'Mailbox request is being consumed');
         const { lease } = await validateRequestDirectory(activeDir, sessionId, active[1]);
         if (Date.parse(lease.expiresAt) > Date.now()) throw mailboxError('MAILBOX_BUSY', 'Mailbox request is still active');
         await fs.rm(activeDir, { recursive: true, force: false });

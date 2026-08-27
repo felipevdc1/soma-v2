@@ -159,6 +159,42 @@ test('mailbox removes expired valid requests but preserves malformed and unexpec
   }
 });
 
+test('mailbox recovers a valid expired claimed request before preparing its replacement', async () => {
+  const f = await fixture();
+  try {
+    const prepared = await f.mailbox.prepare({ sessionId: SESSION });
+    const requestDir = path.dirname(prepared.requestPath);
+    const leasePath = path.join(requestDir, 'lease.json');
+    const lease = JSON.parse(await fs.readFile(leasePath, 'utf8'));
+    lease.createdAt = new Date(Date.now() - (5 * 60 * 1000) - 1_000).toISOString();
+    lease.expiresAt = new Date(Date.parse(lease.createdAt) + (5 * 60 * 1000)).toISOString();
+    await fs.writeFile(leasePath, JSON.stringify(lease), { mode: 0o600 });
+    await fs.rename(requestDir, `${requestDir}.claimed`);
+
+    const replacement = await f.mailbox.prepare({ sessionId: SESSION });
+    assert.notEqual(replacement.requestId, prepared.requestId);
+    await assert.rejects(fs.stat(`${requestDir}.claimed`), { code: 'ENOENT' });
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test('mailbox preserves a malformed claimed request and reports MAILBOX_INVALID', async () => {
+  const f = await fixture();
+  try {
+    const prepared = await f.mailbox.prepare({ sessionId: SESSION });
+    const requestDir = path.dirname(prepared.requestPath);
+    await fs.rename(requestDir, `${requestDir}.claimed`);
+    const malformedLease = path.join(`${requestDir}.claimed`, 'lease.json');
+    await fs.writeFile(malformedLease, '{not json', { mode: 0o600 });
+
+    await assert.rejects(f.mailbox.prepare({ sessionId: SESSION }), { code: 'MAILBOX_INVALID' });
+    assert.equal(await fs.readFile(malformedLease, 'utf8'), '{not json');
+  } finally {
+    await f.cleanup();
+  }
+});
+
 test('mailbox abort is idempotent and sessions stay isolated', async () => {
   const f = await fixture();
   try {
