@@ -94,3 +94,16 @@ Fresh preflight found recovery `NONE`, clean tracked candidate state, valid inst
 - Installed Claude and Codex sync dry-runs reported `All entries in sync. No actions needed.` Doctor exited 0 with no errors or warnings; its only informational finding remains the preserved worktree-local `file_never_installed` state.
 
 The required one normal-permission `claude -p '/soma-run --help'` call was attempted in a fresh temporary Git project with no `.soma`, with output redirected to `claude-smoke.txt`. The command runner returned no output and left neither a live Claude process nor a discoverable temporary transcript directory. Consequently it does not prove command discovery, permission behavior, `REQUEST_PREPARED`/`HELP_SHOWN`, or mailbox cleanup. No second model call was made. This is the sole residual blocker for real-smoke completion.
+
+## Permission-safe smoke diagnostic (attempt 2)
+
+**Verdict: BLOCKED (runtime identity contract, not output capture).** Phase A found that the first attempt's “no transcript” conclusion was false: its project transcript exists at `/Users/felipevdc1/.claude/projects/-private-tmp-soma-permission-safe-smoke-M5zEbw/04f1e8d7-ad52-466e-8e1f-b486a0fb13e9.jsonl`. It records slash-command discovery and then `entry native prepare`/`abort` both failing with `INVALID_SESSION_ID`: the non-interactive SDK CLI session has transcript metadata but does not export a valid `CLAUDE_SESSION_ID` to the Bash child. The original stdout-only capture therefore hid decisive structured evidence; it was not a successful smoke.
+
+One and only one materially corrected foreground smoke was then run with normal/default permissions (no bypass or explicit permission mode), `--verbose --output-format stream-json --include-partial-messages --debug-file`, independent stdout/stderr, no timeout wrapper, backgrounding, pipe, or command substitution. Its fresh Git project had no `.soma`:
+
+- Evidence directory: `/private/tmp/soma-permission-safe-final.8ErppD`; stdout `claude.stdout.jsonl` (77,060 bytes), stderr `claude.stderr.log` (0 bytes), debug `claude.debug.log` (105,328 bytes), shell exit `0`.
+- Claude session/transcript: `292d11b3-7103-45d9-998c-bcd60947a5ab`, `/Users/felipevdc1/.claude/projects/-private-tmp-soma-permission-safe-final-8ErppD/292d11b3-7103-45d9-998c-bcd60947a5ab.jsonl`.
+- Positive discovery/tool-flow evidence: the injected adapter was discovered; it invoked the fixed native `prepare`, received exit 2 `INVALID_SESSION_ID`, then invoked the fixed native `abort`, which received the same exit 2. The final stream result reports `permission_denials: []`.
+- There was no scoped Write, consume, or `HELP_SHOWN`, because prepare could not establish the executor-owned session identity. No mailbox files, project adoption/run lock, or live Claude CLI process remained.
+
+No further model calls, source edits, reinstalls, or global activation were performed. The remaining decision is to run the adapter in a genuinely interactive Claude Code session that exports the validated session identity, or to change the runtime contract under a separately authorized implementation task.
