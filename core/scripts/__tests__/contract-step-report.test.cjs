@@ -100,11 +100,9 @@ function reportPathFor(projectRoot, runId, step) {
   return path.join(p.runReportsDir, `${step}-report.json`);
 }
 
-// Arrange-only helper (K1 fixup): `report` now requires an initialized run
-// (appendReport() has no lazy bootstrap). Cases 1/2 call this before
-// calling `report` — cases 3-6 don't call `report` at all (case 3 tests
-// absence; 4-6 fabricate raw report files via writeRawReport), so they're
-// unaffected and untouched.
+// Arrange-only helper (K1 fixup): report and gate require an initialized run.
+// Every case establishes the exact state/marker identity before exercising
+// its report-specific oracle.
 function initRun(projectRoot, runId) {
   const r = runRun(['state', '--init', '--run', runId], { cwd: projectRoot });
   assert.equal(r.status, 0, `fixture setup: "soma run state --init" failed: ${r.stderr}`);
@@ -236,6 +234,7 @@ test('CONTRACT-STEP-REPORT-01 case 3: report ausente → gate exit 2 (prosa "don
   try {
     const runId = 'run-t02-case3';
     writeLock(projectRoot, runId);
+    initRun(projectRoot, runId);
     // Nenhum report emitido para STEP_1A_SPECIFY — nem sequer tentamos
     // "soma run report". Um agente poderia ter dito "concluído com sucesso"
     // em prosa, mas nenhum artefato existe no disco. Isso não pode contar.
@@ -264,6 +263,7 @@ test('CONTRACT-STEP-REPORT-01 case 4: status fora do enum ("done") → report in
   try {
     const runId = 'run-t02-case4';
     writeLock(projectRoot, runId);
+    initRun(projectRoot, runId);
 
     writeRawReport(
       projectRoot,
@@ -306,6 +306,7 @@ test('CONTRACT-STEP-REPORT-01 case 5: status fail sem failure_reason → report 
   try {
     const runId = 'run-t02-case5';
     writeLock(projectRoot, runId);
+    initRun(projectRoot, runId);
 
     writeRawReport(
       projectRoot,
@@ -348,6 +349,7 @@ test('CONTRACT-STEP-REPORT-01 case 6: JSON corrompido → gate exit 2 com causa 
   try {
     const runId = 'run-t02-case6';
     writeLock(projectRoot, runId);
+    initRun(projectRoot, runId);
 
     writeRawReport(projectRoot, runId, 'STEP_1A_SPECIFY', '{ isto não é json válido');
 

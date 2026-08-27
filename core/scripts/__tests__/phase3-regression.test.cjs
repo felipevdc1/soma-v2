@@ -167,6 +167,7 @@ function runHooksViaBridge() {
   // nothing lands in the override dir. Setting it here is still correct —
   // it's what makes isolation work the day the deployed copy catches up.
   const telemetryLogDir = fs.mkdtempSync(path.join(os.tmpdir(), 'soma-p3-hooks-telemetry-'));
+  const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'soma-p3-hooks-cwd-'));
 
   const env = Object.assign({}, process.env);
   delete env.NODE_TEST_CONTEXT;
@@ -176,7 +177,7 @@ function runHooksViaBridge() {
 
   try {
     const result = spawnSync(NODE_BIN, ['--test', ...hookTestFiles], {
-      encoding: 'utf8', timeout: 60000, env
+      encoding: 'utf8', timeout: 60000, env, cwd: projectRoot
     });
     const raw = (result.stdout || '') + (result.stderr || '');
     const testsMatch = raw.match(/# tests (\d+)/);
@@ -190,6 +191,7 @@ function runHooksViaBridge() {
     };
   } finally {
     try { fs.rmSync(telemetryLogDir, { recursive: true, force: true }); } catch (e) { /* cleanup */ }
+    try { fs.rmSync(projectRoot, { recursive: true, force: true }); } catch (e) { /* cleanup */ }
   }
 }
 

@@ -864,7 +864,7 @@ git diff --check
 git status --short
 ```
 
-Expected: both test commands PASS; alias-only skips name the absent filesystem property; `git diff --check` is silent; status contains no staged or tracked `.soma/` content.
+Differential result from `T-RUN-ID-FINAL-DIAG`: base `516b9fbccd68a8c9c65886ec815ec41f9a63b257` has 57 pre-existing failures across the 14 isolated failing files. The active rollout head initially had 65, an eight-failure delta caused by four incomplete `contract-step-report` fixtures and four installed-hook wrappers inheriting the active workspace cwd. Rollout closes only when that delta is zero: the 14 isolated files must return exactly the base ceiling of 57 and the run-identity suites must pass. Do not record `npm test` as green while those 57 failures remain; their remediation is a separate baseline-debt task.
 
 ## AC-to-task traceability
 

@@ -69,6 +69,7 @@ function runHooksTests() {
   // nothing lands in the override dir. Setting it here is still correct —
   // it's what makes isolation work the day the deployed copy catches up.
   const telemetryLogDir = fs.mkdtempSync(path.join(os.tmpdir(), 'soma-hooks-regression-telemetry-'));
+  const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'soma-hooks-regression-cwd-'));
 
   const env = Object.assign({}, process.env);
   delete env.NODE_TEST_CONTEXT;
@@ -81,6 +82,7 @@ function runHooksTests() {
       encoding: 'utf8',
       timeout: 60000,
       env,
+      cwd: projectRoot,
       stdio: ['pipe', 'pipe', 'pipe']
     });
 
@@ -97,6 +99,7 @@ function runHooksTests() {
     };
   } finally {
     try { fs.rmSync(telemetryLogDir, { recursive: true, force: true }); } catch (e) { /* cleanup */ }
+    try { fs.rmSync(projectRoot, { recursive: true, force: true }); } catch (e) { /* cleanup */ }
   }
 }
 
