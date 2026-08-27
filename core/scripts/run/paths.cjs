@@ -60,6 +60,9 @@ function resolveSomaPaths(projectRoot, runId) {
   const dispatchesDir = path.join(somaDir, 'dispatches');
   const recoveryDir = path.join(somaDir, 'recovery');
   const runIdentitiesDir = path.join(somaDir, 'run-identities');
+  const checkpointsDir = path.join(somaDir, 'checkpoints');
+  const handoffsDir = path.join(somaDir, 'handoffs');
+  const diagnosticsDir = path.join(somaDir, 'diagnostics');
 
   const resolved = {
     projectRoot,
@@ -68,6 +71,9 @@ function resolveSomaPaths(projectRoot, runId) {
     dispatchesDir,
     recoveryDir,
     runIdentitiesDir,
+    checkpointsDir,
+    handoffsDir,
+    diagnosticsDir,
     installStateFile: path.join(somaDir, 'install-state.json'),
     legacy: isLegacyProject(projectRoot),
   };
@@ -79,6 +85,9 @@ function resolveSomaPaths(projectRoot, runId) {
     resolved.runRecoveryDir = path.join(recoveryDir, exactRunId);
     resolved.runStateFile = path.join(somaDir, `run-state-${exactRunId}.json`);
     resolved.runIdentityFile = path.join(runIdentitiesDir, `${exactRunId}.json`);
+    resolved.runCheckpointsDir = path.join(checkpointsDir, exactRunId);
+    resolved.runHandoffsDir = path.join(handoffsDir, exactRunId);
+    resolved.runResumeDiagnosticFile = path.join(diagnosticsDir, `${exactRunId}-resume-drift.json`);
   }
 
   return resolved;

@@ -2,6 +2,7 @@
 
 const { resolveProject: defaultResolveProject } = require('./project.cjs');
 const { inspectAdoption: defaultInspectAdoption, adoptProject: defaultAdoptProject } = require('./adoption.cjs');
+const { resumeContinuity: defaultResumeContinuity } = require('./continuity.cjs');
 
 function routeEntryRequest(parsed, context = {}) {
   if (parsed.mode === 'help') {
@@ -41,11 +42,11 @@ function routeEntryRequest(parsed, context = {}) {
     };
   }
   if (parsed.mode === 'resume') {
-    return {
-      status: 'RESUME_DRIFT', retrySafe: true,
-      projectRoot: resolution.projectRoot, scope: resolution.scope,
-      diagnostic: 'Resume continuity is not available until the handoff task is installed',
-    };
+    const resumeContinuity = context.resumeContinuity || defaultResumeContinuity;
+    return resumeContinuity({
+      projectRoot: resolution.scope, requestedRunId: parsed.runId,
+      sessionId: context.sessionId,
+    });
   }
   if (parsed.mode === 'start') {
     const adoptProject = context.adoptProject || defaultAdoptProject;

@@ -6,13 +6,10 @@
  * Routes `soma run <verb> [args...]` to `core/scripts/run/{verb}.cjs`, the
  * same delegation pattern soma.cjs already uses for top-level subcommands.
  *
- * The 5 verbs (state, report, gate, resume, dispatch-record) are each their
- * OWN file so the 8 Wave 2 tasks that implement them can run [P] in
- * parallel without colliding on this one. After T-01 lands, nobody else
- * edits this file — see tasks.md's note under T-01.
+ * Each verb lives in its own module under run/.
  *
  * Usage:
- *   soma run --help                 → list the 5 verbs, exit 0
+ *   soma run --help                 → list the verbs, exit 0
  *   soma run                        → same as --help, exit 0
  *   soma run <verb> [args...]       → delegate to run/<verb>.cjs
  *   soma run <unknown-verb>         → JSON UNKNOWN_VERB on stderr, exit 2
@@ -43,6 +40,8 @@ const VERBS = [
   { name: 'gate', desc: "Check the previous step's report and decide whether the transition is allowed" },
   { name: 'resume', desc: 'Resume a run from the last step with a report status "pass"' },
   { name: 'dispatch-record', desc: 'Materialize prompt.md/output.md/metadata.json for a dispatched task' },
+  { name: 'checkpoint', desc: 'Publish an immutable checkpoint derived from durable run evidence' },
+  { name: 'handoff', desc: 'Publish an immutable handoff for exact cross-session resume' },
 ];
 
 const VALID_NAMES = VERBS.map(v => v.name);
@@ -62,6 +61,8 @@ function printUsage() {
   process.stdout.write(`  soma run report --step STEP_3_FOUNDATION --status pass\n`);
   process.stdout.write(`  soma run gate --step STEP_4_WAVES\n`);
   process.stdout.write(`  soma run resume --run run-260815-2340-a1b2c3\n`);
+  process.stdout.write(`  soma run checkpoint --run run-260815-2340-a1b2c3 --input-file checkpoint.json\n`);
+  process.stdout.write(`  soma run handoff --run run-260815-2340-a1b2c3\n`);
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────────

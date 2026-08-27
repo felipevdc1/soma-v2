@@ -7,7 +7,7 @@
  *   - core/scripts/run/schema.cjs hand-rolled schema validator (zero dep)
  *   - core/scripts/run/paths.cjs  .soma/ path resolution + legacy detection
  *
- * The 5 verbs themselves (state/report/gate/resume/dispatch-record) are
+ * The verb modules themselves are
  * NOT implemented here — that's Wave 2 (T-06..T-10). This suite only proves
  * the dispatcher routes correctly and fails legibly when a verb module is
  * still missing, which is the exact situation Wave 2 tasks run under until
@@ -49,22 +49,22 @@ function runSoma(args = [], env = {}) {
 
 // ── 1. `soma run --help` lists the 5 verbs ────────────────────────────────
 
-test('T-01-01: soma run --help exits 0 and lists all 5 verbs', () => {
+test('T-01-01: soma run --help exits 0 and lists every internal verb', () => {
   const r = runRun(['--help']);
   assert.equal(r.status, 0, `Expected exit 0, got ${r.status}. stderr: ${r.stderr}`);
   const output = r.stdout + r.stderr;
-  for (const verb of ['state', 'report', 'gate', 'resume', 'dispatch-record']) {
+  for (const verb of ['state', 'report', 'gate', 'resume', 'dispatch-record', 'checkpoint', 'handoff']) {
     assert.ok(output.includes(verb), `--help output missing verb: ${verb}. Output: ${output}`);
   }
 });
 
 // ── 2. `soma run` with no args lists the 5 verbs too ──────────────────────
 
-test('T-01-02: soma run (no args) exits 0 and lists all 5 verbs', () => {
+test('T-01-02: soma run (no args) exits 0 and lists every internal verb', () => {
   const r = runRun([]);
   assert.equal(r.status, 0, `Expected exit 0, got ${r.status}. stderr: ${r.stderr}`);
   const output = r.stdout + r.stderr;
-  for (const verb of ['state', 'report', 'gate', 'resume', 'dispatch-record']) {
+  for (const verb of ['state', 'report', 'gate', 'resume', 'dispatch-record', 'checkpoint', 'handoff']) {
     assert.ok(output.includes(verb), `no-args output missing verb: ${verb}. Output: ${output}`);
   }
 });
@@ -82,7 +82,7 @@ test('T-01-03: soma run frobnicate (unknown verb) exits non-zero and names it', 
 
 test('T-01-04: valid verb with missing module exits non-zero with legible "not implemented", no MODULE_NOT_FOUND stack', () => {
   // All 5 verb modules are expected to be ABSENT at T-01 time (Wave 2 hasn't run).
-  for (const verb of ['state', 'report', 'gate', 'resume', 'dispatch-record']) {
+  for (const verb of ['state', 'report', 'gate', 'resume', 'dispatch-record', 'checkpoint', 'handoff']) {
     const verbPath = path.join(path.dirname(RUN_CLI), 'run', `${verb}.cjs`);
     if (fs.existsSync(verbPath)) continue; // already implemented by a later wave — skip
     const r = runRun([verb]);
@@ -211,6 +211,10 @@ test('T-01-11: paths.cjs — project with .soma/ resolves the expected subpaths'
     assert.equal(p.somaDir, path.join(projectRoot, '.soma'));
     assert.equal(p.reportsDir, path.join(projectRoot, '.soma', 'reports'));
     assert.equal(p.dispatchesDir, path.join(projectRoot, '.soma', 'dispatches'));
+    assert.equal(p.checkpointsDir, path.join(projectRoot, '.soma', 'checkpoints'));
+    assert.equal(p.handoffsDir, path.join(projectRoot, '.soma', 'handoffs'));
+    assert.equal(p.runCheckpointsDir, path.join(projectRoot, '.soma', 'checkpoints', runId));
+    assert.equal(p.runHandoffsDir, path.join(projectRoot, '.soma', 'handoffs', runId));
     assert.equal(p.runStateFile, path.join(projectRoot, '.soma', `run-state-${runId}.json`));
     assert.equal(p.legacy, false);
   } finally {
