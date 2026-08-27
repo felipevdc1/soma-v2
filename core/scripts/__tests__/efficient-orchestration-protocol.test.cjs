@@ -15,6 +15,7 @@ const TEN_STEP = path.join(ROOT, 'docs', '10-step-protocol.md');
 const SONAR = path.join(ROOT, 'adapters', 'claude', 'commands', 'sonar-audit.md');
 const AMENDMENT = path.join(ROOT, 'docs', 'constitution-amendments', '1.3.0-efficient-orchestration.md');
 const MANIFEST = path.join(ROOT, 'manifest.json');
+const TROUBLESHOOTING = path.resolve(ROOT, '..', 'docs', 'TROUBLESHOOTING.md');
 
 function read(file) {
   return fs.readFileSync(file, 'utf8');
@@ -87,4 +88,17 @@ test('manifest e anchor Codex acompanham as fontes instaláveis atualizadas', ()
   const { extractBlock, computeBlockSha256 } = require('../lib/anchored-blocks.cjs');
   const block = extractBlock(CODEX, 'block.codex.AGENTS.soma-stsd');
   assert.equal(block.attrs.sha256, computeBlockSha256(block.content));
+});
+
+test('troubleshooting documents the exhausted initial attempt plus one correction with durable evidence', () => {
+  const source = read(TROUBLESHOOTING);
+  const start = source.indexOf('### Symptom: Task stuck');
+  const section = source.slice(start, source.indexOf('\n---', start));
+  assert.match(section, /initial attempt plus one correction/i);
+  assert.match(section, /\.soma\/diagnostics/i);
+  assert.match(section, /\.soma\/checkpoints\/<runId>\//i);
+  assert.match(section, /\.soma\/handoffs\/<runId>\//i);
+  assert.doesNotMatch(section, /Task stuck after 3 agent failures/i);
+  assert.doesNotMatch(section, /3 consecutive failures[\s\S]{0,160}PAUSED_DIAGNOSTIC/i);
+  assert.doesNotMatch(section, /\/tmp\/soma-state-\{sessionId\}\.json/i);
 });

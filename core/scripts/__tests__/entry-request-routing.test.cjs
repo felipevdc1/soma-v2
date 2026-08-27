@@ -140,6 +140,69 @@ test('status reports durable state and handoff facts without changing any byte o
   } finally { fs.rmSync(project, { recursive: true, force: true }); }
 });
 
+test('status rejects every invalid pre-handoff run identity without mutating the project', () => {
+  const project = temp('soma-entry-status-identity-invalid-');
+  initRepo(project);
+  const runId = 'run-status-identity-invalid';
+  const soma = path.join(project, '.soma');
+  const identityPath = path.join(soma, 'run-identities', `${runId}.json`);
+  const state = {
+    $schema: 'soma-state/v2', runId, sessionId: 's', startedAt: '2026-08-27T00:00:00Z',
+    currentState: 'PAUSED_DIAGNOSTIC', lastTransitionAt: '2026-08-27T00:01:00Z',
+    activeDispatchIds: [], failureCountsByStep: {}, fixLoopIterations: 0,
+    snapshots: [], humanGatesApproved: {}, decisions: [], reports: [],
+  };
+  fs.mkdirSync(path.dirname(identityPath), { recursive: true });
+  fs.writeFileSync(path.join(soma, `run-state-${runId}.json`), `${JSON.stringify(state)}\n`);
+  const cases = [
+    ['missing', () => fs.rmSync(identityPath, { force: true })],
+    ['malformed', () => fs.writeFileSync(identityPath, '{broken')],
+    ['wrong run', () => fs.writeFileSync(identityPath, `${JSON.stringify({ $schema: 'soma-run-identity/v1', runId: 'run-other' }, null, 2)}\n`)],
+    ['noncanonical', () => fs.writeFileSync(identityPath, `${JSON.stringify({ $schema: 'soma-run-identity/v1', runId })}\n`)],
+    ['nonregular', () => { fs.rmSync(identityPath, { force: true }); fs.mkdirSync(identityPath); }],
+  ];
+  try {
+    for (const [label, arrange] of cases) {
+      fs.rmSync(identityPath, { recursive: true, force: true });
+      arrange();
+      const before = snapshotFiles(project);
+      const result = routeEntryRequest({ mode: 'status', project }, { cwd: project });
+      assert.equal(result.run.state, 'DURABLE_STATUS_INVALID', label);
+      assert.match(result.run.diagnostic, /identity/i, label);
+      assert.deepEqual(snapshotFiles(project), before, label);
+    }
+  } finally { fs.rmSync(project, { recursive: true, force: true }); }
+});
+
+test('status preserves a valid pre-handoff run with null durable generations', () => {
+  const project = temp('soma-entry-status-pre-handoff-');
+  initRepo(project);
+  const runId = 'run-status-pre-handoff';
+  const soma = path.join(project, '.soma');
+  const state = {
+    $schema: 'soma-state/v2', runId, sessionId: 's', startedAt: '2026-08-27T00:00:00Z',
+    currentState: 'PAUSED_DIAGNOSTIC', lastTransitionAt: '2026-08-27T00:01:00Z',
+    activeDispatchIds: [], failureCountsByStep: {}, fixLoopIterations: 0,
+    snapshots: [], humanGatesApproved: {}, decisions: [], reports: [],
+  };
+  fs.mkdirSync(path.join(soma, 'run-identities'), { recursive: true });
+  fs.writeFileSync(path.join(soma, `run-state-${runId}.json`), `${JSON.stringify(state)}\n`);
+  fs.writeFileSync(
+    path.join(soma, 'run-identities', `${runId}.json`),
+    `${JSON.stringify({ $schema: 'soma-run-identity/v1', runId }, null, 2)}\n`
+  );
+  const before = snapshotFiles(project);
+  try {
+    const result = routeEntryRequest({ mode: 'status', project }, { cwd: project });
+    assert.equal(result.status, 'STATUS_SHOWN');
+    assert.deepEqual(result.run, {
+      runId, currentState: 'PAUSED_DIAGNOSTIC', checkpointSequence: null, handoffGeneration: null,
+      blocker: null, nextDecision: null, nextTask: null,
+    });
+    assert.deepEqual(snapshotFiles(project), before);
+  } finally { fs.rmSync(project, { recursive: true, force: true }); }
+});
+
 test('status diagnoses corrupt or ambiguous durable state without guessing or mutating', () => {
   const project = temp('soma-entry-status-invalid-');
   initRepo(project);

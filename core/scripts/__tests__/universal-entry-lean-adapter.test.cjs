@@ -131,3 +131,17 @@ test('all planned reviewers inspect one immutable candidate before the only corr
   assert.match(source, /never start the correction after the first review/i);
   assert.match(source, /single correction attempt/i);
 });
+
+test('PAUSED_DIAGNOSTIC delegates rollback through one bounded executor contract', () => {
+  const source = read(REFERENCE);
+  const start = source.indexOf('## PAUSED_DIAGNOSTIC');
+  const end = source.indexOf('## Worked example', start);
+  const section = source.slice(start, end);
+  assert.match(section, /dispatch-record begin[\s\S]{0,700}Agent[\s\S]{0,700}dispatch-record end/i);
+  assert.match(section, /executor[\s\S]{0,260}git reset --hard <baselineSha>/i);
+  assert.match(section, /baselineSha[\s\S]{0,180}\^\[0-9a-f\]\{40\}\$/i);
+  assert.match(section, /repository root[\s\S]{0,260}(?:marker|worktree scope)/i);
+  assert.match(section, /HEAD[\s\S]{0,180}status proof/i);
+  assert.match(section, /(?:failure|falhar)[\s\S]{0,180}PAUSED_DIAGNOSTIC[\s\S]{0,180}no automatic (?:extra )?agent/i);
+  assert.doesNotMatch(section, /coordinator[^\n]{0,120}git reset/i);
+});
