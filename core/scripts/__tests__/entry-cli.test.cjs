@@ -24,6 +24,7 @@ test('entry stays internal while prepare and consume parse a structured request 
     assert.equal(prepared.status, 0, prepared.stderr);
     const preparedJson = JSON.parse(prepared.stdout);
     assert.match(preparedJson.requestId, /^[a-f0-9]{32}$/);
+    assert.equal(preparedJson.sessionId, 'codex.cli:1');
     fs.writeFileSync(preparedJson.requestPath, JSON.stringify({
       $schema: 'soma-entry-request/v1', sessionId: 'codex.cli:1', requestId: preparedJson.requestId, rawArguments: '--status --project /tmp/project',
     }));

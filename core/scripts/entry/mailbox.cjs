@@ -33,6 +33,32 @@ async function privateDirectory(dir) {
   await fs.chmod(dir, 0o700);
 }
 
+async function acquirePrepareLock(prepareLock) {
+  try {
+    await fs.mkdir(prepareLock, { mode: 0o700 });
+    return;
+  } catch (err) {
+    if (err.code !== 'EEXIST') throw err;
+  }
+
+  let lockStat;
+  try {
+    lockStat = await fs.stat(prepareLock);
+  } catch (err) {
+    if (err.code !== 'ENOENT') throw err;
+  }
+  if (lockStat && lockStat.mtimeMs + TTL_MS > Date.now()) {
+    throw mailboxError('MAILBOX_BUSY', 'Mailbox request is being prepared');
+  }
+  if (lockStat) await fs.rm(prepareLock, { recursive: true, force: false });
+  try {
+    await fs.mkdir(prepareLock, { mode: 0o700 });
+  } catch (err) {
+    if (err.code === 'EEXIST') throw mailboxError('MAILBOX_BUSY', 'Mailbox request is being prepared');
+    throw err;
+  }
+}
+
 function leaseIsValid(lease, sessionId, requestId) {
   if (!lease || Array.isArray(lease) || typeof lease !== 'object') return false;
   const keys = Object.keys(lease).sort();
@@ -89,12 +115,7 @@ function createMailbox(options = {}) {
     const sessionDir = sessionDirectory(root, sessionId);
     await privateDirectory(sessionDir);
     const prepareLock = contained(root, path.join(sessionDir, '.prepare-lock'));
-    try {
-      await fs.mkdir(prepareLock, { mode: 0o700 });
-    } catch (err) {
-      if (err.code === 'EEXIST') throw mailboxError('MAILBOX_BUSY', 'Mailbox request is being prepared');
-      throw err;
-    }
+    await acquirePrepareLock(prepareLock);
     try {
       const entries = await fs.readdir(sessionDir);
       const requestEntries = entries.filter(entry => entry !== '.prepare-lock');
@@ -118,7 +139,7 @@ function createMailbox(options = {}) {
       const requestPath = path.join(requestDir, 'request.json');
       await fs.writeFile(requestPath, '', { mode: 0o600 });
       await fs.chmod(requestPath, 0o600);
-      return { requestId, requestPath, expiresAt };
+      return { sessionId, requestId, requestPath, expiresAt };
     } finally {
       await fs.rm(prepareLock, { recursive: true, force: true });
     }

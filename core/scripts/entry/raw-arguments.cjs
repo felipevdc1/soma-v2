@@ -50,8 +50,8 @@ function parseRawArguments(raw) {
   const tokens = lex(raw);
   if (tokens.length === 0) throw invalid('An objective or mode is required');
   let mode = null;
-  let project;
-  let resumeRunId;
+  let project = null;
+  let resumeRunId = null;
   const objective = [];
   let projectSeen = false;
   for (let index = 0; index < tokens.length; index += 1) {
@@ -75,7 +75,7 @@ function parseRawArguments(raw) {
     } else if (mode === 'status' || mode === 'help') {
       throw invalid('This mode does not accept positional arguments');
     } else if (mode === 'resume') {
-      if (resumeRunId !== undefined) throw invalid('Resume accepts at most one run ID');
+      if (resumeRunId !== null) throw invalid('Resume accepts at most one run ID');
       resumeRunId = token;
     } else {
       objective.push(token);

@@ -94,6 +94,38 @@ test('concurrent prepare calls leave exactly one live request for a session', as
   }
 });
 
+test('mailbox reports a live prepare lock as busy', async () => {
+  const f = await fixture();
+  try {
+    const prepared = await f.mailbox.prepare({ sessionId: SESSION });
+    const sessionDir = path.dirname(path.dirname(prepared.requestPath));
+    await f.mailbox.abort({ sessionId: SESSION, requestId: prepared.requestId });
+    await fs.mkdir(path.join(sessionDir, '.prepare-lock'), { mode: 0o700 });
+
+    await assert.rejects(f.mailbox.prepare({ sessionId: SESSION }), { code: 'MAILBOX_BUSY' });
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test('mailbox replaces an expired prepare lock and prepares a request', async () => {
+  const f = await fixture();
+  try {
+    const prepared = await f.mailbox.prepare({ sessionId: SESSION });
+    const sessionDir = path.dirname(path.dirname(prepared.requestPath));
+    await f.mailbox.abort({ sessionId: SESSION, requestId: prepared.requestId });
+    const prepareLock = path.join(sessionDir, '.prepare-lock');
+    await fs.mkdir(prepareLock, { mode: 0o700 });
+    const expired = new Date(Date.now() - (5 * 60 * 1000) - 1_000);
+    await fs.utimes(prepareLock, expired, expired);
+
+    const replacement = await f.mailbox.prepare({ sessionId: SESSION });
+    assert.match(replacement.requestId, /^[a-f0-9]{32}$/);
+  } finally {
+    await f.cleanup();
+  }
+});
+
 test('mailbox allows one atomic consumer, rejects replay, and cleans up after parser interruption', async () => {
   const f = await fixture();
   try {
