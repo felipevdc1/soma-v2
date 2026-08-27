@@ -17,7 +17,7 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { spawn } = require('node:child_process');
+const { spawn, spawnSync } = require('node:child_process');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -29,6 +29,8 @@ const {
 } = require('./helpers/run-identity-fixture.cjs');
 
 const BROKER_MODULE = path.join(__dirname, '..', 'entry', 'request-broker.cjs');
+const ENTRY_MODULE = path.join(__dirname, '..', 'entry.cjs');
+const SOMA_MODULE = path.join(__dirname, '..', 'soma.cjs');
 
 const {
   createRequestBroker,
@@ -38,6 +40,7 @@ const {
 const {
   MAX_RAW_ARGUMENT_BYTES,
 } = require(path.join(__dirname, '..', 'entry', 'request-schema.cjs'));
+const { parseInvocation, runEntry } = require(ENTRY_MODULE);
 
 const UID = typeof process.getuid === 'function' ? process.getuid() : 0;
 const SESSION_A = 'claude-session-A';
@@ -118,6 +121,38 @@ function tracingFs(onCall, onResult = () => {}) {
     });
   }
   return wrap(fs, 'sync');
+}
+
+function withRealpathOverride(baseFs, targetPath, resolveReplacement) {
+  return new Proxy(baseFs, {
+    get(target, property, receiver) {
+      if (property === 'realpathSync') {
+        return (file, ...args) => {
+          const actual = Reflect.apply(target.realpathSync, target, [file, ...args]);
+          return file === targetPath ? resolveReplacement(actual) : actual;
+        };
+      }
+      const value = Reflect.get(target, property, receiver);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
+}
+
+function processRun(script, args, env = {}) {
+  return spawnSync(process.execPath, [script, ...args], {
+    env: { ...process.env, ...env },
+    encoding: 'utf8',
+    timeout: CHILD_TIMEOUT_MS,
+  });
+}
+
+function exactSessionShape(prepared) {
+  return [
+    ['.', 'directory'],
+    [prepared.requestId, 'directory'],
+    [path.join(prepared.requestId, 'lease.json'), 'file'],
+    [path.join(prepared.requestId, 'request.json'), 'file'],
+  ];
 }
 
 function operationIs(operation, semanticName) {
@@ -394,6 +429,22 @@ function brokerForFixture(fixture, options = {}) {
     randomBytes: options.randomBytes || deterministicRandom(110),
     ttlMs: options.ttlMs === undefined ? DEFAULT_TTL_MS : options.ttlMs,
   });
+}
+
+function afterClaimCloseFs(prepared, onBoundary, onCall = () => {}) {
+  let claimDescriptor;
+  return tracingFs(
+    onCall,
+    (operation, args, _api, result) => {
+      if (operationIs(operation, 'open') && args[0] === claimPathOf(prepared)) {
+        claimDescriptor = result;
+      }
+      if (claimDescriptor !== undefined && operationIs(operation, 'close') && args[0] === claimDescriptor) {
+        claimDescriptor = undefined;
+        onBoundary();
+      }
+    }
+  );
 }
 
 function createPreparedSlot(sessionDir, evidence) {
@@ -1199,6 +1250,31 @@ test('consume rejects altered lease identity, path, schema, fields, bytes, and s
     ['requestPath', lease => ({ ...lease, requestPath: `${lease.requestPath}.other` })],
     ['$schema', lease => ({ ...lease, $schema: 'soma-entry-lease/v2' })],
     ['surplus field', lease => ({ ...lease, contentSha256: 'a'.repeat(64) })],
+    ['zero ttl', lease => ({
+      ...lease,
+      ttlMs: 0,
+      expiresMonotonicMs: lease.createdMonotonicMs,
+    })],
+    ['non-integer ttl', lease => ({
+      ...lease,
+      ttlMs: 1.5,
+      expiresMonotonicMs: lease.createdMonotonicMs + 1.5,
+    })],
+    ['ttl above maximum', lease => ({
+      ...lease,
+      ttlMs: MAX_TTL_MS + 1,
+      expiresMonotonicMs: lease.createdMonotonicMs + MAX_TTL_MS + 1,
+    })],
+    ['created timestamp type', lease => ({ ...lease, createdMonotonicMs: '1000' })],
+    ['expiry relation', lease => ({
+      ...lease,
+      expiresMonotonicMs: lease.expiresMonotonicMs + 1,
+    })],
+    ['missing ttl', lease => {
+      const changed = { ...lease };
+      delete changed.ttlMs;
+      return changed;
+    }],
     ['malformed JSON', () => '{ malformed lease'],
     ['oversize bytes', lease => `${' '.repeat(20 * 1024)}${JSON.stringify(lease)}`],
   ];
@@ -2172,9 +2248,14 @@ for (const corruption of [
   'request-identity',
   'capability-identity',
   'created-timestamp',
+  'created-wrong-type',
   'ttl-bound',
+  'ttl-zero',
+  'ttl-noninteger',
   'expiry-relation',
   'request-path-containment',
+  'request-path-inside-session',
+  'missing-field',
   'surplus-field',
   'symlink',
   'wrong-mode',
@@ -2216,11 +2297,25 @@ for (const corruption of [
           createdMonotonicMs: -1,
           expiresMonotonicMs: -1 + valid.ttlMs,
         });
+      } else if (corruption === 'created-wrong-type') {
+        writeOwnerOnlyJson(lockPath, { ...valid, createdMonotonicMs: '1000' });
       } else if (corruption === 'ttl-bound') {
         writeOwnerOnlyJson(lockPath, {
           ...valid,
           ttlMs: MAX_TTL_MS + 1,
           expiresMonotonicMs: valid.createdMonotonicMs + MAX_TTL_MS + 1,
+        });
+      } else if (corruption === 'ttl-zero') {
+        writeOwnerOnlyJson(lockPath, {
+          ...valid,
+          ttlMs: 0,
+          expiresMonotonicMs: valid.createdMonotonicMs,
+        });
+      } else if (corruption === 'ttl-noninteger') {
+        writeOwnerOnlyJson(lockPath, {
+          ...valid,
+          ttlMs: 1.5,
+          expiresMonotonicMs: valid.createdMonotonicMs + 1.5,
         });
       } else if (corruption === 'expiry-relation') {
         writeOwnerOnlyJson(lockPath, {
@@ -2232,6 +2327,15 @@ for (const corruption of [
           ...valid,
           requestPath: path.join(fixture.runtimeRoot, 'escaped-request.json'),
         });
+      } else if (corruption === 'request-path-inside-session') {
+        writeOwnerOnlyJson(lockPath, {
+          ...valid,
+          requestPath: path.join(sessionDir, 'wrong-request.json'),
+        });
+      } else if (corruption === 'missing-field') {
+        const changed = { ...valid };
+        delete changed.capability;
+        writeOwnerOnlyJson(lockPath, changed);
       } else if (corruption === 'surplus-field') {
         writeOwnerOnlyJson(lockPath, { ...valid, surplus: true });
       } else if (corruption === 'symlink') {
@@ -2410,4 +2514,588 @@ for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
       fixture.cleanup();
     }
   });
+}
+
+// Complete residual matrix, group 1: consume/abort claim authentication.
+
+for (const lifetime of ['live', 'expired']) {
+  for (const physical of ['symlink', 'wrong-owner', 'wrong-mode', 'non-regular']) {
+    test(`[matrix G1] ${lifetime} ${physical} consume claim is corrupt and preserved`, async () => {
+      const fixture = makeFixture();
+      try {
+        const prepared = await fixture.broker.prepare({ sessionId: SESSION_A });
+        const claimPath = claimPathOf(prepared);
+        let fsOps = fs;
+        if (physical === 'symlink') {
+          const external = path.join(fixture.runtimeRoot, `external-${lifetime}-claim`);
+          writeOwnerOnlyJson(external, identityOf(prepared));
+          fs.symlinkSync(external, claimPath);
+        } else if (physical === 'wrong-owner') {
+          writeOwnerOnlyJson(claimPath, identityOf(prepared));
+          fsOps = withStatIdentityOverride(
+            fs,
+            claimPath,
+            stat => spoofStat(stat, { uid: UID + 1 })
+          );
+        } else if (physical === 'wrong-mode') {
+          writeOwnerOnlyJson(claimPath, identityOf(prepared));
+          fs.chmodSync(claimPath, 0o640);
+        } else {
+          fs.mkdirSync(claimPath, { mode: 0o700 });
+        }
+        if (lifetime === 'expired') {
+          fixture.clock.monotonicMs = readLease(prepared).expiresMonotonicMs + 1;
+        }
+        const before = snapshotTree(fixture.runtimeRoot);
+        const broker = brokerForFixture(fixture, { fsOps });
+        const error = await captureError(() => broker.prepare({ sessionId: SESSION_A }));
+        assert.equal(error?.code, 'BROKER_CORRUPT');
+        assertTreeUnchanged(fixture.runtimeRoot, before, `${lifetime} ${physical} claim changed`);
+      } finally {
+        fixture.cleanup();
+      }
+    });
+  }
+}
+
+const claimContentMutations = [
+  ['session mismatch', identity => ({ ...identity, sessionId: SESSION_B })],
+  ['request mismatch', identity => ({ ...identity, requestId: ALT_REQUEST_ID })],
+  ['capability mismatch', identity => ({ ...identity, capability: ALT_CAPABILITY })],
+  ['surplus field', identity => ({ ...identity, surplus: true })],
+  ['missing field', identity => {
+    const changed = { ...identity };
+    delete changed.capability;
+    return changed;
+  }],
+];
+
+for (const lifetime of ['live', 'expired']) {
+  for (const [content, mutate] of claimContentMutations) {
+    test(`[matrix G1] ${lifetime} consume claim ${content} is corrupt and preserved`, async () => {
+      const fixture = makeFixture();
+      try {
+        const prepared = await fixture.broker.prepare({ sessionId: SESSION_A });
+        writeOwnerOnlyJson(claimPathOf(prepared), mutate(identityOf(prepared)));
+        if (lifetime === 'expired') {
+          fixture.clock.monotonicMs = readLease(prepared).expiresMonotonicMs + 1;
+        }
+        const before = snapshotTree(fixture.runtimeRoot);
+        const error = await captureError(() => fixture.broker.prepare({ sessionId: SESSION_A }));
+        assert.equal(error?.code, 'BROKER_CORRUPT');
+        assertTreeUnchanged(fixture.runtimeRoot, before, `${lifetime} ${content} claim changed`);
+      } finally {
+        fixture.cleanup();
+      }
+    });
+  }
+}
+
+test('[matrix G1] consume claim creation has a deterministic O_EXCL no-follow 0600 loser', async () => {
+  const fixture = makeFixture();
+  try {
+    const prepared = await fixture.broker.prepare({ sessionId: SESSION_A });
+    writeEnvelope(prepared, '--help');
+    const claimOpens = [];
+    let nested;
+    let consumer;
+    const barrierFs = tracingFs(
+      (operation, args) => {
+        if (operationIs(operation, 'open') && args[0] === claimPathOf(prepared)) {
+          claimOpens.push(args);
+        }
+      },
+      (operation, args) => {
+        if (nested || !operationIs(operation, 'open') || args[0] !== claimPathOf(prepared)) return;
+        nested = consumer.consume(identityOf(prepared), { parseRawArguments: raw => raw });
+      }
+    );
+    consumer = brokerForFixture(fixture, { fsOps: barrierFs });
+    const winner = consumer.consume(identityOf(prepared), { parseRawArguments: raw => raw });
+    const [winnerResult, loserError] = await Promise.all([
+      winner,
+      captureError(() => nested),
+    ]);
+    assert.equal(winnerResult.rawArguments, '--help');
+    assert.match(loserError?.code || '', /REQUEST_ALREADY_CONSUMED|BROKER_BUSY/);
+    assert.ok(claimOpens.length >= 2, 'both consumers did not reach the exclusive claim boundary');
+    const [, flags, mode] = claimOpens[0];
+    assert.equal(typeof flags, 'number');
+    assert.ok((flags & fs.constants.O_CREAT) !== 0);
+    assert.ok((flags & fs.constants.O_EXCL) !== 0);
+    assert.ok((flags & fs.constants.O_NOFOLLOW) !== 0);
+    assert.equal(mode, 0o600);
+    assert.equal(fs.existsSync(slotDirOf(prepared)), false);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+for (const driftTarget of ['claim', 'lease']) {
+  test(`[matrix G1] cleanup preserves slot when ${driftTarget} drifts after auth before rm`, async () => {
+    const fixture = makeFixture();
+    try {
+      const prepared = await fixture.broker.prepare({ sessionId: SESSION_A });
+      writeEnvelope(prepared, '--help');
+      let drifted = false;
+      let driftSnapshot;
+      const driftFs = tracingFs((operation, args) => {
+        if (drifted || !operationIs(operation, 'rm') || args[0] !== slotDirOf(prepared)) return;
+        drifted = true;
+        if (driftTarget === 'claim') {
+          fs.renameSync(claimPathOf(prepared), `${claimPathOf(prepared)}.authenticated`);
+          writeOwnerOnlyJson(claimPathOf(prepared), {
+            ...identityOf(prepared),
+            capability: ALT_CAPABILITY,
+          });
+        } else {
+          writeLease(prepared, { ...readLease(prepared), capability: ALT_CAPABILITY });
+        }
+        driftSnapshot = snapshotTree(slotDirOf(prepared));
+      });
+      const consumer = brokerForFixture(fixture, { fsOps: driftFs });
+      await consumer.consume(identityOf(prepared), { parseRawArguments: raw => raw });
+      assert.equal(drifted, true, 'cleanup did not reach the authenticated removal boundary');
+      assertTreeUnchanged(slotDirOf(prepared), driftSnapshot, `${driftTarget} drift was removed`);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+}
+
+// Complete residual matrix, group 2: prepare claim durability and crash recovery.
+
+test('[matrix G2] prepare claim uses exclusive no-follow 0600 durable bounded evidence', async () => {
+  const fixture = makeFixture();
+  try {
+    let claimDescriptor;
+    let openArgs;
+    let writtenBytes;
+    const events = [];
+    const fsOps = tracingFs(
+      (operation, args) => {
+        if (operationIs(operation, 'writeFile') && args[0] === claimDescriptor) {
+          writtenBytes = Buffer.from(args[1]);
+          events.push('write');
+        }
+        if (operationIs(operation, 'fsync') && args[0] === claimDescriptor) events.push('fsync');
+        if (operationIs(operation, 'close') && args[0] === claimDescriptor) events.push('close');
+      },
+      (operation, args, _api, result) => {
+        if (operationIs(operation, 'open') && path.basename(args[0]) === '.prepare.claim') {
+          claimDescriptor = result;
+          openArgs = args;
+          events.push('open');
+        }
+      }
+    );
+    const broker = brokerForFixture(fixture, { fsOps });
+    const prepared = await broker.prepare({ sessionId: SESSION_A });
+    const [, flags, mode] = openArgs;
+    assert.equal(typeof flags, 'number');
+    assert.ok((flags & fs.constants.O_CREAT) !== 0);
+    assert.ok((flags & fs.constants.O_EXCL) !== 0);
+    assert.ok((flags & fs.constants.O_NOFOLLOW) !== 0);
+    assert.equal(mode, 0o600);
+    assert.ok(Buffer.isBuffer(writtenBytes) && writtenBytes.length > 0, 'prepare claim has no identity/TTL bytes');
+    const evidence = JSON.parse(writtenBytes.toString('utf8'));
+    assert.deepEqual(evidence, prepareClaimEvidence({ prepared }));
+    assert.ok(events.indexOf('fsync') > events.indexOf('write'));
+    assert.ok(events.indexOf('close') > events.indexOf('fsync'));
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+for (const stage of ['claim-only', 'slot-dir', 'lease', 'empty-request']) {
+  for (const lifetime of ['live', 'expired']) {
+    test(`[matrix G2] ${lifetime} prepare crash at ${stage} is recoverable`, async () => {
+      const fixture = makeFixture();
+      try {
+        const seed = await fixture.broker.prepare({ sessionId: SESSION_A });
+        const sessionDir = sessionDirOf(seed);
+        const lease = readLease(seed);
+        fs.rmSync(slotDirOf(seed), { recursive: true, force: false });
+        writeOwnerOnlyJson(prepareClaimPath(sessionDir), prepareClaimEvidence({
+          prepared: seed,
+          createdMonotonicMs: fixture.clock.monotonicMs,
+          ttlMs: 100,
+        }));
+        if (stage !== 'claim-only') {
+          fs.mkdirSync(slotDirOf(seed), { mode: 0o700 });
+          fs.chmodSync(slotDirOf(seed), 0o700);
+        }
+        if (stage === 'lease' || stage === 'empty-request') {
+          writeOwnerOnlyJson(leasePathOf(seed), lease);
+        }
+        if (stage === 'empty-request') {
+          fs.writeFileSync(seed.requestPath, '', { mode: 0o600, flag: 'wx' });
+          fs.chmodSync(seed.requestPath, 0o600);
+        }
+        const before = snapshotTree(sessionDir);
+        if (lifetime === 'live') {
+          await assertRejected(() => fixture.broker.prepare({ sessionId: SESSION_A }), 'BROKER_BUSY');
+          assertTreeUnchanged(sessionDir, before, `live ${stage} crash residue changed`);
+        } else {
+          fixture.clock.monotonicMs += 101;
+          const recovered = await fixture.broker.prepare({ sessionId: SESSION_A });
+          assert.notEqual(recovered.requestId, seed.requestId);
+          assert.deepEqual(
+            snapshotTree(sessionDir).map(({ path: relative, type }) => [relative, type]),
+            exactSessionShape(recovered),
+            `expired ${stage} crash residue survived recovery`
+          );
+        }
+      } finally {
+        fixture.cleanup();
+      }
+    });
+  }
+}
+
+test('[matrix G2] expired cleanup rename collision never overwrites either tree', async () => {
+  const fixture = makeFixture();
+  try {
+    const r1 = await fixture.broker.prepare({ sessionId: SESSION_A });
+    writeEnvelope(r1, '--help');
+    fixture.clock.monotonicMs = readLease(r1).expiresMonotonicMs + 1;
+    let collisionPath;
+    let collisionBefore;
+    const r1Before = snapshotTree(slotDirOf(r1));
+    const collisionFs = tracingFs((operation, args) => {
+      if (collisionPath || !operationIs(operation, 'rename') || args[0] !== slotDirOf(r1)) return;
+      collisionPath = args[1];
+      fs.mkdirSync(collisionPath, { mode: 0o700 });
+      fs.writeFileSync(path.join(collisionPath, 'sentinel'), 'collision bytes\n', {
+        mode: 0o600,
+        flag: 'wx',
+      });
+      collisionBefore = snapshotTree(collisionPath);
+    });
+    const broker = brokerForFixture(fixture, { fsOps: collisionFs });
+    const error = await captureError(() => broker.prepare({ sessionId: SESSION_A }));
+    assert.match(error?.code || '', /BROKER_BUSY|BROKER_CORRUPT/);
+    assert.ok(collisionPath, 'expired cleanup did not reach rename');
+    assertTreeUnchanged(slotDirOf(r1), r1Before, 'rename collision changed R1');
+    assertTreeUnchanged(collisionPath, collisionBefore, 'rename collision target was overwritten');
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+// Complete residual matrix, group 3: all five canonical chain levels.
+
+const chainLevels = [
+  'runtime-root',
+  'entry-root',
+  'broker-root',
+  'session-directory',
+  'slot-directory',
+];
+
+function chainTarget(level, prepared, runtimeRoot) {
+  return {
+    'runtime-root': runtimeRoot,
+    'entry-root': path.join(runtimeRoot, 'soma-entry'),
+    'broker-root': brokerRootOf(prepared),
+    'session-directory': sessionDirOf(prepared),
+    'slot-directory': slotDirOf(prepared),
+  }[level];
+}
+
+for (const level of chainLevels) {
+  test(`[matrix G3] preclaim realpath-only escape at ${level} forbids opens and claim`, async () => {
+    const fixture = makeFixture();
+    try {
+      const prepared = await fixture.broker.prepare({ sessionId: SESSION_A });
+      writeEnvelope(prepared, '--help');
+      const target = chainTarget(level, prepared, fixture.runtimeRoot);
+      const opened = [];
+      let targetCalls = 0;
+      const traced = tracingFs((operation, args) => {
+        if (operationIs(operation, 'open')) opened.push(args[0]);
+      });
+      const realpathFs = withRealpathOverride(traced, target, actual => {
+        targetCalls += 1;
+        if (level === 'runtime-root' && targetCalls === 1) return actual;
+        return path.join(path.dirname(fixture.runtimeRoot), 'canonical-escape');
+      });
+      const consumer = brokerForFixture(fixture, { fsOps: realpathFs });
+      const before = snapshotTree(fixture.runtimeRoot);
+      let parsed = false;
+      await assertRejected(
+        () => consumer.consume(identityOf(prepared), {
+          parseRawArguments() { parsed = true; },
+        }),
+        /BROKER_CORRUPT|INVALID_ENTRY_REQUEST/
+      );
+      assert.equal(parsed, false);
+      assert.equal(opened.includes(leasePathOf(prepared)), false);
+      assert.equal(opened.includes(prepared.requestPath), false);
+      assert.equal(opened.includes(claimPathOf(prepared)), false);
+      assertTreeUnchanged(fixture.runtimeRoot, before, `${level} realpath escape changed tree`);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+}
+
+for (const level of chainLevels) {
+  test(`[matrix G3] postclaim realpath-only escape at ${level} preserves claimed evidence`, async () => {
+    const fixture = makeFixture();
+    try {
+      const prepared = await fixture.broker.prepare({ sessionId: SESSION_A });
+      writeEnvelope(prepared, '--help');
+      const target = chainTarget(level, prepared, fixture.runtimeRoot);
+      let active = false;
+      let activeCalls = 0;
+      let boundarySnapshot;
+      const boundaryFs = afterClaimCloseFs(prepared, () => {
+        active = true;
+        activeCalls = 0;
+        boundarySnapshot = snapshotTree(slotDirOf(prepared));
+      });
+      const realpathFs = withRealpathOverride(boundaryFs, target, actual => {
+        if (!active) return actual;
+        activeCalls += 1;
+        if (level === 'runtime-root' && activeCalls === 1) return actual;
+        return path.join(path.dirname(fixture.runtimeRoot), 'postclaim-canonical-escape');
+      });
+      const consumer = brokerForFixture(fixture, { fsOps: realpathFs });
+      let parsed = false;
+      await assertRejected(
+        () => consumer.consume(identityOf(prepared), {
+          parseRawArguments() { parsed = true; },
+        }),
+        'INVALID_ENTRY_REQUEST'
+      );
+      assert.equal(active, true, `${level} never reached the postclaim boundary`);
+      assert.equal(parsed, false);
+      assertTreeUnchanged(
+        slotDirOf(prepared),
+        boundarySnapshot,
+        `${level} postclaim realpath drift removed diagnostic evidence`
+      );
+    } finally {
+      fixture.cleanup();
+    }
+  });
+}
+
+for (const level of ['runtime-root', 'entry-root']) {
+  for (const physical of ['symlink', 'wrong-owner', 'wrong-mode', 'non-directory']) {
+    test(`[matrix G3] preclaim ${physical} ${level} forbids broker-file access`, async () => {
+      const fixture = makeFixture();
+      let target;
+      let parked;
+      try {
+        const prepared = await fixture.broker.prepare({ sessionId: SESSION_A });
+        writeEnvelope(prepared, '--help');
+        target = chainTarget(level, prepared, fixture.runtimeRoot);
+        const opened = [];
+        const traced = tracingFs((operation, args) => {
+          if (operationIs(operation, 'open')) opened.push(args[0]);
+        });
+        let fsOps = traced;
+        if (physical === 'symlink') {
+          parked = `${target}.matrix-parked`;
+          fs.renameSync(target, parked);
+          fs.symlinkSync(parked, target, 'dir');
+        } else if (physical === 'wrong-mode') {
+          fs.chmodSync(target, 0o755);
+        } else {
+          fsOps = withStatIdentityOverride(
+            traced,
+            target,
+            stat => physical === 'wrong-owner'
+              ? spoofStat(stat, { uid: UID + 1 })
+              : spoofStat(stat, { isDirectory: () => false })
+          );
+        }
+        const before = snapshotTree(slotDirOf(prepared));
+        const consumer = brokerForFixture(fixture, { fsOps });
+        let parsed = false;
+        await assertRejected(
+          () => consumer.consume(identityOf(prepared), {
+            parseRawArguments() { parsed = true; },
+          }),
+          /BROKER_CORRUPT|INVALID_ENTRY_REQUEST/
+        );
+        assert.equal(parsed, false);
+        assert.equal(opened.includes(leasePathOf(prepared)), false);
+        assert.equal(opened.includes(prepared.requestPath), false);
+        assert.equal(opened.includes(claimPathOf(prepared)), false);
+        assertTreeUnchanged(slotDirOf(prepared), before, `${physical} ${level} changed slot`);
+      } finally {
+        if (parked && target && fs.existsSync(parked)) {
+          if (fs.existsSync(target) && fs.lstatSync(target).isSymbolicLink()) fs.unlinkSync(target);
+          fs.renameSync(parked, target);
+        }
+        fixture.cleanup();
+      }
+    });
+  }
+}
+
+// Complete residual matrix, group 4: lease timing and request physical invariants.
+
+for (const targetName of ['slot', 'request']) {
+  for (const physical of ['symlink', 'wrong-owner', 'wrong-mode', 'non-regular']) {
+    test(`[matrix G4] expired ${physical} ${targetName} is preserved as corruption`, async () => {
+      const fixture = makeFixture();
+      try {
+        const prepared = await fixture.broker.prepare({ sessionId: SESSION_A });
+        writeEnvelope(prepared, '--help');
+        fixture.clock.monotonicMs = readLease(prepared).expiresMonotonicMs + 1;
+        const target = targetName === 'slot' ? slotDirOf(prepared) : prepared.requestPath;
+        let fsOps = fs;
+        if (physical === 'symlink') {
+          const parked = `${target}.matrix-parked`;
+          fs.renameSync(target, parked);
+          fs.symlinkSync(parked, target, targetName === 'slot' ? 'dir' : 'file');
+        } else if (physical === 'wrong-mode') {
+          fs.chmodSync(target, targetName === 'slot' ? 0o755 : 0o640);
+        } else {
+          fsOps = withStatIdentityOverride(fs, target, stat => {
+            if (physical === 'wrong-owner') return spoofStat(stat, { uid: UID + 1 });
+            return targetName === 'slot'
+              ? spoofStat(stat, { isDirectory: () => false })
+              : spoofStat(stat, { isFile: () => false });
+          });
+        }
+        const before = snapshotTree(fixture.runtimeRoot);
+        const broker = brokerForFixture(fixture, { fsOps });
+        await assertRejected(() => broker.prepare({ sessionId: SESSION_A }), 'BROKER_CORRUPT');
+        assertTreeUnchanged(
+          fixture.runtimeRoot,
+          before,
+          `expired ${physical} ${targetName} was scavenged`
+        );
+      } finally {
+        fixture.cleanup();
+      }
+    });
+  }
+}
+
+for (const physical of ['symlink', 'wrong-owner', 'wrong-mode', 'non-regular']) {
+  test(`[matrix G4] second request open rejects ${physical} before parser and cleans its slot`, async () => {
+    const fixture = makeFixture();
+    try {
+      const prepared = await fixture.broker.prepare({ sessionId: SESSION_A });
+      const sibling = await fixture.broker.prepare({ sessionId: SESSION_B });
+      writeEnvelope(prepared, '--help');
+      writeEnvelope(sibling, '--status');
+      const siblingBefore = snapshotTree(slotDirOf(sibling));
+      let active = false;
+      const boundaryFs = afterClaimCloseFs(prepared, () => {
+        active = true;
+        if (physical === 'symlink') {
+          const parked = `${prepared.requestPath}.authenticated`;
+          fs.renameSync(prepared.requestPath, parked);
+          fs.symlinkSync(parked, prepared.requestPath);
+        } else if (physical === 'wrong-mode') {
+          fs.chmodSync(prepared.requestPath, 0o640);
+        } else if (physical === 'non-regular') {
+          fs.rmSync(prepared.requestPath);
+          fs.mkdirSync(prepared.requestPath, { mode: 0o700 });
+        }
+      });
+      const fsOps = physical === 'wrong-owner'
+        ? withStatIdentityOverride(
+          boundaryFs,
+          prepared.requestPath,
+          stat => active ? spoofStat(stat, { uid: UID + 1 }) : stat
+        )
+        : boundaryFs;
+      const consumer = brokerForFixture(fixture, { fsOps });
+      let parsed = false;
+      await assertRejected(
+        () => consumer.consume(identityOf(prepared), {
+          parseRawArguments() { parsed = true; },
+        }),
+        'INVALID_ENTRY_REQUEST'
+      );
+      assert.equal(active, true, 'physical mutation did not occur after claim close');
+      assert.equal(parsed, false);
+      assert.equal(fs.existsSync(slotDirOf(prepared)), false, 'authenticated drifted slot was not cleaned');
+      assertTreeUnchanged(slotDirOf(sibling), siblingBefore, `${physical} cleanup touched sibling`);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+}
+
+test('[matrix G4] both request openings use numeric O_NOFOLLOW and the second supplies parser bytes', async () => {
+  const fixture = makeFixture();
+  try {
+    const prepared = await fixture.broker.prepare({ sessionId: SESSION_A });
+    writeEnvelope(prepared, '--help');
+    const opens = [];
+    const consumer = brokerForFixture(fixture, {
+      fsOps: tracingFs((operation, args) => {
+        if (isOpenOf(operation, args, prepared.requestPath)) opens.push(args);
+      }),
+    });
+    let parserInput;
+    await consumer.consume(identityOf(prepared), {
+      parseRawArguments(raw) {
+        parserInput = raw;
+        return raw;
+      },
+    });
+    assert.equal(opens.length, 2, 'request must be opened exactly once before and once after claim');
+    for (const [, flags] of opens) {
+      assert.equal(typeof flags, 'number');
+      assert.ok((flags & fs.constants.O_NOFOLLOW) !== 0);
+      assert.equal((flags & fs.constants.O_CREAT) !== 0, false);
+    }
+    assert.equal(parserInput, '--help');
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+for (const level of chainLevels) {
+  for (const physical of ['wrong-owner', 'wrong-mode', 'non-directory']) {
+    test(`[matrix G3] postclaim ${physical} ${level} blocks parser and preserves claim`, async () => {
+      const fixture = makeFixture();
+      try {
+        const prepared = await fixture.broker.prepare({ sessionId: SESSION_A });
+        writeEnvelope(prepared, '--help');
+        const target = chainTarget(level, prepared, fixture.runtimeRoot);
+        let active = false;
+        let boundarySnapshot;
+        const boundaryFs = afterClaimCloseFs(prepared, () => {
+          active = true;
+          boundarySnapshot = snapshotTree(slotDirOf(prepared));
+        });
+        const fsOps = withStatIdentityOverride(boundaryFs, target, stat => {
+          if (!active) return stat;
+          if (physical === 'wrong-owner') return spoofStat(stat, { uid: UID + 1 });
+          if (physical === 'wrong-mode') {
+            return spoofStat(stat, { mode: (stat.mode & ~0o777) | 0o755 });
+          }
+          return spoofStat(stat, { isDirectory: () => false });
+        });
+        const consumer = brokerForFixture(fixture, { fsOps });
+        let parsed = false;
+        await assertRejected(
+          () => consumer.consume(identityOf(prepared), {
+            parseRawArguments() { parsed = true; },
+          }),
+          'INVALID_ENTRY_REQUEST'
+        );
+        assert.equal(active, true);
+        assert.equal(parsed, false);
+        assertTreeUnchanged(
+          slotDirOf(prepared),
+          boundarySnapshot,
+          `${physical} ${level} removed claimed diagnostic evidence`
+        );
+      } finally {
+        fixture.cleanup();
+      }
+    });
+  }
 }
