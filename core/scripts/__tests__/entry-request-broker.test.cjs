@@ -46,8 +46,6 @@ const ALT_REQUEST_ID = 'fedcba9876543210fedcba9876543210';
 const ALT_CAPABILITY = 'fedcba9876543210'.repeat(4);
 const CHILD_TIMEOUT_MS = 10_000;
 const PREPARE_CLAIM_SCHEMA = 'soma-entry-prepare-claim/v1';
-const PREPARE_ID_A = 'a'.repeat(32);
-const PREPARE_ID_B = 'b'.repeat(32);
 
 function modeOf(file) {
   return fs.lstatSync(file).mode & 0o777;
@@ -356,16 +354,24 @@ function prepareClaimPath(sessionDir) {
 }
 
 function prepareClaimEvidence({
-  sessionId = SESSION_A,
-  prepareId = PREPARE_ID_A,
+  prepared,
+  sessionId = prepared?.sessionId || SESSION_A,
+  requestId = prepared?.requestId || ALT_REQUEST_ID,
+  capability = prepared?.capability || ALT_CAPABILITY,
+  requestPath = prepared?.requestPath,
   createdMonotonicMs = 1_000,
   ttlMs = DEFAULT_TTL_MS,
   ...overrides
 } = {}) {
+  if (typeof requestPath !== 'string') {
+    throw new TypeError('prepare claim fixture requires requestPath');
+  }
   return {
     $schema: PREPARE_CLAIM_SCHEMA,
     sessionId,
-    prepareId,
+    requestId,
+    capability,
+    requestPath,
     ttlMs,
     createdMonotonicMs,
     expiresMonotonicMs: createdMonotonicMs + ttlMs,
@@ -554,10 +560,9 @@ test('prepare twice never creates a second live slot and may reuse only an empty
 });
 
 for (const [evidence, plant] of [
-  ['claim', prepared => writeOwnerOnlyJson(claimPathOf(prepared), identityOf(prepared))],
   ['nested prepare claim', prepared => writeOwnerOnlyJson(
     path.join(slotDirOf(prepared), '.prepare.claim'),
-    prepareClaimEvidence({ sessionId: prepared.sessionId })
+    prepareClaimEvidence({ prepared })
   )],
   ['unknown file', prepared => fs.writeFileSync(
     path.join(slotDirOf(prepared), 'unexpected-evidence'),
@@ -584,6 +589,59 @@ for (const [evidence, plant] of [
       fixture.cleanup();
     }
   });
+}
+
+test('live slot with an authenticated consume claim returns BROKER_BUSY unchanged', async () => {
+  const fixture = makeFixture();
+  try {
+    const prepared = await fixture.broker.prepare({ sessionId: SESSION_A });
+    writeOwnerOnlyJson(claimPathOf(prepared), identityOf(prepared));
+    const before = snapshotTree(slotDirOf(prepared));
+    const error = await captureError(
+      () => fixture.broker.prepare({ sessionId: SESSION_A })
+    );
+    assert.equal(error?.code, 'BROKER_BUSY', 'claimed live slot returned its consumed identity');
+    assertTreeUnchanged(slotDirOf(prepared), before, 'claimed live slot changed while reporting busy');
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+for (const lifetime of ['live', 'expired']) {
+  for (const corruption of ['malformed-claim', 'foreign-claim']) {
+    test(`${lifetime} slot with ${corruption} is BROKER_CORRUPT and preserved`, async () => {
+      const fixture = makeFixture();
+      try {
+        const prepared = await fixture.broker.prepare({ sessionId: SESSION_A });
+        if (corruption === 'malformed-claim') {
+          fs.writeFileSync(claimPathOf(prepared), '{ malformed consume claim', {
+            mode: 0o600,
+            flag: 'wx',
+          });
+        } else {
+          writeOwnerOnlyJson(claimPathOf(prepared), {
+            ...identityOf(prepared),
+            capability: ALT_CAPABILITY,
+          });
+        }
+        if (lifetime === 'expired') {
+          fixture.clock.monotonicMs = readLease(prepared).expiresMonotonicMs + 1;
+        }
+        const before = snapshotTree(slotDirOf(prepared));
+        const error = await captureError(
+          () => fixture.broker.prepare({ sessionId: SESSION_A })
+        );
+        assert.equal(error?.code, 'BROKER_CORRUPT', `${lifetime} ${corruption} was accepted`);
+        assertTreeUnchanged(
+          slotDirOf(prepared),
+          before,
+          `${lifetime} ${corruption} changed during rejection`
+        );
+      } finally {
+        fixture.cleanup();
+      }
+    });
+  }
 }
 
 test('live empty request inode swapped during reuse inspection fails closed and is preserved', async () => {
@@ -1819,9 +1877,11 @@ test('SIGKILL in the prepare critical section leaves only recoverable TTL eviden
     if (evidence) {
       const expectedKeys = [
         '$schema',
+        'capability',
         'createdMonotonicMs',
         'expiresMonotonicMs',
-        'prepareId',
+        'requestId',
+        'requestPath',
         'sessionId',
         'ttlMs',
       ];
@@ -1829,7 +1889,9 @@ test('SIGKILL in the prepare critical section leaves only recoverable TTL eviden
         defects.push('prepare claim field set is not bounded');
       }
       if (evidence.$schema !== PREPARE_CLAIM_SCHEMA || evidence.sessionId !== SESSION_A ||
-          !/^[0-9a-f]{32}$/.test(evidence.prepareId || '') ||
+          !/^[0-9a-f]{32}$/.test(evidence.requestId || '') ||
+          !/^[0-9a-f]{64}$/.test(evidence.capability || '') ||
+          evidence.requestPath !== path.join(sessionDir, evidence.requestId, 'request.json') ||
           !Number.isSafeInteger(evidence.ttlMs) || evidence.ttlMs <= 0 || evidence.ttlMs > MAX_TTL_MS ||
           evidence.createdMonotonicMs !== 1_000 ||
           evidence.expiresMonotonicMs !== evidence.createdMonotonicMs + evidence.ttlMs) {
@@ -1900,7 +1962,6 @@ test('next prepare atomically rename-claims and removes only a valid expired slo
 });
 
 for (const [evidence, plant] of [
-  ['claim', prepared => writeOwnerOnlyJson(claimPathOf(prepared), identityOf(prepared))],
   ['unknown file', prepared => fs.writeFileSync(
     path.join(slotDirOf(prepared), 'unexpected-evidence'),
     'expired diagnostic bytes\n',
@@ -1928,6 +1989,46 @@ for (const [evidence, plant] of [
     }
   });
 }
+
+test('expired slot with an authenticated consume claim is atomically scavenged before replacement', async () => {
+  const events = [];
+  const fixture = makeFixture({
+    fsOps: tracingFs((operation, args) => {
+      if (['rename', 'rm', 'unlink', 'mkdir'].some(name => operationIs(operation, name))) {
+        events.push([operation, ...args]);
+      }
+    }),
+  });
+  try {
+    const r1 = await fixture.broker.prepare({ sessionId: SESSION_A });
+    writeOwnerOnlyJson(claimPathOf(r1), identityOf(r1));
+    fixture.clock.monotonicMs = readLease(r1).expiresMonotonicMs + 1;
+    events.length = 0;
+    const r2 = await fixture.broker.prepare({ sessionId: SESSION_A });
+    const renameIndex = events.findIndex(([operation, from]) =>
+      operationIs(operation, 'rename') && from === slotDirOf(r1)
+    );
+    assert.ok(renameIndex >= 0, 'expired authenticated claim was not atomically rename-claimed');
+    const cleanupPath = events[renameIndex][2];
+    const removeIndex = events.findIndex(([operation, target]) =>
+      (operationIs(operation, 'rm') || operationIs(operation, 'unlink')) && target === cleanupPath
+    );
+    assert.ok(removeIndex > renameIndex, 'expired claimed slot was not removed after rename');
+    assert.equal(fs.existsSync(cleanupPath), false);
+    assert.deepEqual(
+      snapshotTree(sessionDirOf(r2)).map(({ path: relative, type }) => [relative, type]),
+      [
+        ['.', 'directory'],
+        [r2.requestId, 'directory'],
+        [path.join(r2.requestId, 'lease.json'), 'file'],
+        [path.join(r2.requestId, 'request.json'), 'file'],
+      ],
+      'expired claimed slot recovery left claim, orphan, or cleanup evidence'
+    );
+  } finally {
+    fixture.cleanup();
+  }
+});
 
 for (const corruption of ['invalid-schema', 'wrong-mode', 'symlink']) {
   test(`expired ${corruption} residue returns BROKER_CORRUPT and is never scavenged`, async () => {
@@ -1993,7 +2094,7 @@ test('live valid prepare claim is bounded evidence and returns BROKER_BUSY uncha
     const sessionDir = sessionDirOf(seed);
     fs.rmSync(slotDirOf(seed), { recursive: true, force: false });
     const claim = prepareClaimEvidence({
-      sessionId: seed.sessionId,
+      prepared: seed,
       createdMonotonicMs: fixture.clock.monotonicMs,
       ttlMs: 100,
     });
@@ -2018,7 +2119,7 @@ test('expired valid prepare claim is atomically scavenged before the next slot',
     fs.rmSync(slotDirOf(seed), { recursive: true, force: false });
     const lockPath = prepareClaimPath(sessionDir);
     writeOwnerOnlyJson(lockPath, prepareClaimEvidence({
-      sessionId: seed.sessionId,
+      prepared: seed,
       createdMonotonicMs: fixture.clock.monotonicMs,
       ttlMs: 100,
     }));
@@ -2040,17 +2141,41 @@ test('expired valid prepare claim is atomically scavenged before the next slot',
       operationIs(operation, 'rename') && from === lockPath
     );
     assert.ok(renameIndex >= 0, 'expired prepare claim was not atomically rename-claimed');
+    const cleanupPath = events[renameIndex][2];
+    const removeIndex = events.findIndex(([operation, target]) =>
+      (operationIs(operation, 'rm') || operationIs(operation, 'unlink')) && target === cleanupPath
+    );
+    assert.ok(removeIndex > renameIndex, 'renamed prepare claim was never removed');
+    assert.equal(fs.existsSync(cleanupPath), false, 'renamed prepare claim artifact survived recovery');
     assert.equal(fs.existsSync(lockPath), false, 'expired prepare claim survived recovery');
     assert.ok(recovered?.requestPath, 'recovery did not create the next slot');
     assert.equal(fs.existsSync(slotDirOf(recovered)), true);
+    assert.deepEqual(
+      snapshotTree(sessionDir).map(({ path: relative, type }) => [relative, type]),
+      [
+        ['.', 'directory'],
+        [recovered.requestId, 'directory'],
+        [path.join(recovered.requestId, 'lease.json'), 'file'],
+        [path.join(recovered.requestId, 'request.json'), 'file'],
+      ],
+      'expired prepare claim recovery left claim, rename, orphan, or cleanup artifacts'
+    );
   } finally {
     fixture.cleanup();
   }
 });
 
 for (const corruption of [
-  'malformed',
-  'invalid-identity-ttl',
+  'malformed-json',
+  'schema',
+  'session-identity',
+  'request-identity',
+  'capability-identity',
+  'created-timestamp',
+  'ttl-bound',
+  'expiry-relation',
+  'request-path-containment',
+  'surplus-field',
   'symlink',
   'wrong-mode',
   'wrong-owner',
@@ -2065,21 +2190,50 @@ for (const corruption of [
       fs.rmSync(slotDirOf(seed), { recursive: true, force: false });
       const lockPath = prepareClaimPath(sessionDir);
       const valid = prepareClaimEvidence({
-        sessionId: seed.sessionId,
+        prepared: seed,
         createdMonotonicMs: fixture.clock.monotonicMs,
         ttlMs: 100,
       });
       let fsOps = fs;
-      if (corruption === 'malformed') {
+      if (corruption === 'malformed-json') {
         fs.writeFileSync(lockPath, '{ malformed prepare claim', { mode: 0o600, flag: 'wx' });
-      } else if (corruption === 'invalid-identity-ttl') {
+      } else if (corruption === 'schema') {
+        writeOwnerOnlyJson(lockPath, { ...valid, $schema: 'soma-entry-prepare-claim/v2' });
+      } else if (corruption === 'session-identity') {
+        writeOwnerOnlyJson(lockPath, { ...valid, sessionId: SESSION_B });
+      } else if (corruption === 'request-identity') {
+        const requestId = 'A'.repeat(32);
         writeOwnerOnlyJson(lockPath, {
           ...valid,
-          prepareId: 'A'.repeat(32),
-          ttlMs: MAX_TTL_MS + 1,
-          expiresMonotonicMs: valid.createdMonotonicMs + 1,
-          surplus: true,
+          requestId,
+          requestPath: path.join(sessionDir, requestId, 'request.json'),
         });
+      } else if (corruption === 'capability-identity') {
+        writeOwnerOnlyJson(lockPath, { ...valid, capability: 'A'.repeat(64) });
+      } else if (corruption === 'created-timestamp') {
+        writeOwnerOnlyJson(lockPath, {
+          ...valid,
+          createdMonotonicMs: -1,
+          expiresMonotonicMs: -1 + valid.ttlMs,
+        });
+      } else if (corruption === 'ttl-bound') {
+        writeOwnerOnlyJson(lockPath, {
+          ...valid,
+          ttlMs: MAX_TTL_MS + 1,
+          expiresMonotonicMs: valid.createdMonotonicMs + MAX_TTL_MS + 1,
+        });
+      } else if (corruption === 'expiry-relation') {
+        writeOwnerOnlyJson(lockPath, {
+          ...valid,
+          expiresMonotonicMs: valid.expiresMonotonicMs + 1,
+        });
+      } else if (corruption === 'request-path-containment') {
+        writeOwnerOnlyJson(lockPath, {
+          ...valid,
+          requestPath: path.join(fixture.runtimeRoot, 'escaped-request.json'),
+        });
+      } else if (corruption === 'surplus-field') {
+        writeOwnerOnlyJson(lockPath, { ...valid, surplus: true });
       } else if (corruption === 'symlink') {
         const external = path.join(fixture.runtimeRoot, 'external-prepare-claim');
         writeOwnerOnlyJson(external, valid);
@@ -2133,21 +2287,21 @@ test('delayed P1 release cannot remove P2 prepare claim or newer slot', async ()
     replaced = true;
     const sessionDir = path.dirname(target);
     fs.renameSync(target, `${target}.p1-retired`);
-    const p2Claim = prepareClaimEvidence({
-      prepareId: PREPARE_ID_B,
-      createdMonotonicMs: 1_001,
-      ttlMs: 100,
-    });
-    writeOwnerOnlyJson(target, p2Claim);
-    p2ClaimBytes = fs.readFileSync(target);
-    p2Prepared = createPreparedSlot(sessionDir, {
+    const p2Evidence = {
       sessionId: SESSION_A,
       requestId: 'c'.repeat(32),
       capability: 'd'.repeat(64),
+      requestPath: path.join(sessionDir, 'c'.repeat(32), 'request.json'),
       ttlMs: 100,
       createdMonotonicMs: 1_001,
       expiresMonotonicMs: 1_101,
+    };
+    const p2Claim = prepareClaimEvidence({
+      prepared: p2Evidence,
     });
+    writeOwnerOnlyJson(target, p2Claim);
+    p2ClaimBytes = fs.readFileSync(target);
+    p2Prepared = createPreparedSlot(sessionDir, p2Evidence);
     p2Before = snapshotTree(slotDirOf(p2Prepared));
   });
   const fixture = makeFixture({ fsOps: delayedFs });
