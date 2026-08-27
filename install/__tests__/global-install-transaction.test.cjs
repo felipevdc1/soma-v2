@@ -108,6 +108,18 @@ function assertLiveSnapshot(home, before) {
   assert.deepEqual([...after], [...before]);
 }
 
+function assertSessionStartInstall(home, unmanagedEntry) {
+  assert.deepEqual(
+    fs.readFileSync(path.join(home, '.claude', 'hooks', 'session-init.cjs')),
+    fs.readFileSync(path.join(CORE, 'hooks', 'session-init.cjs'))
+  );
+  const entries = readJson(path.join(home, '.claude', 'settings.json')).hooks.SessionStart;
+  assert.equal(entries.filter((entry) => entry._soma_managed === true
+    && entry.matcher === 'startup|resume|clear|compact'
+    && entry.hooks?.some((hook) => hook.command === 'node "${CLAUDE_HOME}/hooks/session-init.cjs"')).length, 1);
+  assert.ok(entries.some((entry) => JSON.stringify(entry) === JSON.stringify(unmanagedEntry)));
+}
+
 function journals(home) {
   const backupRoot = path.join(home, '.soma-v2-backups');
   if (!fs.existsSync(backupRoot)) return [];
@@ -179,9 +191,18 @@ test('026 AC-01/10: two project directories converge through the global ledger w
   fs.mkdirSync(home);
   fs.mkdirSync(projectA);
   fs.mkdirSync(projectB);
+  const unmanagedSessionStart = {
+    matcher: 'startup',
+    hooks: [{ type: 'command', command: 'user-session-start.sh' }],
+  };
+  fs.mkdirSync(path.join(home, '.claude'));
+  fs.writeFileSync(path.join(home, '.claude', 'settings.json'), JSON.stringify({
+    hooks: { SessionStart: [unmanagedSessionStart] },
+  }));
 
   const first = runInstall(home, projectA);
   assert.equal(first.status, 0, `${first.stdout}\n${first.stderr}`);
+  assertSessionStartInstall(home, unmanagedSessionStart);
   const ledger = path.join(home, '.soma-v2', '.soma', 'install-state.json');
   assert.equal(fs.existsSync(ledger), true);
   assert.equal(fs.existsSync(path.join(projectA, '.soma', 'install-state.json')), false);
@@ -195,6 +216,7 @@ test('026 AC-01/10: two project directories converge through the global ledger w
 
   const second = runInstall(home, projectB);
   assert.equal(second.status, 0, `${second.stdout}\n${second.stderr}`);
+  assertSessionStartInstall(home, unmanagedSessionStart);
   assert.equal(fs.existsSync(path.join(projectB, '.soma', 'install-state.json')), false);
   assert.deepEqual(
     watched.map((file) => ({ file, hash: hashFile(file), mtime: fs.statSync(file).mtimeMs })),

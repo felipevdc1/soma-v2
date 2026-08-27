@@ -23,6 +23,10 @@ const {
 } = require('./lib/ck-config-utils.cjs');
 const { writeResetMarker } = require('./lib/context-tracker.cjs');
 
+function isSessionId(value) {
+  return typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value);
+}
+
 /**
  * Safely execute shell command with optional timeout
  * @param {string} cmd - Command to execute
@@ -319,8 +323,23 @@ async function main() {
     const stdin = fs.readFileSync(0, 'utf-8').trim();
     const data = stdin ? JSON.parse(stdin) : {};
     const envFile = process.env.CLAUDE_ENV_FILE;
-    const source = data.source || 'unknown';
     const sessionId = data.session_id || null;
+    let envWritable = Boolean(envFile);
+
+    if (!isSessionId(sessionId)) {
+      console.error('SOMA_SESSION_IDENTITY_NOT_EXPORTED reason=INVALID_SESSION_ID');
+    } else if (!envFile) {
+      console.error('SOMA_SESSION_IDENTITY_NOT_EXPORTED reason=CLAUDE_ENV_FILE_MISSING');
+    } else {
+      try {
+        writeEnv(envFile, 'CLAUDE_SESSION_ID', sessionId);
+      } catch (_) {
+        envWritable = false;
+        console.error('SOMA_SESSION_IDENTITY_NOT_EXPORTED reason=ENV_WRITE_FAILED');
+      }
+    }
+
+    const source = data.source || 'unknown';
 
     const config = loadConfig();
 
@@ -373,7 +392,7 @@ async function main() {
     // Compute resolved naming pattern (date + issue resolved, {slug} kept as placeholder)
     const namePattern = resolveNamingPattern(config.plan, staticEnv.gitBranch);
 
-    if (envFile) {
+    if (envWritable) {
       // Session & plan config
       writeEnv(envFile, 'CK_SESSION_ID', sessionId || '');
       writeEnv(envFile, 'CK_PLAN_NAMING_FORMAT', config.plan.namingFormat);
