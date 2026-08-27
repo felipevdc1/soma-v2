@@ -107,3 +107,22 @@ One and only one materially corrected foreground smoke was then run with normal/
 - There was no scoped Write, consume, or `HELP_SHOWN`, because prepare could not establish the executor-owned session identity. No mailbox files, project adoption/run lock, or live Claude CLI process remained.
 
 No further model calls, source edits, reinstalls, or global activation were performed. The remaining decision is to run the adapter in a genuinely interactive Claude Code session that exports the validated session identity, or to change the runtime contract under a separately authorized implementation task.
+
+## Claude SessionStart identity closure
+
+The prior interactive blocker is resolved. Its root cause was not command discovery or permission handling: `entry native prepare` requires a valid `CLAUDE_SESSION_ID`, but later Bash calls did not receive Claude Code's authoritative SessionStart `session_id`. The canonical fix uses the existing `SessionStart` hook and appends the validated value to `CLAUDE_ENV_FILE`, the lifecycle channel Claude Code provides to subsequent Bash calls. It does not derive identity from PID, cwd, time, mailbox state, or another fallback.
+
+Two review failures prevented unsafe candidates from reaching the global installation:
+
+1. Candidate `59b6656` rejected an invalid value for the new Claude export but still allowed it into legacy `CK_SESSION_ID` and temporary state.
+2. Candidate `33ec3ff` closed those legacy channels but let an already effective stale `CLAUDE_SESSION_ID` survive an invalid or missing current SessionStart event.
+
+The final reviewed candidate is `289ddb7d43126f8e04b206f1bc87291df6016aa5`. Invalid or missing current identity now appends a constant shell-safe neutralization, so a prior value cannot remain effective; a valid current identity remains the sole authority. The reviewed code scope is exactly two files: `core/hooks/session-init.cjs` and `core/hooks/__tests__/session-init-identity.test.cjs`.
+
+Fresh activation gates passed: affected identity/native matrix `91/91`, fake-home installer parity/idempotence `1/1`, settings/install-target/manifest matrix `14/14`, and installed manifest/source/target parity `33/33`. Exactly one global install transaction ran: `1787872578839-81599-09f7349aae7ff23d`, state `COMMITTED`, recovery `NONE`. The candidate and installed hook hashes both equal `ef746d329ab3feaf50c0086403159a7e131ffc0e655420a92d7bd152618233e9`. Installed Claude and Codex sync dry-runs exited 0 with no pending action; doctor exited 0 with zero blockers. The managed SessionStart entry remained singular and five unmanaged entries were preserved.
+
+One fresh interactive Claude Code session exercised `/soma-run --help` through native prepare, scoped mailbox write, native consume, cleanup, and terminal `HELP_SHOWN`. It had no identity error, permission denial, or fallback. In the same session exactly one minimal subagent compared its inherited identity with the parent contract and returned `MATCH`. The mailbox ended empty, the session exited 0, and no Claude Code CLI process remained. The parent identity is recorded only as SHA-256 `0370d1bbbc5e29fe3ae268c54e359ab68c78dc67b594dc6662a77554e895818b`.
+
+The accepted runtime limitation remains explicit: if `CLAUDE_ENV_FILE` exists but is unwritable, the hook stays nonblocking and emits `ENV_WRITE_FAILED`, but it cannot erase a stale variable that was already effective in that file. This is a bounded property of a failed lifecycle channel, not an untracked blocker or an alternate identity path.
+
+Sanitized durable evidence: `.soma/diagnostics/run-260825-universal-entry-7f3c2a-session-identity-activation.json`. The normative status is **installed and verified** for interactive startup/help and subagent identity inheritance. Windows migration, chezmoi, and unmanaged-hook cleanup remain outside this unit's scope.
