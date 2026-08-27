@@ -33,9 +33,12 @@ function anchorIsIntact(filePath) {
   }
   if (!content.includes('<!-- soma-v2:start')) return false;
   const lines = content.split('\n');
+  let anchoredMarkers = 0;
   for (let index = 0; index < lines.length; index += 1) {
+    if (!lines[index].includes('<!-- soma-v2:start')) continue;
     const attrs = parseAnchorAttrs(lines[index]);
-    if (!attrs || !attrs.sha256) continue;
+    if (!attrs || !attrs.sha256) return false;
+    anchoredMarkers += 1;
     const escaped = attrs.id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const end = new RegExp(`<!--\\s*soma-v2:end\\s+id=${escaped}\\s*-->`);
     const body = [];
@@ -47,7 +50,7 @@ function anchorIsIntact(filePath) {
     if (cursor >= lines.length || computeBlockSha256(body.join('\n')) !== attrs.sha256) return false;
     index = cursor;
   }
-  return true;
+  return anchoredMarkers > 0;
 }
 
 function inspectInstall(projectRoot) {

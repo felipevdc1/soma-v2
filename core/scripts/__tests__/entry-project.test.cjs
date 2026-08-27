@@ -88,6 +88,10 @@ test('accepts an explicitly selected empty non-Git directory', () => {
       scope: fs.realpathSync(dir),
       source: 'explicit-empty',
     });
+    assert.throws(
+      () => resolveProject({ cwd: dir, home: os.homedir() }),
+      { code: 'PROJECT_UNRESOLVED' }
+    );
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

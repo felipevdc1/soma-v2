@@ -171,6 +171,29 @@ test('a drifted bootloader blocks adoption without invoking the installer or rew
   });
 });
 
+test('an installed anchor without sha256 is blocked and inspection preserves project bytes and mtimes', () => {
+  withFakeHome('entry-anchor-no-sha-home-', () => {
+    const project = temp('soma-entry-anchor-no-sha-');
+    initRepo(project);
+    try {
+      assert.equal(adoptProject({ projectRoot: project, scope: project }).status, 'READY');
+      const claudePath = path.join(project, 'CLAUDE.md');
+      const installed = fs.readFileSync(claudePath, 'utf8');
+      const withoutSha = installed.replace(/\s+sha256=[a-f0-9]+(?=\s*-->)/, '');
+      assert.notEqual(withoutSha, installed);
+      fs.writeFileSync(claudePath, withoutSha);
+      const before = projectSnapshot(project);
+
+      const inspection = inspectAdoption({ projectRoot: project, scope: project });
+      assert.equal(inspection.kind, 'blocked');
+      assert.match(inspection.diagnostic, /corrupt|drift|sha/i);
+      assert.deepEqual(projectSnapshot(project), before);
+    } finally {
+      fs.rmSync(project, { recursive: true, force: true });
+    }
+  });
+});
+
 test('monorepo adoption records the declared workspace scope and its test command names', () => {
   withFakeHome('entry-monorepo-home-', () => {
     const project = temp('soma-entry-adopt-monorepo-');

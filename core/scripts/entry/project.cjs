@@ -65,7 +65,10 @@ function packageWorkspaces(repoRoot) {
 
 function classifyNonGit(candidate, explicit) {
   const entries = fs.readdirSync(candidate);
-  if (entries.length === 0) return explicit ? 'explicit-empty' : 'cwd-empty';
+  if (entries.length === 0) {
+    if (!explicit) throw projectError('PROJECT_UNRESOLVED', 'Empty non-Git directory requires an explicit --project path');
+    return 'explicit-empty';
+  }
   if (entries.some(entry => PROJECT_MARKERS.has(entry))) return explicit ? 'explicit' : 'cwd-marker';
   throw projectError('PROJECT_UNRESOLVED', 'Non-Git directory is non-empty and has no recognized project marker');
 }
