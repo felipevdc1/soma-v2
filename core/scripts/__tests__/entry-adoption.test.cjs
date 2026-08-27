@@ -82,10 +82,109 @@ test('adopts a dirty legacy Git project once, records pre-adoption facts, and ne
       assert.equal(adoption.$schema, 'soma-adoption/v1');
       assert.deepEqual(adoption.facts.dirtyPaths, ['dirty.txt']);
       assert.deepEqual(adoption.facts.testCommands.map(item => item.name), ['test', 'test:unit']);
+      assert.equal(fs.existsSync(path.join(project, '.soma-adoption.pending.json')), false);
     } finally {
       fs.rmSync(project, { recursive: true, force: true });
     }
   });
+});
+
+test('a legacy complete installation without adoption metadata stays READY without a baseline', () => {
+  withFakeHome('entry-legacy-complete-home-', () => {
+    const project = temp('soma-entry-legacy-complete-');
+    initRepo(project);
+    try {
+      assert.equal(adoptProject({ projectRoot: project, scope: project }).status, 'READY');
+      fs.rmSync(path.join(project, '.soma', 'adoption.json'));
+
+      const result = adoptProject({ projectRoot: project, scope: project });
+      assert.equal(result.status, 'READY');
+      assert.equal(result.adopted, false);
+      assert.equal(result.baselineRequired, false);
+      assert.equal(fs.existsSync(path.join(project, '.soma', 'adoption.json')), false);
+    } finally {
+      fs.rmSync(project, { recursive: true, force: true });
+    }
+  });
+});
+
+test('corrupt or inconsistent adoption metadata blocks without rewriting it', () => {
+  for (const fixture of [
+    { name: 'corrupt', value: '{bad json\n' },
+    { name: 'extra-field', value: JSON.stringify({ extra: true }) },
+    { name: 'invalid-date', mutate: record => ({ ...record, adoptedAt: '1' }) },
+    { name: 'wrong-project', mutate: record => ({ ...record, projectRoot: `${record.projectRoot}-other` }) },
+    { name: 'wrong-scope', mutate: record => ({ ...record, scope: `${record.scope}-other` }) },
+  ]) {
+    withFakeHome(`entry-adoption-${fixture.name}-home-`, () => {
+      const project = temp(`soma-entry-adoption-${fixture.name}-`);
+      initRepo(project);
+      try {
+        assert.equal(adoptProject({ projectRoot: project, scope: project }).status, 'READY');
+        const adoptionPath = path.join(project, '.soma', 'adoption.json');
+        const original = JSON.parse(fs.readFileSync(adoptionPath, 'utf8'));
+        fs.writeFileSync(adoptionPath, fixture.value || `${JSON.stringify(fixture.mutate(original), null, 2)}\n`);
+        const before = projectSnapshot(path.join(project, '.soma'));
+
+        const inspection = inspectAdoption({ projectRoot: project, scope: project });
+        assert.equal(inspection.kind, 'blocked', fixture.name);
+        assert.match(inspection.diagnostic, /adoption/i, fixture.name);
+        assert.deepEqual(projectSnapshot(path.join(project, '.soma')), before, fixture.name);
+      } finally {
+        fs.rmSync(project, { recursive: true, force: true });
+      }
+    });
+  }
+});
+
+test('an interrupted adoption leaves a pending record that blocks every later attempt', () => {
+  for (const fixture of [
+    { name: 'return', installer: () => 2 },
+    { name: 'throw', installer: () => { throw Object.assign(new Error('interrupted'), { code: 'INTERRUPTED' }); } },
+    { name: 'throw-after-install', installer: (target, options) => {
+      assert.equal(require('../install.cjs').installProject(target, options), 0);
+      throw Object.assign(new Error('interrupted after install'), { code: 'INTERRUPTED' });
+    } },
+  ]) {
+    withFakeHome(`entry-adoption-interrupted-${fixture.name}-home-`, () => {
+      const project = temp(`soma-entry-adoption-interrupted-${fixture.name}-`);
+      initRepo(project);
+      const pendingPath = path.join(project, '.soma-adoption.pending.json');
+      let calls = 0;
+      try {
+        const result = adoptProject(
+          { projectRoot: project, scope: project },
+          { installer: (...args) => {
+            calls += 1;
+            assert.equal(fs.existsSync(pendingPath), true);
+            const pending = JSON.parse(fs.readFileSync(pendingPath, 'utf8'));
+            assert.equal(pending.$schema, 'soma-adoption/v1');
+            assert.equal(pending.projectRoot, fs.realpathSync(project));
+            assert.deepEqual(pending.facts.dirtyPaths, []);
+            return fixture.installer(...args);
+          } }
+        );
+        assert.equal(result.status, 'ADOPTION_BLOCKED', fixture.name);
+        assert.equal(calls, 1, fixture.name);
+        const pendingBefore = fs.readFileSync(pendingPath);
+        const pendingMtime = fs.statSync(pendingPath, { bigint: true }).mtimeNs;
+
+        const inspection = inspectAdoption({ projectRoot: project, scope: project });
+        assert.equal(inspection.kind, 'blocked', fixture.name);
+        assert.match(inspection.diagnostic, /pending|interrupted/i, fixture.name);
+        const retry = adoptProject(
+          { projectRoot: project, scope: project },
+          { installer: () => { calls += 1; return 0; } }
+        );
+        assert.equal(retry.status, 'ADOPTION_BLOCKED', fixture.name);
+        assert.equal(calls, 1, fixture.name);
+        assert.deepEqual(fs.readFileSync(pendingPath), pendingBefore, fixture.name);
+        assert.equal(fs.statSync(pendingPath, { bigint: true }).mtimeNs, pendingMtime, fixture.name);
+      } finally {
+        fs.rmSync(project, { recursive: true, force: true });
+      }
+    });
+  }
 });
 
 test('a complete installation is READY without adoption or baseline and adoption metadata stays byte-stable', () => {
