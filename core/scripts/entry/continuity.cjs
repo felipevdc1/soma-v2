@@ -110,9 +110,12 @@ const LEGACY_LOCK_KEYS = ['runId', 'sessionId', 'startedAt'];
 const PRIOR_LOCK_KEYS = [
   '$schema', 'executionScope', 'handoffGeneration', 'runId', 'sessionId', 'startedAt',
 ];
-const CLAIM_KEYS = [
-  '$schema', 'handoffGeneration', 'ownerPid', 'runId', 'sessionId', 'startedAt',
+const GUARD_KEYS = [
+  '$schema', 'guardPid', 'handoffGeneration', 'ownerPid', 'runId', 'sessionId',
 ];
+const PRIVATE_NAME = /^(?:guard|lock)\.[1-9][0-9]*\.[a-f0-9]{12}\.tmp$/;
+const TOMBSTONE_NAME = /^guard\.([1-9][0-9]*)\.[a-f0-9]{12}\.tombstone$/;
+const TOMBSTONE_CLEANUP_LIMIT = 16;
 
 function exactKeys(value, expected) {
   return value && typeof value === 'object' && !Array.isArray(value) &&
@@ -144,13 +147,14 @@ function parseLock(bytes) {
   return null;
 }
 
-function parseClaim(bytes) {
+function parseGuard(bytes) {
   let value;
   try { value = JSON.parse(bytes); } catch (_) { return null; }
-  if (!exactKeys(value, CLAIM_KEYS) || value.$schema !== 'soma-run-lock-claim/v1' ||
+  if (!exactKeys(value, GUARD_KEYS) || value.$schema !== 'soma-run-lock-guard/v1' ||
       !safeRunId(value.runId) || typeof value.sessionId !== 'string' || value.sessionId.length === 0 ||
-      typeof value.startedAt !== 'string' || !Number.isInteger(value.handoffGeneration) ||
-      value.handoffGeneration < 0 || !Number.isSafeInteger(value.ownerPid) || value.ownerPid <= 0) {
+      !Number.isInteger(value.handoffGeneration) || value.handoffGeneration < 0 ||
+      !Number.isSafeInteger(value.guardPid) || value.guardPid <= 0 ||
+      !Number.isSafeInteger(value.ownerPid) || value.ownerPid <= 0) {
     return null;
   }
   return value;
@@ -169,7 +173,10 @@ function processAlive(pid, killProcess = process.kill) {
 
 function readExistingLock(lockPath) {
   let stat;
-  try { stat = fs.lstatSync(lockPath); } catch (_) { return null; }
+  try { stat = fs.lstatSync(lockPath); } catch (error) {
+    if (error && error.code === 'ENOENT') return null;
+    throw error;
+  }
   if (stat.isSymbolicLink() || !stat.isFile()) return { bytes: null, parsed: null };
   const bytes = fs.readFileSync(lockPath);
   return { bytes, parsed: parseLock(bytes) };
@@ -179,101 +186,171 @@ function busyLock(runId, message) {
   return { status: 'busy', result: { status: 'RESUME_BUSY', retrySafe: true, runId, diagnostic: message } };
 }
 
-function readClaim(claimPath) {
+function readGuard(guardPath) {
   let stat;
-  try { stat = fs.lstatSync(claimPath); } catch (_) { return null; }
-  if (stat.isSymbolicLink() || !stat.isFile()) return { bytes: null, parsed: null };
-  const bytes = fs.readFileSync(claimPath);
-  return { bytes, parsed: parseClaim(bytes) };
-}
-
-function acquireReplacementClaim({ claimPath, claimTemporary, claimBytes, ownerPid, runId }) {
-  try {
-    fs.linkSync(claimTemporary, claimPath);
-    return { status: 'acquired' };
-  } catch (error) {
-    if (!error || error.code !== 'EEXIST') throw error;
-  }
-  const existing = readClaim(claimPath);
-  if (!existing || !existing.bytes || !existing.parsed) {
-    return busyLock(runId, 'RUN_LOCK_BUSY: replacement claim is malformed');
-  }
-  if (existing.parsed.ownerPid !== ownerPid && processAlive(existing.parsed.ownerPid)) {
-    return busyLock(runId, 'RUN_LOCK_BUSY: stale-lock replacement is owned by a live process');
-  }
-  const confirmed = readClaim(claimPath);
-  if (!confirmed || !confirmed.bytes || !confirmed.bytes.equals(existing.bytes)) {
-    return busyLock(runId, 'RUN_LOCK_BUSY: replacement claim changed during recovery');
-  }
-  try {
-    fs.unlinkSync(claimPath);
-    fs.linkSync(claimTemporary, claimPath);
-    return { status: 'acquired' };
-  } catch (error) {
-    if (error && (error.code === 'ENOENT' || error.code === 'EEXIST')) {
-      return busyLock(runId, 'RUN_LOCK_BUSY: replacement claim changed during recovery');
-    }
+  try { stat = fs.lstatSync(guardPath); } catch (error) {
+    if (error && error.code === 'ENOENT') return null;
     throw error;
   }
+  if (stat.isSymbolicLink() || !stat.isFile()) return { bytes: null, parsed: null };
+  const bytes = fs.readFileSync(guardPath);
+  return { bytes, parsed: parseGuard(bytes) };
 }
 
-function removeOwnedClaim(claimPath, claimBytes) {
-  const current = readClaim(claimPath);
-  if (current && current.bytes && current.bytes.equals(claimBytes)) fs.rmSync(claimPath, { force: true });
+function uniquePrivatePath(runtimeDir, kind, suffix) {
+  const name = `${kind}.${process.pid}.${crypto.randomBytes(6).toString('hex')}.${suffix}`;
+  if ((suffix === 'tmp' && !PRIVATE_NAME.test(name)) ||
+      (suffix === 'tombstone' && !TOMBSTONE_NAME.test(name))) {
+    throw codedError('RUN_LOCK_PRIVATE_NAME_INVALID');
+  }
+  return path.join(runtimeDir, name);
 }
 
-function acquireLock({ projectRoot, runId, sessionId, handoffGeneration, executionScope, ownerPid = process.ppid }) {
+function cleanupTombstones(runtimeDir) {
+  let names;
+  try {
+    names = fs.readdirSync(runtimeDir).filter(name => {
+      const match = TOMBSTONE_NAME.exec(name);
+      return match && !processAlive(Number(match[1]));
+    }).sort();
+  }
+  catch (_) { return; }
+  for (const name of names.slice(0, TOMBSTONE_CLEANUP_LIMIT)) {
+    fs.rmSync(path.join(runtimeDir, name), { force: true });
+  }
+}
+
+function acquireGuard({ runtimeDir, runId, sessionId, ownerPid, handoffGeneration }) {
+  const guard = {
+    $schema: 'soma-run-lock-guard/v1', guardPid: process.pid,
+    handoffGeneration, ownerPid, runId, sessionId,
+  };
+  const guardBytes = Buffer.from(canonicalJson(guard));
+  const guardPath = path.join(runtimeDir, 'guard.json');
+  const temporary = uniquePrivatePath(runtimeDir, 'guard', 'tmp');
+  fs.writeFileSync(temporary, guardBytes, { flag: 'wx', mode: 0o600 });
+  try {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        fs.linkSync(temporary, guardPath);
+        cleanupTombstones(runtimeDir);
+        return { status: 'acquired', guardPath, guardBytes };
+      } catch (error) {
+        if (!error || error.code !== 'EEXIST') throw error;
+      }
+
+      const existing = readGuard(guardPath);
+      if (!existing || !existing.bytes || !existing.parsed) {
+        return busyLock(runId, 'RUN_LOCK_BUSY: acquisition guard is malformed');
+      }
+      if (processAlive(existing.parsed.guardPid)) {
+        return busyLock(runId, 'RUN_LOCK_BUSY: acquisition guard is owned by a live process');
+      }
+      if (attempt === 1) {
+        return busyLock(runId, 'RUN_LOCK_BUSY: dead acquisition guard changed during recovery');
+      }
+
+      const confirmed = readGuard(guardPath);
+      if (!confirmed || !confirmed.bytes || !confirmed.bytes.equals(existing.bytes)) continue;
+      if (!confirmed.parsed || processAlive(confirmed.parsed.guardPid)) {
+        return busyLock(runId, 'RUN_LOCK_BUSY: acquisition guard changed during recovery');
+      }
+      const tombstone = uniquePrivatePath(runtimeDir, 'guard', 'tombstone');
+      try {
+        fs.renameSync(guardPath, tombstone);
+      } catch (error) {
+        if (!error || error.code !== 'ENOENT') throw error;
+      }
+    }
+    return busyLock(runId, 'RUN_LOCK_BUSY: acquisition guard could not be installed');
+  } finally {
+    fs.rmSync(temporary, { force: true });
+  }
+}
+
+function releaseGuard(guardPath, guardBytes) {
+  const current = readGuard(guardPath);
+  if (current && current.bytes && current.bytes.equals(guardBytes)) {
+    fs.rmSync(guardPath, { force: true });
+  }
+}
+
+function lockIsIdempotent(current, candidate) {
+  return current.runId === candidate.runId && current.sessionId === candidate.sessionId &&
+    current.ownerPid === candidate.ownerPid && current.executionScope === candidate.executionScope &&
+    current.handoffGeneration === candidate.handoffGeneration;
+}
+
+function latestGenerationMatches(projectRoot, runId, handoffGeneration) {
+  return readLatestHandoff(projectRoot, runId).generation === handoffGeneration;
+}
+
+function acquireLock({ projectRoot, runId, sessionId, handoffGeneration, executionScope, ownerPid }) {
   if (!Number.isSafeInteger(ownerPid) || ownerPid <= 0) {
     return busyLock(runId, 'RUN_LOCK_CONFLICT: ownerPid must be a positive safe integer');
   }
-  const effectiveSessionId = sessionId || `pid-${process.ppid}`;
+  if (typeof sessionId !== 'string' || sessionId.length === 0) {
+    return busyLock(runId, 'RUN_LOCK_CONFLICT: sessionId must be durable');
+  }
   const lock = {
     $schema: 'soma-run-lock/v1', executionScope, handoffGeneration, runId,
-    ownerPid, sessionId: effectiveSessionId, startedAt: new Date().toISOString(),
+    ownerPid, sessionId, startedAt: new Date().toISOString(),
   };
   const lockPath = path.join(projectRoot, '.soma.lock');
-  const { diagnosticsDir, somaDir } = resolveSomaPaths(projectRoot);
-  fs.mkdirSync(somaDir, { recursive: true });
-  const temporary = path.join(somaDir, `.run-lock.${process.pid}.${crypto.randomBytes(6).toString('hex')}.tmp`);
-  fs.writeFileSync(temporary, canonicalJson(lock), { flag: 'wx' });
-  let claimPath;
-  let claimBytes;
+  const { diagnosticsDir } = resolveSomaPaths(projectRoot);
+  const runtimeDir = path.join(diagnosticsDir, '.run-lock');
+  fs.mkdirSync(runtimeDir, { recursive: true, mode: 0o700 });
+  const runtimeStat = fs.lstatSync(runtimeDir);
+  if (runtimeStat.isSymbolicLink() || !runtimeStat.isDirectory()) {
+    return busyLock(runId, 'RUN_LOCK_CONFLICT: lock runtime is not a private directory');
+  }
+  fs.chmodSync(runtimeDir, 0o700);
+  let guard;
   try {
-    try {
-      fs.linkSync(temporary, lockPath);
-      return { status: 'acquired' };
-    } catch (error) {
-      if (!error || error.code !== 'EEXIST') throw error;
-    }
+    guard = acquireGuard({ runtimeDir, runId, sessionId, ownerPid, handoffGeneration });
+    if (guard.status === 'busy') return guard;
 
+    if (!latestGenerationMatches(projectRoot, runId, handoffGeneration)) {
+      return busyLock(runId, 'RUN_LOCK_BUSY: durable handoff advanced during acquisition');
+    }
     const existing = readExistingLock(lockPath);
-    if (!existing || !existing.parsed || existing.parsed.value.runId !== runId) {
-      return busyLock(runId, 'RUN_LOCK_CONFLICT: existing lock is malformed or belongs to another run');
-    }
-    if (existing.parsed.kind !== 'current') {
-      return busyLock(runId, 'RUN_LOCK_CONFLICT: existing lock has no provable process owner');
-    }
-    const current = existing.parsed.value;
-    if (current.handoffGeneration === handoffGeneration && current.sessionId === effectiveSessionId &&
-        current.executionScope === executionScope && current.ownerPid === ownerPid) {
-      return { status: 'idempotent' };
-    }
-    if (current.ownerPid !== ownerPid && processAlive(current.ownerPid)) {
-      return busyLock(runId, 'RUN_LOCK_BUSY: another live process owns the run lock');
+    if (existing) {
+      if (!existing.parsed || existing.parsed.value.runId !== runId) {
+        return busyLock(runId, 'RUN_LOCK_CONFLICT: existing lock is malformed or belongs to another run');
+      }
+      if (existing.parsed.kind !== 'current') {
+        return busyLock(runId, 'RUN_LOCK_CONFLICT: existing lock has no provable process owner');
+      }
+      const current = existing.parsed.value;
+      if (lockIsIdempotent(current, lock)) return { status: 'idempotent' };
+      const replacementAllowed =
+        (current.ownerPid === ownerPid || !processAlive(current.ownerPid)) &&
+        current.handoffGeneration <= handoffGeneration;
+      if (!replacementAllowed) {
+        return busyLock(runId, current.handoffGeneration > handoffGeneration
+          ? 'RUN_LOCK_BUSY: existing lock has a newer handoff generation'
+          : 'RUN_LOCK_BUSY: another live process owns the run lock');
+      }
     }
 
-    fs.mkdirSync(diagnosticsDir, { recursive: true });
-    claimPath = path.join(diagnosticsDir, '.run-lock-replace.claim');
-    const claim = {
-      $schema: 'soma-run-lock-claim/v1', handoffGeneration, ownerPid, runId,
-      sessionId: effectiveSessionId, startedAt: new Date().toISOString(),
-    };
-    claimBytes = Buffer.from(canonicalJson(claim));
-    const claimTemporary = path.join(diagnosticsDir, `.run-lock-claim.${process.pid}.${crypto.randomBytes(6).toString('hex')}.tmp`);
-    fs.writeFileSync(claimTemporary, claimBytes, { flag: 'wx', mode: 0o600 });
+    const temporary = uniquePrivatePath(runtimeDir, 'lock', 'tmp');
+    const lockBytes = Buffer.from(canonicalJson(lock));
+    fs.writeFileSync(temporary, lockBytes, { flag: 'wx', mode: 0o600 });
     try {
-      const claimResult = acquireReplacementClaim({ claimPath, claimTemporary, claimBytes, ownerPid, runId });
-      if (claimResult.status === 'busy') return claimResult;
+      if (!latestGenerationMatches(projectRoot, runId, handoffGeneration)) {
+        return busyLock(runId, 'RUN_LOCK_BUSY: durable handoff advanced before publication');
+      }
+      if (!existing) {
+        try {
+          fs.linkSync(temporary, lockPath);
+          return { status: 'acquired' };
+        } catch (error) {
+          if (error && error.code === 'EEXIST') {
+            return busyLock(runId, 'RUN_LOCK_BUSY: lock appeared during initial publication');
+          }
+          throw error;
+        }
+      }
       const confirmed = readExistingLock(lockPath);
       if (!confirmed || !confirmed.bytes || !confirmed.bytes.equals(existing.bytes)) {
         return busyLock(runId, 'RUN_LOCK_BUSY: lock changed during stale-lock replacement');
@@ -281,17 +358,22 @@ function acquireLock({ projectRoot, runId, sessionId, handoffGeneration, executi
       fs.renameSync(temporary, lockPath);
       return { status: 'replaced' };
     } finally {
-      fs.rmSync(claimTemporary, { force: true });
+      fs.rmSync(temporary, { force: true });
     }
   } catch (error) {
     return busyLock(runId, `RUN_LOCK_BUSY: ${error.message}`);
   } finally {
-    if (claimPath && claimBytes) removeOwnedClaim(claimPath, claimBytes);
-    fs.rmSync(temporary, { force: true });
+    if (guard && guard.status === 'acquired') releaseGuard(guard.guardPath, guard.guardBytes);
   }
 }
 
-function resumeContinuity({ projectRoot, requestedRunId, sessionId, executionScope = projectRoot, ownerPid = process.ppid }) {
+function resumeContinuity({ projectRoot, requestedRunId, sessionId, executionScope = projectRoot, ownerPid }) {
+  if (!Number.isSafeInteger(ownerPid) || ownerPid <= 0) {
+    return {
+      status: 'RESUME_IDENTITY_REQUIRED', retrySafe: true,
+      diagnostic: 'RESUME_IDENTITY_REQUIRED: ownerPid must be a positive safe integer',
+    };
+  }
   let runId;
   try {
     runId = resolveRun(projectRoot, requestedRunId);
@@ -318,5 +400,5 @@ function resumeContinuity({ projectRoot, requestedRunId, sessionId, executionSco
 }
 
 module.exports = {
-  acquireLock, parseClaim, parseLock, processAlive, readLatestHandoff, resolveRun, resumeContinuity, verifyResume,
+  acquireLock, parseGuard, parseLock, processAlive, readLatestHandoff, resolveRun, resumeContinuity, verifyResume,
 };

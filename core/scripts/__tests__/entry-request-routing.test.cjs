@@ -98,3 +98,36 @@ test('start routes resolved project into adoption and preserves the objective as
     fs.rmSync(project, { recursive: true, force: true });
   }
 });
+
+test('resume requires a durable owner identity before project resolution', () => {
+  let resolutions = 0;
+  const result = routeEntryRequest(
+    { mode: 'resume', runId: 'run-routing-identity', project: '/unused' },
+    { resolveProject: () => { resolutions += 1; throw new Error('must not run'); } }
+  );
+  assert.deepEqual(result, {
+    status: 'RESUME_IDENTITY_REQUIRED', retrySafe: true,
+    diagnostic: 'RESUME_IDENTITY_REQUIRED: ownerPid must be a positive safe integer',
+  });
+  assert.equal(resolutions, 0);
+});
+
+test('resume passes the validated native session and owner PID to continuity', () => {
+  const project = temp('soma-entry-route-resume-');
+  initRepo(project);
+  let received = null;
+  try {
+    const result = routeEntryRequest(
+      { mode: 'resume', runId: 'run-routing-owner', project },
+      {
+        cwd: project, home: path.join(project, 'not-home'), sessionId: 'claude.native:42', ownerPid: 4242,
+        resumeContinuity: value => { received = value; return { status: 'RESUME_READY' }; },
+      }
+    );
+    assert.equal(result.status, 'RESUME_READY');
+    assert.equal(received.sessionId, 'claude.native:42');
+    assert.equal(received.ownerPid, 4242);
+  } finally {
+    fs.rmSync(project, { recursive: true, force: true });
+  }
+});

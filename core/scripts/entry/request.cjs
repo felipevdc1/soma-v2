@@ -16,6 +16,13 @@ function routeEntryRequest(parsed, context = {}) {
     };
   }
 
+  if (parsed.mode === 'resume' && (!Number.isSafeInteger(context.ownerPid) || context.ownerPid <= 0)) {
+    return {
+      status: 'RESUME_IDENTITY_REQUIRED', retrySafe: true,
+      diagnostic: 'RESUME_IDENTITY_REQUIRED: ownerPid must be a positive safe integer',
+    };
+  }
+
   const resolveProject = context.resolveProject || defaultResolveProject;
   let resolution;
   try {
@@ -45,7 +52,7 @@ function routeEntryRequest(parsed, context = {}) {
     const resumeContinuity = context.resumeContinuity || defaultResumeContinuity;
     return resumeContinuity({
       projectRoot: resolution.projectRoot, requestedRunId: parsed.runId,
-      executionScope: resolution.scope, sessionId: context.sessionId,
+      executionScope: resolution.scope, sessionId: context.sessionId, ownerPid: context.ownerPid,
     });
   }
   if (parsed.mode === 'start') {

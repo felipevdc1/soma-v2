@@ -51,6 +51,10 @@ test('entry validates its internal forms and returns stable JSON errors on stder
       ['entry', 'prepare'],
       ['entry', 'prepare', '--session', 'bad/session'],
       ['entry', 'consume', '--session', 'codex.cli:1', '--request-id', 'wrong'],
+      ['entry', 'consume', '--session', 'codex.cli:1', '--request-id', 'a'.repeat(32), '--owner-pid', '0'],
+      ['entry', 'consume', '--session', 'codex.cli:1', '--request-id', 'a'.repeat(32), '--owner-pid', '1.5'],
+      ['entry', 'consume', '--session', 'codex.cli:1', '--request-id', 'a'.repeat(32), '--owner-pid', '999999999999999999999'],
+      ['entry', 'prepare', '--session', 'codex.cli:1', '--owner-pid', '1'],
       ['entry', 'unknown'],
     ]) {
       const result = run(args, { SOMA_ENTRY_ROOT: root });
@@ -59,6 +63,31 @@ test('entry validates its internal forms and returns stable JSON errors on stder
     }
     const unknown = run(['not-a-command']);
     assert.doesNotMatch(unknown.stderr, /entry/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('consume rejects an invalid owner PID before claiming a valid mailbox request', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'soma-entry-owner-cli-'));
+  try {
+    for (const [index, ownerPid] of ['0', '1.5', '999999999999999999999'].entries()) {
+      const sessionId = `codex.owner:${index}`;
+      const prepared = run(['entry', 'prepare', '--session', sessionId], { SOMA_ENTRY_ROOT: root });
+      assert.equal(prepared.status, 0, prepared.stderr);
+      const request = JSON.parse(prepared.stdout);
+      fs.writeFileSync(request.requestPath, JSON.stringify({
+        $schema: 'soma-entry-request/v1', sessionId, requestId: request.requestId,
+        rawArguments: '--help',
+      }));
+      const rejected = run(
+        ['entry', 'consume', '--session', sessionId, '--request-id', request.requestId, '--owner-pid', ownerPid],
+        { SOMA_ENTRY_ROOT: root }
+      );
+      assert.equal(rejected.status, 2, rejected.stderr);
+      assert.equal(JSON.parse(rejected.stderr).error, 'INVALID_ARGUMENTS');
+      assert.equal(fs.existsSync(request.requestPath), true, 'validation must run before mailbox claim');
+    }
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
