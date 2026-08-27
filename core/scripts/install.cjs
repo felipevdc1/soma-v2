@@ -194,6 +194,15 @@ function resolveProjectPath(rawPath) {
   return path.resolve(rawPath);
 }
 
+function assertInstallableDirectory(projectPathAbs) {
+  if (!fs.existsSync(projectPathAbs) || !fs.statSync(projectPathAbs).isDirectory()) {
+    const installError = new Error(`project-path does not exist or is not a directory: ${projectPathAbs}`);
+    installError.code = 'PROJECT_PATH_INVALID';
+    installError.exitCode = 1;
+    throw installError;
+  }
+}
+
 // ── Lockfile helpers (T-09) ───────────────────────────────────────────────────
 
 /**
@@ -240,12 +249,14 @@ function checkLockConflict(projectPathAbs) {
       // Fresh lock — contention
       const pid = existingLock.pid;
       const ts = existingLock.timestamp || existingLock.started || '(unknown)';
-      process.stderr.write(
+      const installError = new Error(
         `soma install: Install in progress (PID ${pid}, started ${ts}).\n` +
         `  Lock: ${lockFilePath}\n` +
         `  If the previous install crashed, delete the lock manually: rm "${lockFilePath}"\n`
       );
-      process.exit(2);
+      installError.code = 'INSTALL_BUSY';
+      installError.exitCode = 2;
+      throw installError;
     } else {
       // Stale lock — auto-clean with WARNING
       const pid = existingLock.pid;
@@ -310,7 +321,7 @@ function writeLock(projectPathAbs) {
  * .soma/ pre-created), this function does both check + write atomically.
  *
  * Lifecycle per CONTRACT-05:
- *   - If lock exists and age < 60min → stderr + process.exit(2).
+ *   - If lock exists and age < 60min → throw INSTALL_BUSY with exitCode=2.
  *   - If lock exists and age >= 60min (stale) → WARNING stderr + delete + proceed.
  *   - If lock missing/invalid → proceed.
  *   - Creates .soma/ if absent, then writes lock JSON.
@@ -322,7 +333,7 @@ function writeLock(projectPathAbs) {
  * @task T-09
  */
 function acquireLock(projectPathAbs) {
-  // Check for existing lock (handles stale/fresh logic, exits on contention)
+  // Check for existing lock (handles stale/fresh logic, throws on contention)
   checkLockConflict(projectPathAbs);
   // Write new lock (creates .soma/ if needed for direct calls from tests)
   return writeLock(projectPathAbs);
@@ -1145,7 +1156,9 @@ function main(argv) {
 
   // T-07: Validate that project-path exists and is a directory.
   // CONTRACT-01: "project-path … Must exist."
-  if (!fs.existsSync(projectPathAbs) || !fs.statSync(projectPathAbs).isDirectory()) {
+  try {
+    assertInstallableDirectory(projectPathAbs);
+  } catch (installError) {
     process.stderr.write(
       `soma install: project-path does not exist or is not a directory: "${projectPathAbs}"\n` +
       `  Ensure the directory exists before running soma install.\n`
@@ -1247,7 +1260,7 @@ function main(argv) {
   // Phase A — Pre-init conflict check:
   //   Check if .soma/install.lock already exists (stale/fresh logic).
   //   If .soma/ doesn't exist yet (greenfield), there's no lock → proceed.
-  //   If fresh lock found → process.exit(2) with contention message.
+  //   If fresh lock found → throw INSTALL_BUSY with the existing contention message.
   //   If stale lock → WARNING + auto-clean + proceed.
   //   This must happen BEFORE any mutation (inc. before init.cjs creates .soma/).
   checkLockConflict(projectPathAbs);
@@ -1268,17 +1281,55 @@ function main(argv) {
   }
 }
 
+function installProject(projectPathAbs, options = {}) {
+  const flags = {
+    tool: 'claude',
+    dryRun: false,
+    mergeClaudioMd: true,
+    replaceClaudioMd: false,
+    allowLocalEdits: false,
+    ...options,
+  };
+  assertInstallableDirectory(projectPathAbs);
+  const argv = [projectPathAbs, `--tool=${flags.tool}`];
+  if (flags.dryRun) argv.push('--dry-run');
+  if (flags.mergeClaudioMd) argv.push('--merge-claude-md');
+  if (flags.replaceClaudioMd) argv.push('--replace-claude-md');
+  if (flags.allowLocalEdits) argv.push('--allow-local-edits');
+  if (!flags.silent) return main(argv);
+
+  // The pipeline is synchronous. Entry uses this mode so its stdout remains
+  // one JSON document; always restore both streams before returning or throwing.
+  const stdoutWrite = process.stdout.write;
+  const stderrWrite = process.stderr.write;
+  process.stdout.write = () => true;
+  process.stderr.write = () => true;
+  try {
+    return main(argv);
+  } finally {
+    process.stdout.write = stdoutWrite;
+    process.stderr.write = stderrWrite;
+  }
+}
+
 // ── CLI entry ─────────────────────────────────────────────────────────────────
 
 if (require.main === module) {
-  const exitCode = main(process.argv.slice(2));
-  process.exit(exitCode);
+  try {
+    const exitCode = main(process.argv.slice(2));
+    process.exit(exitCode);
+  } catch (installError) {
+    if (installError.code !== 'INSTALL_BUSY') throw installError;
+    process.stderr.write(installError.message.endsWith('\n') ? installError.message : `${installError.message}\n`);
+    process.exit(installError.exitCode || 2);
+  }
 }
 
 // ── Module exports (for testability) ─────────────────────────────────────────
 
 module.exports = {
-  main, parseArgs, resolveProjectPath, acquireLock, releaseLock, writeInstallState,
+  main, parseArgs, resolveProjectPath, assertInstallableDirectory, installProject,
+  acquireLock, releaseLock, writeInstallState,
   // Spec 018 (T-05): exported for CONTRACT-FILES-LEDGER-02 case 2 (the "dois
   // lados da whitelist" test lives in files.cjs's own contract test file and
   // needs to exercise install.cjs's actual validator, not a re-derived copy).

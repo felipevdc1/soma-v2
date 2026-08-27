@@ -38,6 +38,7 @@ const HYDRA_FIXTURE = path.join(REPO_ROOT, 'core', 'scripts', '__tests__', 'fixt
 // why a plain fake HOME isn't enough (init.cjs needs a real
 // <HOME>/.soma-v2/templates tree).
 const { withFakeHome, fakeHomeEnv } = require('./helpers/fake-home.cjs');
+const { assertInstallableDirectory, installProject } = require('../install.cjs');
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -310,4 +311,41 @@ test('T-33-S5: full lifecycle .soma/ artifacts intact (AC-16 composite)', () => 
       fs.rmSync(d, { recursive: true, force: true });
     }
   });
+});
+
+test('callable installer validates directories and preserves greenfield/idempotent behavior', () => {
+  assert.throws(
+    () => assertInstallableDirectory(path.join(os.tmpdir(), 'soma-missing-project')),
+    { code: 'PROJECT_PATH_INVALID' }
+  );
+
+  withFakeHome('callable-install-home-', (fakeHome) => {
+    const project = freshTmpDir('soma-callable-install');
+    const previousHome = process.env.HOME;
+    try {
+      const env = fakeHomeEnv(fakeHome);
+      process.env.HOME = env.HOME;
+      assert.equal(installProject(project), 0);
+      assert.equal(JSON.parse(fs.readFileSync(path.join(project, '.soma', 'install-state.json'))).status, 'complete');
+      assert.equal(installProject(project), 0);
+    } finally {
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+      fs.rmSync(project, { recursive: true, force: true });
+    }
+  });
+});
+
+test('callable installer throws INSTALL_BUSY without terminating or deleting another install lock', () => {
+  const project = freshTmpDir('soma-callable-lock');
+  const somaDir = path.join(project, '.soma');
+  const lockPath = path.join(somaDir, 'install.lock');
+  fs.mkdirSync(somaDir);
+  fs.writeFileSync(lockPath, JSON.stringify({ pid: 4242, timestamp: new Date().toISOString() }));
+  try {
+    assert.throws(() => installProject(project), { code: 'INSTALL_BUSY', exitCode: 2 });
+    assert.equal(fs.existsSync(lockPath), true);
+  } finally {
+    fs.rmSync(project, { recursive: true, force: true });
+  }
 });

@@ -3,6 +3,7 @@
 
 const { createMailbox } = require('./entry/mailbox.cjs');
 const { parseRawArguments } = require('./entry/raw-arguments.cjs');
+const { routeEntryRequest } = require('./entry/request.cjs');
 const { error } = require('./entry/request-schema.cjs');
 
 function parseFlags(argv, required) {
@@ -31,11 +32,14 @@ async function run(argv = process.argv.slice(2), env = process.env) {
   }
   if (verb === 'consume') {
     const flags = parseFlags(rest, ['--session', '--request-id']);
-    const parsed = await mailbox.consume(
+    const result = await mailbox.consume(
       { sessionId: flags['--session'], requestId: flags['--request-id'] },
-      bytes => parseRawArguments(JSON.parse(bytes.toString('utf8')).rawArguments)
+      bytes => routeEntryRequest(
+        parseRawArguments(JSON.parse(bytes.toString('utf8')).rawArguments),
+        { cwd: env.SOMA_PROJECT_CWD || process.cwd(), home: env.HOME }
+      )
     );
-    return { status: 'REQUEST_PARSED', parsed };
+    return result;
   }
   if (verb === 'abort') {
     const flags = parseFlags(rest, ['--session', '--request-id']);
