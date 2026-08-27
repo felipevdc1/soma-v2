@@ -35,6 +35,9 @@ const {
   DEFAULT_TTL_MS,
   MAX_TTL_MS,
 } = require(BROKER_MODULE);
+const {
+  MAX_RAW_ARGUMENT_BYTES,
+} = require(path.join(__dirname, '..', 'entry', 'request-schema.cjs'));
 
 const UID = typeof process.getuid === 'function' ? process.getuid() : 0;
 const SESSION_A = 'claude-session-A';
@@ -91,17 +94,84 @@ function deterministicRandom(start = 0) {
   };
 }
 
-function tracingFs(onCall) {
-  return new Proxy(fs, {
+function tracingFs(onCall, onResult = () => {}) {
+  function wrap(target, api) {
+    return new Proxy(target, {
+      get(object, property, receiver) {
+        if (api === 'sync' && property === 'promises') return wrap(fs.promises, 'promises');
+        const value = Reflect.get(object, property, receiver);
+        if (typeof value !== 'function') return value;
+        return (...args) => {
+          onCall(property, args, api);
+          const result = Reflect.apply(value, object, args);
+          if (result && typeof result.then === 'function') {
+            return result.then(resolved => {
+              onResult(property, args, api, resolved);
+              return resolved;
+            });
+          }
+          onResult(property, args, api, result);
+          return result;
+        };
+      },
+    });
+  }
+  return wrap(fs, 'sync');
+}
+
+function operationIs(operation, semanticName) {
+  return operation === semanticName || operation === `${semanticName}Sync`;
+}
+
+function isOpenOf(operation, args, expectedPath) {
+  return operationIs(operation, 'open') && args[0] === expectedPath;
+}
+
+function spoofStat(stat, overrides) {
+  return new Proxy(stat, {
     get(target, property, receiver) {
-      const value = Reflect.get(target, property, receiver);
-      if (typeof value !== 'function') return value;
-      return (...args) => {
-        onCall(property, args);
-        return Reflect.apply(value, target, args);
-      };
+      if (Object.hasOwn(overrides, property)) return overrides[property];
+      return Reflect.get(target, property, receiver);
     },
   });
+}
+
+function withLstatOverride(baseFs, expectedPath, transform) {
+  return new Proxy(baseFs, {
+    get(target, property, receiver) {
+      if (property === 'lstatSync') {
+        return file => {
+          const stat = target.lstatSync(file);
+          return file === expectedPath ? transform(stat) : stat;
+        };
+      }
+      if (property === 'promises') {
+        const promises = target.promises;
+        return new Proxy(promises, {
+          get(promisesTarget, promisesProperty, promisesReceiver) {
+            if (promisesProperty !== 'lstat') {
+              return Reflect.get(promisesTarget, promisesProperty, promisesReceiver);
+            }
+            return async file => {
+              const stat = await promisesTarget.lstat(file);
+              return file === expectedPath ? transform(stat) : stat;
+            };
+          },
+        });
+      }
+      return Reflect.get(target, property, receiver);
+    },
+  });
+}
+
+function brokerChain(prepared, runtimeRoot) {
+  return [
+    runtimeRoot,
+    path.join(runtimeRoot, 'soma-entry'),
+    brokerRootOf(prepared),
+    sessionDirOf(prepared),
+    slotDirOf(prepared),
+  ];
 }
 
 function makeFixture(options = {}) {
@@ -233,8 +303,8 @@ function assertNoClaim(prepared) {
 test('prepare hashes the native session, creates exact owner-only layout, and emits a minimal lease', async () => {
   const opens = [];
   const fixture = makeFixture({
-    fsOps: tracingFs((operation, args) => {
-      if (operation === 'openSync') opens.push(args);
+    fsOps: tracingFs((operation, args, api) => {
+      if (operationIs(operation, 'open')) opens.push({ args, api });
     }),
   });
   try {
@@ -290,13 +360,13 @@ test('prepare hashes the native session, creates exact owner-only layout, and em
       assert.equal(Object.hasOwn(lease, forbidden), false, `lease predicts ${forbidden}`);
     }
 
-    const createdFiles = opens.filter(([file, flags]) =>
+    const createdFiles = opens.filter(({ args: [file, flags] }) =>
       [leasePathOf(prepared), prepared.requestPath].includes(file) &&
       typeof flags === 'number' &&
       (flags & fs.constants.O_CREAT) !== 0
     );
     assert.equal(createdFiles.length, 2, 'lease and request must both use exclusive open');
-    for (const [file, flags, mode] of createdFiles) {
+    for (const { args: [file, flags, mode] } of createdFiles) {
       assert.ok((flags & fs.constants.O_EXCL) !== 0, `${file} missing O_EXCL`);
       assert.ok((flags & fs.constants.O_NOFOLLOW) !== 0, `${file} missing O_NOFOLLOW`);
       assert.equal(mode, 0o600, `${file} create mode must be 0600`);
@@ -373,6 +443,56 @@ test('prepare twice never creates a second live slot and may reuse only an empty
   }
 });
 
+test('two same-session prepares released together leave at most one live slot', async () => {
+  const runtimeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'soma-entry-concurrent-prepare-'));
+  fs.chmodSync(runtimeRoot, 0o700);
+  try {
+    const start = path.join(runtimeRoot, 'start');
+    const readyA = path.join(runtimeRoot, 'ready-a');
+    const readyB = path.join(runtimeRoot, 'ready-b');
+    const childSource = String.raw`
+      'use strict';
+      const fs = require('node:fs');
+      const { createRequestBroker } = require(process.argv[1]);
+      const broker = createRequestBroker({ runtimeRoot: process.argv[2] });
+      fs.writeFileSync(process.argv[4], 'ready', { flag: 'wx' });
+      const timer = setInterval(async () => {
+        if (!fs.existsSync(process.argv[5])) return;
+        clearInterval(timer);
+        try {
+          const prepared = await broker.prepare({ sessionId: process.argv[3] });
+          process.stdout.write(JSON.stringify({ ok: true, prepared }) + '\n');
+        } catch (error) {
+          process.stdout.write(JSON.stringify({ ok: false, code: error.code, message: error.message }) + '\n');
+        }
+      }, 5);
+    `;
+    const first = spawnJsonChild(childSource, [BROKER_MODULE, runtimeRoot, SESSION_A, readyA, start]);
+    const second = spawnJsonChild(childSource, [BROKER_MODULE, runtimeRoot, SESSION_A, readyB, start]);
+    await Promise.all([waitForPath(readyA), waitForPath(readyB)]);
+    fs.writeFileSync(start, 'go', { flag: 'wx' });
+    const results = await Promise.all([first.result, second.result]);
+
+    for (const result of results) {
+      assert.ok(
+        result.value.ok || result.value.code === 'BROKER_BUSY',
+        `concurrent prepare returned an unexpected result: ${JSON.stringify(results)}`
+      );
+    }
+    const successfulIds = new Set(
+      results.filter(result => result.value.ok).map(result => result.value.prepared.requestId)
+    );
+    assert.ok(successfulIds.size <= 1, `two distinct live leases were returned: ${JSON.stringify(results)}`);
+
+    const sessionDir = path.join(runtimeRoot, 'soma-entry', String(UID), sha256(SESSION_A));
+    const liveSlots = fs.readdirSync(sessionDir).filter(name => /^[0-9a-f]{32}$/.test(name));
+    assert.equal(liveSlots.length, 1, `same-session prepare created ${liveSlots.length} live slots`);
+    if (successfulIds.size === 1) assert.equal(liveSlots[0], [...successfulIds][0]);
+  } finally {
+    fs.rmSync(runtimeRoot, { recursive: true, force: true });
+  }
+});
+
 test('sessions A and B prepare independently and B never enumerates or consumes A', async () => {
   const fixture = makeFixture();
   try {
@@ -436,7 +556,7 @@ for (const kind of ['symlink', 'wrong-mode']) {
           runtimeRoot: fixture.runtimeRoot,
           uid: UID,
           fsOps: tracingFs((operation, args) => {
-            if (operation === 'openSync') opened.push(args[0]);
+            if (operationIs(operation, 'open')) opened.push(args[0]);
           }),
           nowMonotonicMs: () => fixture.clock.monotonicMs,
           nowWallMs: () => fixture.clock.wallMs,
@@ -470,23 +590,13 @@ for (const level of ['broker-root', 'session-directory', 'slot-directory']) {
       }[level];
       const opened = [];
       const fakeOwnerFs = tracingFs((operation, args) => {
-        if (operation === 'openSync') opened.push(args[0]);
+        if (operationIs(operation, 'open')) opened.push(args[0]);
       });
-      const ownerProxy = new Proxy(fakeOwnerFs, {
-        get(fsTarget, property, receiver) {
-          if (property !== 'lstatSync') return Reflect.get(fsTarget, property, receiver);
-          return file => {
-            const stat = fs.lstatSync(file);
-            if (file !== target) return stat;
-            return new Proxy(stat, {
-              get(statTarget, statProperty, statReceiver) {
-                if (statProperty === 'uid') return UID + 1;
-                return Reflect.get(statTarget, statProperty, statReceiver);
-              },
-            });
-          };
-        },
-      });
+      const ownerProxy = withLstatOverride(
+        fakeOwnerFs,
+        target,
+        stat => spoofStat(stat, { uid: UID + 1 })
+      );
       const consumer = createRequestBroker({
         runtimeRoot: fixture.runtimeRoot,
         uid: UID,
@@ -510,6 +620,104 @@ for (const level of ['broker-root', 'session-directory', 'slot-directory']) {
   });
 }
 
+test('consume lstat/realpath-authenticates every parent both before claim and before parsing', async () => {
+  const fixture = makeFixture();
+  try {
+    const prepared = await fixture.broker.prepare({ sessionId: SESSION_A });
+    writeEnvelope(prepared, '--help');
+    const events = [];
+    const consumer = createRequestBroker({
+      runtimeRoot: fixture.runtimeRoot,
+      uid: UID,
+      fsOps: tracingFs((operation, args, api) => events.push({ operation, args, api })),
+      nowMonotonicMs: () => fixture.clock.monotonicMs,
+      nowWallMs: () => fixture.clock.wallMs,
+      randomBytes: deterministicRandom(35),
+      ttlMs: DEFAULT_TTL_MS,
+    });
+    let parserEventIndex = -1;
+    await consumer.consume(identityOf(prepared), {
+      parseRawArguments(raw) {
+        parserEventIndex = events.length;
+        return raw;
+      },
+    });
+
+    const claimEventIndex = events.findIndex(({ operation, args }) =>
+      operationIs(operation, 'open') && path.basename(args[0]) === 'claim'
+    );
+    assert.ok(claimEventIndex >= 0, 'consume never reached an observable exclusive claim');
+    assert.ok(parserEventIndex > claimEventIndex, 'parser ran before the claim boundary');
+
+    for (const component of brokerChain(prepared, fixture.runtimeRoot)) {
+      for (const semanticOperation of ['lstat', 'realpath']) {
+        const beforeClaim = events.findIndex(({ operation, args }, index) =>
+          index < claimEventIndex && operationIs(operation, semanticOperation) && args[0] === component
+        );
+        const afterClaim = events.findIndex(({ operation, args }, index) =>
+          index > claimEventIndex && index < parserEventIndex &&
+          operationIs(operation, semanticOperation) && args[0] === component
+        );
+        assert.ok(beforeClaim >= 0, `${semanticOperation} skipped ${component} before claim`);
+        assert.ok(afterClaim >= 0, `${semanticOperation} skipped ${component} after claim`);
+      }
+    }
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+for (const level of ['broker-root', 'session-directory', 'slot-directory']) {
+  test(`post-claim ${level} symlink/canonical escape is rejected before parsing`, async () => {
+    const fixture = makeFixture();
+    const external = fs.mkdtempSync(path.join(os.tmpdir(), 'soma-entry-postclaim-escape-'));
+    fs.chmodSync(external, 0o700);
+    try {
+      fs.writeFileSync(path.join(external, 'sentinel'), 'outside bytes\n');
+      const prepared = await fixture.broker.prepare({ sessionId: SESSION_A });
+      writeEnvelope(prepared, '--help');
+      const target = {
+        'broker-root': brokerRootOf(prepared),
+        'session-directory': sessionDirOf(prepared),
+        'slot-directory': slotDirOf(prepared),
+      }[level];
+      const parked = `${target}.authenticated`;
+      let swapped = false;
+      const swapFs = tracingFs(
+        () => {},
+        (operation, args) => {
+          if (swapped || !operationIs(operation, 'open') || path.basename(args[0]) !== 'claim') return;
+          swapped = true;
+          fs.renameSync(target, parked);
+          fs.symlinkSync(external, target, 'dir');
+        }
+      );
+      const consumer = createRequestBroker({
+        runtimeRoot: fixture.runtimeRoot,
+        uid: UID,
+        fsOps: swapFs,
+        nowMonotonicMs: () => fixture.clock.monotonicMs,
+        nowWallMs: () => fixture.clock.wallMs,
+        randomBytes: deterministicRandom(36),
+        ttlMs: DEFAULT_TTL_MS,
+      });
+      let parsed = false;
+      const error = await assertRejected(
+        () => consumer.consume(identityOf(prepared), {
+          parseRawArguments() { parsed = true; },
+        }),
+        'INVALID_ENTRY_REQUEST'
+      );
+      assert.equal(swapped, true, `${level} did not change after the claim`);
+      assert.equal(parsed, false, `${level} post-claim escape reached the parser: ${error.stack}`);
+      assert.equal(fs.readFileSync(path.join(external, 'sentinel'), 'utf8'), 'outside bytes\n');
+    } finally {
+      fixture.cleanup();
+      fs.rmSync(external, { recursive: true, force: true });
+    }
+  });
+}
+
 test('lease and request opens use O_NOFOLLOW; request symlink is preserved and never parsed', async () => {
   const fixture = makeFixture();
   try {
@@ -524,7 +732,7 @@ test('lease and request opens use O_NOFOLLOW; request symlink is preserved and n
       runtimeRoot: fixture.runtimeRoot,
       uid: UID,
       fsOps: tracingFs((operation, args) => {
-        if (operation === 'openSync') opens.push(args);
+        if (operationIs(operation, 'open')) opens.push(args);
       }),
       nowMonotonicMs: () => fixture.clock.monotonicMs,
       nowWallMs: () => fixture.clock.wallMs,
@@ -573,6 +781,147 @@ test('exact 0600 file mode and current owner are required before identity can au
       assert.equal(parsed, false);
       assertNoClaim(prepared);
       assertTreeUnchanged(fixture.runtimeRoot, before, `${targetName} wrong mode mutated tree`);
+    } finally {
+      fixture.cleanup();
+    }
+  }
+});
+
+test('consume rejects wrong-owner lease/request regular files before claim', async () => {
+  for (const targetName of ['lease', 'request']) {
+    const fixture = makeFixture();
+    try {
+      const prepared = await fixture.broker.prepare({ sessionId: SESSION_A });
+      writeEnvelope(prepared);
+      const target = targetName === 'lease' ? leasePathOf(prepared) : prepared.requestPath;
+      const ownerFs = withLstatOverride(
+        fs,
+        target,
+        stat => spoofStat(stat, { uid: UID + 1 })
+      );
+      const consumer = createRequestBroker({
+        runtimeRoot: fixture.runtimeRoot,
+        uid: UID,
+        fsOps: ownerFs,
+        nowMonotonicMs: () => fixture.clock.monotonicMs,
+        nowWallMs: () => fixture.clock.wallMs,
+        randomBytes: deterministicRandom(42),
+        ttlMs: DEFAULT_TTL_MS,
+      });
+      const before = snapshotTree(slotDirOf(prepared));
+      let parsed = false;
+      await assertRejected(
+        () => consumer.consume(identityOf(prepared), {
+          parseRawArguments() { parsed = true; },
+        }),
+        /BROKER_CORRUPT|INVALID_ENTRY_REQUEST/
+      );
+      assert.equal(parsed, false, `${targetName} wrong owner reached parser`);
+      assertNoClaim(prepared);
+      assertTreeUnchanged(slotDirOf(prepared), before, `${targetName} wrong owner changed slot`);
+    } finally {
+      fixture.cleanup();
+    }
+  }
+});
+
+test('consume rejects non-regular lease/request nodes before claim', async () => {
+  for (const targetName of ['lease', 'request']) {
+    const fixture = makeFixture();
+    try {
+      const prepared = await fixture.broker.prepare({ sessionId: SESSION_A });
+      writeEnvelope(prepared);
+      const target = targetName === 'lease' ? leasePathOf(prepared) : prepared.requestPath;
+      fs.rmSync(target);
+      fs.mkdirSync(target, { mode: 0o700 });
+      const before = snapshotTree(slotDirOf(prepared));
+      let parsed = false;
+      await assertRejected(
+        () => fixture.broker.consume(identityOf(prepared), {
+          parseRawArguments() { parsed = true; },
+        }),
+        /BROKER_CORRUPT|INVALID_ENTRY_REQUEST/
+      );
+      assert.equal(parsed, false, `${targetName} directory reached parser`);
+      assertNoClaim(prepared);
+      assertTreeUnchanged(slotDirOf(prepared), before, `${targetName} non-regular node changed slot`);
+    } finally {
+      fixture.cleanup();
+    }
+  }
+});
+
+test('consume rejects altered lease identity, path, schema, fields, bytes, and size without mutation', async () => {
+  const cases = [
+    ['sessionId', lease => ({ ...lease, sessionId: SESSION_B })],
+    ['requestPath', lease => ({ ...lease, requestPath: `${lease.requestPath}.other` })],
+    ['$schema', lease => ({ ...lease, $schema: 'soma-entry-lease/v2' })],
+    ['surplus field', lease => ({ ...lease, contentSha256: 'a'.repeat(64) })],
+    ['malformed JSON', () => '{ malformed lease'],
+    ['oversize bytes', lease => `${' '.repeat(20 * 1024)}${JSON.stringify(lease)}`],
+  ];
+  for (const [label, mutate] of cases) {
+    const fixture = makeFixture();
+    try {
+      const prepared = await fixture.broker.prepare({ sessionId: SESSION_A });
+      writeEnvelope(prepared);
+      const original = readLease(prepared);
+      const changed = mutate(original);
+      if (typeof changed === 'string') {
+        fs.writeFileSync(leasePathOf(prepared), changed, { mode: 0o600 });
+        fs.chmodSync(leasePathOf(prepared), 0o600);
+      } else {
+        writeLease(prepared, changed);
+      }
+      const before = snapshotTree(slotDirOf(prepared));
+      let parsed = false;
+      await assertRejected(
+        () => fixture.broker.consume(identityOf(prepared), {
+          parseRawArguments() { parsed = true; },
+        }),
+        /ENTRY_IDENTITY_MISMATCH|INVALID_ENTRY_REQUEST/
+      );
+      assert.equal(parsed, false, `${label} lease reached parser`);
+      assertNoClaim(prepared);
+      assertTreeUnchanged(slotDirOf(prepared), before, `${label} lease changed during rejection`);
+    } finally {
+      fixture.cleanup();
+    }
+  }
+});
+
+test('consume rejects malformed, wrong-schema, surplus, and oversize envelopes before claim', async () => {
+  const cases = [
+    ['malformed JSON', () => '{ malformed envelope'],
+    ['wrong schema', prepared => JSON.stringify(envelopeFor(prepared, '--help', {
+      $schema: 'soma-entry-request/v2',
+    }))],
+    ['surplus field', prepared => JSON.stringify({
+      ...envelopeFor(prepared),
+      mode: 'help',
+    })],
+    ['oversize rawArguments', prepared => JSON.stringify(envelopeFor(
+      prepared,
+      'x'.repeat(MAX_RAW_ARGUMENT_BYTES + 1)
+    ))],
+  ];
+  for (const [label, makeBytes] of cases) {
+    const fixture = makeFixture();
+    try {
+      const prepared = await fixture.broker.prepare({ sessionId: SESSION_A });
+      fs.writeFileSync(prepared.requestPath, makeBytes(prepared), { mode: 0o600 });
+      fs.chmodSync(prepared.requestPath, 0o600);
+      const before = snapshotTree(slotDirOf(prepared));
+      let parsed = false;
+      await assertRejected(
+        () => fixture.broker.consume(identityOf(prepared), {
+          parseRawArguments() { parsed = true; },
+        }),
+        'INVALID_ENTRY_REQUEST'
+      );
+      assert.equal(parsed, false, `${label} envelope reached parser`);
+      assertNoClaim(prepared);
+      assertTreeUnchanged(slotDirOf(prepared), before, `${label} envelope changed during rejection`);
     } finally {
       fixture.cleanup();
     }
@@ -679,7 +1028,10 @@ test('exactly one same-session consumer wins the O_EXCL atomic claim', async () 
       'use strict';
       const { createRequestBroker } = require(process.argv[1]);
       const identity = JSON.parse(process.argv[3]);
-      const broker = createRequestBroker({ runtimeRoot: process.argv[2] });
+      const broker = createRequestBroker({
+        runtimeRoot: process.argv[2],
+        nowMonotonicMs: () => Number(process.argv[4]),
+      });
       (async () => {
         try {
           const value = await broker.consume(identity, {
@@ -694,7 +1046,12 @@ test('exactly one same-session consumer wins the O_EXCL atomic claim', async () 
         }
       })();
     `;
-    const args = [BROKER_MODULE, fixture.runtimeRoot, JSON.stringify(identityOf(prepared))];
+    const args = [
+      BROKER_MODULE,
+      fixture.runtimeRoot,
+      JSON.stringify(identityOf(prepared)),
+      String(fixture.clock.monotonicMs),
+    ];
     const workers = [spawnJsonChild(childSource, args), spawnJsonChild(childSource, args)];
     const results = await Promise.all(workers.map(worker => worker.result));
     assert.equal(results.filter(result => result.value.ok).length, 1, JSON.stringify(results));
@@ -739,7 +1096,7 @@ for (const drift of ['same-size-bytes', 'size', 'inode']) {
       const siblingBefore = snapshotTree(slotDirOf(sibling));
       let swapped = false;
       const swapFs = tracingFs((operation, args) => {
-        if (swapped || operation !== 'openSync' || path.basename(args[0]) !== 'claim') return;
+        if (swapped || !operationIs(operation, 'open') || path.basename(args[0]) !== 'claim') return;
         swapped = true;
         if (drift === 'same-size-bytes') {
           writeEnvelope(prepared, '--held');
@@ -800,13 +1157,41 @@ test('post-claim reopen compares device as well as bytes, inode, size, and hash'
           return descriptor => {
             const stat = fs.fstatSync(descriptor);
             if (!requestDescriptors.has(descriptor)) return stat;
-            return new Proxy(stat, {
-              get(statTarget, statProperty, statReceiver) {
-                if (statProperty === 'dev') return stat.dev + 1;
-                return Reflect.get(statTarget, statProperty, statReceiver);
-              },
-            });
+            return spoofStat(stat, { dev: stat.dev + 1 });
           };
+        }
+        if (property === 'closeSync') {
+          return descriptor => {
+            requestDescriptors.delete(descriptor);
+            return fs.closeSync(descriptor);
+          };
+        }
+        if (property === 'promises') {
+          return new Proxy(fs.promises, {
+            get(promisesTarget, promisesProperty, promisesReceiver) {
+              if (promisesProperty !== 'open') {
+                return Reflect.get(promisesTarget, promisesProperty, promisesReceiver);
+              }
+              return async (file, flags, mode) => {
+                const handle = await promisesTarget.open(file, flags, mode);
+                if (file !== prepared.requestPath) return handle;
+                requestOpenCount += 1;
+                if (requestOpenCount < 2) return handle;
+                return new Proxy(handle, {
+                  get(handleTarget, handleProperty, handleReceiver) {
+                    if (handleProperty !== 'stat') {
+                      const value = Reflect.get(handleTarget, handleProperty, handleReceiver);
+                      return typeof value === 'function' ? value.bind(handleTarget) : value;
+                    }
+                    return async (...args) => {
+                      const stat = await handleTarget.stat(...args);
+                      return spoofStat(stat, { dev: stat.dev + 1 });
+                    };
+                  },
+                });
+              };
+            },
+          });
         }
         return Reflect.get(target, property, receiver);
       },
@@ -851,7 +1236,7 @@ test('parser receives exact bytes from the new opening and hostile rawArguments 
       runtimeRoot: fixture.runtimeRoot,
       uid: UID,
       fsOps: tracingFs((operation, args) => {
-        if (operation === 'openSync' && args[0] === prepared.requestPath) requestOpens.push(args[1]);
+        if (isOpenOf(operation, args, prepared.requestPath)) requestOpens.push(args[1]);
       }),
       nowMonotonicMs: () => fixture.clock.monotonicMs,
       nowWallMs: () => fixture.clock.wallMs,
@@ -983,10 +1368,15 @@ test('host SIGKILL after prepare leaves one inert bounded slot and no project au
     `;
     const worker = spawnJsonChild(source, [BROKER_MODULE, runtimeRoot, SESSION_A]);
     let prepared;
+    let preparedStdout = '';
     worker.child.stdout.on('data', chunk => {
-      const line = String(chunk).trim().split('\n')[0];
-      if (line && !prepared) {
-        try { prepared = JSON.parse(line); } catch (_error) { /* wait for complete line */ }
+      preparedStdout += String(chunk);
+      while (!prepared && preparedStdout.includes('\n')) {
+        const newline = preparedStdout.indexOf('\n');
+        const line = preparedStdout.slice(0, newline);
+        preparedStdout = preparedStdout.slice(newline + 1);
+        if (!line) continue;
+        prepared = JSON.parse(line);
       }
     });
     const readyDeadline = Date.now() + 5_000;
@@ -1015,7 +1405,7 @@ test('next prepare atomically rename-claims and removes only a valid expired slo
   const fixture = makeFixture({
     clock,
     fsOps: tracingFs((operation, args) => {
-      if (operation === 'renameSync' || operation === 'rmSync' || operation === 'mkdirSync') {
+      if (['rename', 'rm', 'mkdir'].some(name => operationIs(operation, name))) {
         events.push([operation, ...args]);
       }
     }),
@@ -1030,12 +1420,12 @@ test('next prepare atomically rename-claims and removes only a valid expired slo
     assert.equal(fs.existsSync(slotDirOf(r1)), false);
     assert.equal(fs.existsSync(slotDirOf(r2)), true);
     const renameIndex = events.findIndex(([operation, from]) =>
-      operation === 'renameSync' && from === slotDirOf(r1)
+      operationIs(operation, 'rename') && from === slotDirOf(r1)
     );
     assert.ok(renameIndex >= 0, 'expired R1 was not atomically rename-claimed');
     const cleanupPath = events[renameIndex][2];
     const removeIndex = events.findIndex(([operation, target]) =>
-      operation === 'rmSync' && target === cleanupPath
+      operationIs(operation, 'rm') && target === cleanupPath
     );
     assert.ok(removeIndex > renameIndex, 'cleanup removal did not follow rename claim');
     assert.equal(fs.existsSync(cleanupPath), false);
@@ -1079,21 +1469,11 @@ test('expired wrong-owner residue is diagnostic evidence and is not scavenged', 
     writeEnvelope(r1, '--help');
     fixture.clock.monotonicMs = readLease(r1).expiresMonotonicMs + 1;
     const target = leasePathOf(r1);
-    const wrongOwnerFs = new Proxy(fs, {
-      get(fsTarget, property, receiver) {
-        if (property !== 'lstatSync') return Reflect.get(fsTarget, property, receiver);
-        return file => {
-          const stat = fs.lstatSync(file);
-          if (file !== target) return stat;
-          return new Proxy(stat, {
-            get(statTarget, statProperty, statReceiver) {
-              if (statProperty === 'uid') return UID + 1;
-              return Reflect.get(statTarget, statProperty, statReceiver);
-            },
-          });
-        };
-      },
-    });
+    const wrongOwnerFs = withLstatOverride(
+      fs,
+      target,
+      stat => spoofStat(stat, { uid: UID + 1 })
+    );
     const broker = createRequestBroker({
       runtimeRoot: fixture.runtimeRoot,
       uid: UID,
@@ -1150,7 +1530,10 @@ for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
         const fs = require('node:fs');
         const { createRequestBroker } = require(process.argv[1]);
         const identity = JSON.parse(process.argv[3]);
-        const broker = createRequestBroker({ runtimeRoot: process.argv[2] });
+        const broker = createRequestBroker({
+          runtimeRoot: process.argv[2],
+          nowMonotonicMs: () => Number(process.argv[5]),
+        });
         broker.consume(identity, {
           parseRawArguments: async raw => {
             fs.writeFileSync(process.argv[4], raw, { flag: 'wx' });
@@ -1167,6 +1550,7 @@ for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
         fixture.runtimeRoot,
         JSON.stringify(identityOf(prepared)),
         ready,
+        String(fixture.clock.monotonicMs),
       ], {
         stdio: ['ignore', 'pipe', 'pipe'],
       });
