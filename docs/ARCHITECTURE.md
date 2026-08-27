@@ -27,6 +27,16 @@ The **10-step protocol** (STSD) structures every feature:
 9. **INTEGRATE** — wire components and run integration/smoke checks
 10. **SONAR / FIX / COMMIT** — multi-territory audit, fix blocking findings, finalize with evidence
 
+## Universal Claude entry and continuity
+
+`/soma-run` is a thin adapter below 8,000 bytes. It sends the exact user argument as JSON data through a private local mailbox. No user value enters Bash. The internal entrypoint parses four forms: start, help, status and resume.
+
+Start resolves the project and adopts it when `.soma/` is absent. Adoption never runs project scripts. If a baseline is needed, the orchestration reference makes `T-BASELINE` the first executor dispatch; the coordinator does not execute project code.
+
+After every safe transition, the coordinator publishes an immutable checkpoint and handoff under the project `.soma/` directory. A new session calls `/soma-run --resume <runId>`. Resume validates the handoff pair, referenced checkpoint, closed dispatch records, proof hashes and current Git facts before it acquires the run lock. It returns `RESUME_READY` with the exact next unfinished task or `RESUME_DRIFT` with a durable diagnostic.
+
+Every planned spec and quality reviewer reads the same immutable candidate commit. The coordinator waits for all reviews, consolidates all findings and only then spends the single correction attempt. A residual blocker becomes `PAUSED_DIAGNOSTIC` with `blocker` and `nextDecision` in the checkpoint and handoff.
+
 SOMA dogfooded its own workflow during construction: Wave A and Wave B of v2.1 were executed via agent teams (`addBlockedBy` + parallel dispatches; then via `TeamCreate`, since removed — teammates are now named via `Agent name:`), producing 838 tests (836 pass, 0 fail, 2 skip) across 22+ Sonnet/Haiku dispatches without a single frozen-lib drift incident.
 
 ---
@@ -50,7 +60,7 @@ The Constitution is the normative reference read by every dispatched agent. It e
 | VII — Simplicity Gate | Max 3 new components per feature. No wrappers without written rationale. No speculative features. | SOFT — `/plan-sdd` Phase -1 checklist; SONAR audits abstraction ratio |
 | VIII — FAMILY_DOC Persistence | Every agent receives the project FAMILY_DOC. Team learnings merged to project doc after consolidation. | HARD for injection; SOFT for merge quality |
 | IX — Explicit Human Gates | Exactly 2 human gates: Gate 1 (spec approval) and Gate 2 (deploy approval). Nothing else is gated. | HARD — controller pauses at `AWAITING_SPEC_APPROVAL` and `AWAITING_DEPLOY_APPROVAL` |
-| X — Stop and Replan | 3 consecutive failures on same step → `PAUSED_DIAGNOSTIC`. No automatic retry beyond 2 attempts (1 retry + 1 Sonnet→Opus escalate). | HARD — controller transitions to diagnostic state; human decides continue/rollback/replan |
+| X — Stop and Replan | One initial attempt and one correction. A residual blocker becomes `PAUSED_DIAGNOSTIC`; there is no automatic escalation or third agent. | HARD — controller persists the blocker and next decision in checkpoint and handoff |
 
 **Amendment Protocol:** The Constitution is versioned (semver). Amendments require a human approval gate — the Constitution never changes itself. Runs are snapshot-locked to the version active at start time.
 

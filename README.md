@@ -14,6 +14,8 @@ At its core, SOMA installs a set of structural gates — hooks that run at key p
 
 Cross-session continuity is built in: snapshot-based rollback, handoff buckets, and a SOMA Voxel output-style theme ensure that agent state is preserved and legible across sessions, adapters, and LLMs.
 
+The primary Claude Code entrypoint is `/soma-run`. From any project directory, use `/soma-run "objective"` to start. It adopts projects that do not have `.soma/`, dispatches the baseline to an executor and starts the workflow. Use `/soma-run --status` for a read-only inspection and `/soma-run --resume <runId>` in a new session. Resume validates the immutable handoff, checkpoint, proofs and Git state before it returns the exact next task; passed tasks are not repeated.
+
 ---
 
 ## Key Features

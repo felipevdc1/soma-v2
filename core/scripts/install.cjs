@@ -56,10 +56,14 @@ const filesModule = require('./install/files.cjs');
  * Rationale: v2.2.0 introduces the project-bootloader block which embeds the version
  * string in <project>/CLAUDE.md at install time. A single hardcoded string would
  * diverge from package.json on future bumps. Reading dynamically prevents drift.
- * package.json lives at repo root (2 levels up from core/scripts/).
+ * A source checkout reads package.json. A global core copy has no package.json
+ * above it, so it reads the version from the copied core/manifest.json.
  */
-const _pkg = JSON.parse(fs.readFileSync(path.resolve(__dirname, '..', '..', 'package.json'), 'utf8'));
-const SOMA_INSTALLED_VERSION = _pkg.version;
+const _packagePath = path.resolve(__dirname, '..', '..', 'package.json');
+const _versionSource = fs.existsSync(_packagePath)
+  ? JSON.parse(fs.readFileSync(_packagePath, 'utf8'))
+  : JSON.parse(fs.readFileSync(path.resolve(__dirname, '..', 'manifest.json'), 'utf8'));
+const SOMA_INSTALLED_VERSION = _versionSource.version;
 
 /** Stale lock threshold: 60 minutes in milliseconds. */
 const STALE_LOCK_THRESHOLD_MS = 60 * 60 * 1000;
@@ -900,6 +904,7 @@ function orchestrate(projectPathAbs, flags) {
       `--tool=${tool}`,
       `--soma-home=${SOURCE_CORE}`,
     ];
+    if (flags.globalLedgerRoot) syncArgs.push(`--ledger-root=${flags.globalLedgerRoot}`);
     if (flags.allowLocalEdits) syncArgs.push('--allow-local-edits');
 
     const syncResult = runStep(`sync-${tool}`, syncArgs, { cwd: projectPathAbs });
@@ -1131,10 +1136,14 @@ function orchestrateWithLock(projectPathAbs, flags) {
  * Returns exit code (caller must call process.exit).
  *
  * @param {string[]} argv
+ * @param {object} [internal] non-CLI options used by the structured entry API
  * @returns {number} exit code
  */
-function main(argv) {
+function main(argv, internal = {}) {
   const { projectPath, flags, errors } = parseArgs(argv);
+  if (internal.globalLedgerRoot !== undefined) {
+    flags.globalLedgerRoot = internal.globalLedgerRoot;
+  }
 
   // Validation: missing project-path
   if (projectPath === null && errors.length === 0) {
@@ -1288,6 +1297,7 @@ function installProject(projectPathAbs, options = {}) {
     mergeClaudioMd: true,
     replaceClaudioMd: false,
     allowLocalEdits: false,
+    globalLedgerRoot: path.join(os.homedir(), '.soma-v2'),
     ...options,
   };
   assertInstallableDirectory(projectPathAbs);
@@ -1296,7 +1306,7 @@ function installProject(projectPathAbs, options = {}) {
   if (flags.mergeClaudioMd) argv.push('--merge-claude-md');
   if (flags.replaceClaudioMd) argv.push('--replace-claude-md');
   if (flags.allowLocalEdits) argv.push('--allow-local-edits');
-  if (!flags.silent) return main(argv);
+  if (!flags.silent) return main(argv, { globalLedgerRoot: flags.globalLedgerRoot });
 
   // The pipeline is synchronous. Entry uses this mode so its stdout remains
   // one JSON document; always restore both streams before returning or throwing.
@@ -1305,7 +1315,7 @@ function installProject(projectPathAbs, options = {}) {
   process.stdout.write = () => true;
   process.stderr.write = () => true;
   try {
-    return main(argv);
+    return main(argv, { globalLedgerRoot: flags.globalLedgerRoot });
   } finally {
     process.stdout.write = stdoutWrite;
     process.stderr.write = stderrWrite;

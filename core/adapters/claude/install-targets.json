@@ -179,6 +179,11 @@
       "kind": "file",
       "source_path": "adapters/claude/commands/specify.md",
       "target_path": "~/.claude/commands/specify.md"
+    },
+    {
+      "kind": "file",
+      "source_path": "adapters/claude/references/soma-run-orchestration.md",
+      "target_path": "~/.claude/references/soma-run-orchestration.md"
     }
   ]
 }

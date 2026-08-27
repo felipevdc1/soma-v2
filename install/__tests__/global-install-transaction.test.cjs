@@ -139,6 +139,22 @@ test('026 AC-06/07/11: install.sh declares one transactional writer and a read-o
   assert.doesNotMatch(source, /\$\{PWD\}\/\.soma\/install-state\.json/);
 });
 
+test('lean universal entry: transaction watches the core tree and installed adapter reference', (t) => {
+  const sandbox = tmp('soma-global-lean-watch-');
+  t.after(() => fs.rmSync(sandbox, { recursive: true, force: true }));
+  const home = path.join(sandbox, 'home');
+  const project = path.join(sandbox, 'project');
+  fs.mkdirSync(home);
+  fs.mkdirSync(project);
+  const result = runInstall(home, project, [], { SOMA_INSTALL_FAULT_AFTER: 'FILES_SYNCED' });
+  assert.notEqual(result.status, 0);
+  const journal = journals(home).map(readJson).at(-1);
+  assert.equal(journal.state, 'ROLLED_BACK');
+  assert.ok(journal.snapshots.some(entry => entry.target_path === path.join(home, '.soma-v2') && entry.kind === 'directory'));
+  assert.ok(journal.snapshots.some(entry => entry.target_path === path.join(home, '.claude', 'commands', 'soma-run.md')));
+  assert.ok(journal.snapshots.some(entry => entry.target_path === path.join(home, '.claude', 'references', 'soma-run-orchestration.md')));
+});
+
 test('026 AC-11: dry-run is byte-identical and reports a pending transaction without recovering it', (t) => {
   const sandbox = tmp('soma-global-dry-');
   t.after(() => fs.rmSync(sandbox, { recursive: true, force: true }));

@@ -26,6 +26,25 @@ Restart Claude Code (close and reopen) if you haven't already.
 
 SOMA is a Spec + Test + Steps Driven (STSD) protocol. You specify what you want, approve the plan, and let the state machine handle the rest. There are exactly **2 places you need to intervene** — everything else is autonomous.
 
+The normal entrypoint is one command in the project directory:
+
+```
+/soma-run "add a JSON output mode to my CLI"
+```
+
+This works when the project has no `.soma/`: SOMA resolves the Git project, installs the project bootloader without running project scripts, and returns `READY`. The first test run is `T-BASELINE`, executed by an agent rather than the coordinator.
+
+Useful forms:
+
+```
+/soma-run --help
+/soma-run --status
+/soma-run --status --project /absolute/project/path
+/soma-run --resume run-YYMMDD-HHmm-xxxxxx
+```
+
+To continue after closing Claude Code, open a new session in the same project and run the recorded resume command. `RESUME_READY` is returned only when the latest handoff, checkpoint, dispatch proofs and Git facts still match. It names the exact unfinished task and never replays a task recorded as `passed`. The steps below show the lower-level workflow that `/soma-run` orchestrates.
+
 ### Step 1 — Specify the feature
 
 In Claude Code, type:
@@ -103,7 +122,9 @@ After a SOMA run, here is what exists on disk:
 | `specs/{NNN}-{slug}/spec.md` | The approved spec — source of truth for the feature |
 | `specs/{NNN}-{slug}/plan.md` | Technical plan, contracts, task breakdown |
 | `~/.soma-v2/.snapshots/{ISO-timestamp}/` | Rollback artifacts — byte-identical restore available via `rollback.cjs` |
-| `~/.claude/plans/handoff-{project-slug}.md` | Cross-session handoff: what was done, open buckets, resume prompts |
+| `.soma/checkpoints/{runId}/{sequence}.json` | Immutable transition evidence, task statuses and exact next task |
+| `.soma/handoffs/{runId}/{generation}/handoff.json` | Authoritative cross-session handoff used by `/soma-run --resume` |
+| `.soma/handoffs/{runId}/{generation}/handoff.md` | Human-readable view derived from the authoritative JSON |
 | `~/.claude/projects/.../memory/` | Project memory: decisions, feedback, patterns accumulated over sessions |
 
 ---

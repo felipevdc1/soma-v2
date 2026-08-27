@@ -39,6 +39,8 @@ The `--force-overwrite` flag is also available as an environment variable: `FORC
 
 After install completes, **restart Claude Code** (close and reopen the app) before using any `/soma:*` commands.
 
+Start from the target project directory with `/soma-run "objective"`. No project-local setup command is required first. Use `/soma-run --status` to inspect without writing and `/soma-run --resume <runId>` after opening a new Claude session.
+
 ---
 
 ## What gets installed
@@ -47,7 +49,9 @@ After install completes, **restart Claude Code** (close and reopen the app) befo
 
 - **`~/.soma-v2/`** — the SOMA framework home: scripts, docs, templates, adapters, benchmarks, specs
 - **`~/.claude/hooks/`** — 17 SOMA-CORE hooks registered in `settings.json` (16 event-registered + 1 utility callable; merged safely with any existing hooks you have)
-- **`~/.claude/commands/soma/`** — 11 slash commands:
+- **`~/.claude/commands/`** — SOMA slash commands, including the primary `/soma-run` entrypoint
+- **`~/.claude/references/soma-run-orchestration.md`** — long orchestration contract, loaded only after `READY` or `RESUME_READY`
+- The existing lower-level commands remain available:
   - `/soma:run` — autonomous 10-step state machine
   - `/soma:specify` — generate `spec.md` from intent
   - `/soma:plan-sdd` — derive plan, contracts, and tasks from approved spec

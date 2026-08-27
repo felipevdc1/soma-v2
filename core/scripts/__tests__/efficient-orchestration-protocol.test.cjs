@@ -7,7 +7,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 
 const ROOT = path.resolve(__dirname, '..', '..');
-const CLAUDE_RUN = path.join(ROOT, 'adapters', 'claude', 'commands', 'soma-run.md');
+const CLAUDE_RUN = path.join(ROOT, 'adapters', 'claude', 'references', 'soma-run-orchestration.md');
 const STSD = path.join(ROOT, 'docs', 'soma-stsd.md');
 const CODEX = path.join(ROOT, 'adapters', 'codex', 'AGENTS.md');
 const CONSTITUTION = path.join(ROOT, 'docs', 'constitution.md');

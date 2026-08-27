@@ -40,6 +40,7 @@ const ADAPTER_DIR = path.join(CORE_DIR, 'adapters', 'claude');
 const TARGETS_PATH = path.join(ADAPTER_DIR, 'install-targets.json');
 const HOOKS_DIR = path.join(CORE_DIR, 'hooks');
 const COMMANDS_DIR = path.join(ADAPTER_DIR, 'commands');
+const REFERENCES_DIR = path.join(ADAPTER_DIR, 'references');
 
 function loadTargetsRaw() {
   // Deliberately the SAME comment-stripping the three real readers use
@@ -64,7 +65,7 @@ function realCommandNames() {
   return fs.readdirSync(COMMANDS_DIR).filter((n) => n.endsWith('.md')).sort();
 }
 
-test('conjunto real: 19 hooks + 13 comandos = 32 entries kind:"file"', () => {
+test('conjunto real: hooks, comandos e references possuem entries kind:"file"', () => {
   const hooks = realHookNames();
   const commandsAll = realCommandNames();
 
@@ -74,6 +75,8 @@ test('conjunto real: 19 hooks + 13 comandos = 32 entries kind:"file"', () => {
   assert.equal(hooks.length, 19, `esperava 19 hooks reais em core/hooks/, achou ${hooks.length}: ${hooks.join(', ')}`);
   assert.equal(commandsAll.length, 13, `esperava 13 comandos reais, achou ${commandsAll.length}: ${commandsAll.join(', ')}`);
   assert.ok(commandsAll.includes('soma-run.md'), 'fixture assumption: soma-run.md deveria existir no repo');
+  const referencesAll = fs.readdirSync(REFERENCES_DIR).filter((n) => n.endsWith('.md')).sort();
+  assert.ok(referencesAll.includes('soma-run-orchestration.md'));
 
   const data = loadTargetsRaw();
   const fileEntries = data.entries.filter(isFileEntry);
@@ -82,8 +85,8 @@ test('conjunto real: 19 hooks + 13 comandos = 32 entries kind:"file"', () => {
   assert.equal(blockEntries.length, 3, 'as 3 entries de bloco existentes não podem mudar de quantidade (AC-02)');
   assert.equal(
     fileEntries.length,
-    hooks.length + commandsAll.length,
-    `esperava ${hooks.length + commandsAll.length} entries kind:"file" (${hooks.length} hooks + ${commandsAll.length} comandos), achou ${fileEntries.length}`
+    hooks.length + commandsAll.length + referencesAll.length,
+    `esperava hooks + comandos + references no manifest, achou ${fileEntries.length}`
   );
 
   const hookSourcePaths = new Set(
@@ -92,6 +95,9 @@ test('conjunto real: 19 hooks + 13 comandos = 32 entries kind:"file"', () => {
   const cmdSourcePaths = new Set(
     fileEntries.map((e) => e.source_path).filter((p) => typeof p === 'string' && p.startsWith('adapters/claude/commands/'))
   );
+  const referenceSourcePaths = new Set(
+    fileEntries.map((e) => e.source_path).filter((p) => typeof p === 'string' && p.startsWith('adapters/claude/references/'))
+  );
 
   for (const h of hooks) {
     assert.ok(hookSourcePaths.has(`hooks/${h}`), `faltou entry kind:"file" para hooks/${h}`);
@@ -99,11 +105,14 @@ test('conjunto real: 19 hooks + 13 comandos = 32 entries kind:"file"', () => {
   for (const c of commandsAll) {
     assert.ok(cmdSourcePaths.has(`adapters/claude/commands/${c}`), `faltou entry kind:"file" para adapters/claude/commands/${c}`);
   }
+  for (const reference of referencesAll) {
+    assert.ok(referenceSourcePaths.has(`adapters/claude/references/${reference}`));
+  }
 
   // Every file entry is accounted for by exactly one of the two buckets —
   // nothing outside the declared inventory (no stray/duplicate entries).
   assert.equal(
-    hookSourcePaths.size + cmdSourcePaths.size,
+    hookSourcePaths.size + cmdSourcePaths.size + referenceSourcePaths.size,
     fileEntries.length,
     'toda entry kind:"file" tem que ser hook OU comando — nada fora do inventário dos dois diretórios'
   );
@@ -116,6 +125,10 @@ test('conjunto real: 19 hooks + 13 comandos = 32 entries kind:"file"', () => {
   for (const e of fileEntries.filter((e) => e.source_path.startsWith('adapters/claude/commands/'))) {
     const name = e.source_path.slice('adapters/claude/commands/'.length);
     assert.equal(e.target_path, `~/.claude/commands/${name}`, `target_path errado para ${e.source_path}`);
+  }
+  for (const e of fileEntries.filter((e) => e.source_path.startsWith('adapters/claude/references/'))) {
+    const name = e.source_path.slice('adapters/claude/references/'.length);
+    assert.equal(e.target_path, `~/.claude/references/${name}`, `target_path errado para ${e.source_path}`);
   }
 });
 

@@ -26,7 +26,7 @@ const PERSIST_CONTRACT = path.join(
   'contracts',
   'persist-run-state.md'
 );
-const SOMA_RUN_DOC = path.join(REPO_ROOT, 'core', 'adapters', 'claude', 'commands', 'soma-run.md');
+const SOMA_RUN_DOC = path.join(REPO_ROOT, 'core', 'adapters', 'claude', 'references', 'soma-run-orchestration.md');
 const INSTALL_TARGETS = path.join(REPO_ROOT, 'core', 'adapters', 'claude', 'install-targets.json');
 const NFC = 'run-\u00e9';
 const NFD = 'run-e\u0301';
