@@ -7,7 +7,7 @@ const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 
-const { createMailbox } = require('../entry/mailbox.cjs');
+const { createMailbox, defaultMailboxRoot } = require('../entry/mailbox.cjs');
 const { validateRequestEnvelope } = require('../entry/request-schema.cjs');
 
 const SESSION = 'codex.session:1';
@@ -61,6 +61,19 @@ test('mailbox rejects invalid session identifiers before touching its root', asy
   const mailbox = createMailbox({ root });
   await assert.rejects(mailbox.prepare({ sessionId: '../escape' }), { code: 'INVALID_SESSION_ID' });
   await assert.rejects(fs.stat(root), { code: 'ENOENT' });
+});
+
+test('default mailbox root is user-scoped SOMA state while explicit roots remain unchanged', async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), 'soma-entry-home-'));
+  const explicit = path.join(home, 'explicit');
+  try {
+    assert.equal(defaultMailboxRoot(home), path.join(home, '.soma-v2', 'state', 'entry-mailbox-v1'));
+    const mailbox = createMailbox({ root: explicit });
+    const prepared = await mailbox.prepare({ sessionId: SESSION });
+    assert.ok(prepared.requestPath.startsWith(`${explicit}${path.sep}`));
+  } finally {
+    await fs.rm(home, { recursive: true, force: true });
+  }
 });
 
 test('mailbox creates private contained paths and enforces one live request per session', async () => {

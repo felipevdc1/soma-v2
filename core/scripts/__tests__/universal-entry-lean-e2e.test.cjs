@@ -42,6 +42,7 @@ function expectOk(result) {
 function mailboxRequest(soma, project, env, sessionId, rawArguments, ownerPid) {
   const prepared = expectOk(runNode(soma, ['entry', 'prepare', '--session', sessionId], project, env));
   const slot = JSON.parse(prepared.stdout);
+  assert.ok(slot.requestPath.startsWith(path.join(env.HOME, '.soma-v2', 'state', 'entry-mailbox-v1')));
   fs.writeFileSync(slot.requestPath, JSON.stringify({
     $schema: 'soma-entry-request/v1', sessionId, requestId: slot.requestId, rawArguments,
   }));

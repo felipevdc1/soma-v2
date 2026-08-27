@@ -106,8 +106,12 @@ function assertRequest(requestId) {
   if (!isRequestId(requestId)) throw mailboxError('INVALID_REQUEST_ID', 'Invalid request identifier');
 }
 
+function defaultMailboxRoot(home = os.homedir()) {
+  return path.join(home, '.soma-v2', 'state', 'entry-mailbox-v1');
+}
+
 function createMailbox(options = {}) {
-  const root = path.resolve(options.root || path.join(os.tmpdir(), 'soma-entry-v1'));
+  const root = path.resolve(options.root || defaultMailboxRoot());
 
   async function prepare({ sessionId }) {
     assertSession(sessionId);
@@ -209,4 +213,4 @@ function createMailbox(options = {}) {
   return { prepare, consume, abort, selectNative, consumeNative, abortNative };
 }
 
-module.exports = { TTL_MS, createMailbox };
+module.exports = { TTL_MS, defaultMailboxRoot, createMailbox };

@@ -5,8 +5,8 @@ allowed-tools:
   - Bash(exec node ~/.soma-v2/scripts/soma.cjs entry native prepare)
   - Bash(exec node ~/.soma-v2/scripts/soma.cjs entry native consume)
   - Bash(exec node ~/.soma-v2/scripts/soma.cjs entry native abort)
-  - Write
-  - Read
+  - Edit(~/.soma-v2/state/entry-mailbox-v1/**)
+  - Read(~/.claude/references/soma-run-orchestration.md)
 ---
 
 You are the thin `/soma-run` adapter. Transport the request, route the structured result and do nothing else here.

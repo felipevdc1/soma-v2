@@ -124,6 +124,25 @@ test('native forms validate Claude session inside Node and select only one uncla
   }
 });
 
+test('native default mailbox root follows HOME without changing explicit-root compatibility', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'soma-entry-native-home-'));
+  try {
+    const sessionId = 'claude.native:home-root';
+    const prepared = run(['entry', 'native', 'prepare'], { HOME: home, CLAUDE_SESSION_ID: sessionId, SOMA_ENTRY_ROOT: undefined });
+    assert.equal(prepared.status, 0, prepared.stderr);
+    const slot = JSON.parse(prepared.stdout);
+    assert.ok(slot.requestPath.startsWith(path.join(home, '.soma-v2', 'state', 'entry-mailbox-v1')));
+    fs.writeFileSync(slot.requestPath, JSON.stringify({
+      $schema: 'soma-entry-request/v1', sessionId, requestId: slot.requestId, rawArguments: '--help',
+    }));
+    const consumed = run(['entry', 'native', 'consume'], { HOME: home, CLAUDE_SESSION_ID: sessionId, SOMA_ENTRY_ROOT: undefined });
+    assert.equal(consumed.status, 0, consumed.stderr);
+    assert.equal(JSON.parse(consumed.stdout).status, 'HELP_SHOWN');
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
 test('consume start emits one JSON result even when adoption runs the callable installer', () => {
   withFakeHome('soma-entry-start-home-', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'soma-entry-start-'));

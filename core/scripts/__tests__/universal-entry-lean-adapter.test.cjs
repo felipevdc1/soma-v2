@@ -34,8 +34,8 @@ test('adapter has an exact permission-safe allowlist and fixed native Bash shape
     'Bash(exec node ~/.soma-v2/scripts/soma.cjs entry native prepare)',
     'Bash(exec node ~/.soma-v2/scripts/soma.cjs entry native consume)',
     'Bash(exec node ~/.soma-v2/scripts/soma.cjs entry native abort)',
-    'Write',
-    'Read',
+    'Edit(~/.soma-v2/state/entry-mailbox-v1/**)',
+    'Read(~/.claude/references/soma-run-orchestration.md)',
   ]);
   const bashLines = [...source.matchAll(/```bash\n([^\n]+)\n```/g)].map(match => match[1]);
   assert.deepEqual(bashLines, [
@@ -45,10 +45,21 @@ test('adapter has an exact permission-safe allowlist and fixed native Bash shape
   ]);
   assert.doesNotMatch(source, /\$\{(?:HOME|CLAUDE_SESSION_ID)\}|\$HOME|\$PPID|\$\(/);
   assert.doesNotMatch(source, /\bBash\b(?!\()/);
+  assert.doesNotMatch(source, /^\s*- (?:Read|Write|Edit)\s*$/m);
+  assert.doesNotMatch(source, /Write\(/);
   assert.match(source, /CLAUDE_SESSION_ID[^\n]*inside Node/i);
   assert.match(source, /request identity[^\n]*inside Node/i);
   assert.match(source, /finally/i);
   assert.match(source, /Write tool/);
+});
+
+test('adapter scoped file rules agree with the portable native mailbox root', () => {
+  const source = read(ADAPTER);
+  const { defaultMailboxRoot } = require('../entry/mailbox.cjs');
+  const home = path.join(os.tmpdir(), 'soma-adapter-scoped-home');
+  assert.equal(defaultMailboxRoot(home), path.join(home, '.soma-v2', 'state', 'entry-mailbox-v1'));
+  assert.match(source, /Edit\(~\/\.soma-v2\/state\/entry-mailbox-v1\/\*\*\)/);
+  assert.match(source, /Read\(~\/\.claude\/references\/soma-run-orchestration\.md\)/);
 });
 
 test('documented native adapter commands work across separate Bash calls', (t) => {
@@ -74,8 +85,7 @@ test('documented native adapter commands work across separate Bash calls', (t) =
 
 test('adapter stops terminal results and lazy-loads orchestration exactly once for READY states', () => {
   const source = read(ADAPTER);
-  const referenceName = 'references/soma-run-orchestration.md';
-  assert.equal((source.match(new RegExp(referenceName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g')) || []).length, 1);
+  assert.equal((source.match(/Read tool exactly once on/g) || []).length, 1);
   assert.match(source, /HELP_SHOWN/);
   assert.match(source, /STATUS_SHOWN/);
   assert.match(source, /RESUME_DRIFT/);
