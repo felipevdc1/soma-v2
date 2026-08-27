@@ -45,6 +45,12 @@ Date: 2026-08-27
 - Strict detached comparison at correction code SHA `d861a1ed4d568c8990dbe12c5bede7893a598c66`: base 57 failures, final 57 failures, 0 unexpected and 0 removed. The unchanged base JUnit and final detached JUnit were parsed by the helper at the correction code.
 - Evidence: `.soma/baselines/universal-entry-lean-correction-{base,final}.json`, unchanged `.soma/baselines/universal-entry-lean-strict-base.junit.xml` and `.soma/baselines/universal-entry-lean-correction-final.junit.xml`. JUnit SHA-256: base `796edf6f8b24cd818acd81f3df79c93188d661029930476f8330434007b12edd`; final `7b2567f0325c8f90c79b780c8782e2b41f4e294ec08719a7f911385f545bec64`.
 
-## Activation status
+## Review result and activation status
 
-Task 4 does not modify the live user installation. Global transactional activation, installed-file hash comparison and live Claude smoke run only after code review.
+The correction passed the specification review but the independent quality re-review rejected candidate `4de16a383e1cfecf4f44be60181bbc04514d7886` with three residual findings:
+
+1. `--status` accepts a state without its durable run-identity when no handoff exists, while resume rejects the same run.
+2. The recovery-marker branch still maps directly to `git reset --hard` instead of an explicit agent contract and dispatch record.
+3. `docs/TROUBLESHOOTING.md` still states the obsolete three-failure threshold.
+
+The run is therefore `PAUSED_DIAGNOSTIC`. The live user installation was not modified. Global activation remains prohibited until a newly authorized correction closes all three findings and both review axes approve the same immutable candidate.
