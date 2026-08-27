@@ -49,4 +49,35 @@ They do not affect the fail-closed durable-identity behavior, immutable source p
 
 ## Activation and transaction status
 
-No live installation or global activation was performed. The global-install transaction remains **pending / not activated**. A Claude Code CLI process is active (`PID 73614`), so live installation remains pending.
+Live activation ran once on 2026-08-27 after fresh preflight. `bash -n install.sh` and `bash install.sh --dry-run --force-overwrite` passed; recovery returned `{"status":"NONE"}`. The only matching processes were the documented Claude.app Chrome native hosts (PIDs 91991/91992), not Claude Code CLI processes.
+
+- Install command: `bash install.sh --force-overwrite` (one invocation only).
+- Transaction: `1787857958957-1294-7d4c23bf6023cada`; journal `/Users/felipevdc1/.soma-v2-backups/1787857958957-1294-7d4c23bf6023cada/transaction.json`; journal state `COMMITTED`.
+- Post-commit recovery returned `{"status":"NONE"}`. No active transaction pointer or lock was found.
+- Installation wrote five Claude file targets: `spec-completeness-gate.cjs`, `subagent-init.cjs`, `sonar-audit.md`, `soma-run.md`, and `soma-run-orchestration.md`. The installed core tree has 615 source files and 0 SHA-256 mismatches against the candidate.
+
+| Installed target | SHA-256 | Candidate comparison |
+| --- | --- | --- |
+| `~/.claude/hooks/spec-completeness-gate.cjs` | `e4d633f6cdc6770f840b8b8a546a44b903d8688bbdb86ce8a4a24c040cdeeb8f` | match |
+| `~/.claude/hooks/subagent-init.cjs` | `0fbb19f23a26f6acfd77309ac98636e3c2ca1f393222f22ef2d2a2f2a54fd311` | match |
+| `~/.claude/commands/sonar-audit.md` | `1e2364410b537bb778ef25b6f42f21bc1ea05fb14b7d23a28e8d9c3a717f4857` | match |
+| `~/.claude/commands/soma-run.md` | `a9daeef222fe422f66b487f9f98e08767b56bf64519c54f894167bce409464cf` | match |
+| `~/.claude/references/soma-run-orchestration.md` | `e9b268027a75b54ac1a472755b3e8de22eb9b1ca621243e07a0f47b7c834f07c` | match |
+| `~/.soma-v2/scripts/entry.cjs` | `4aea9429338e8ae5a93968f8b7b8070531c0d12a4006e4bd78e46df4d6651576` | match |
+| `~/.soma-v2/scripts/entry/status.cjs` | `4e98ccfc9705e19f317aa33acec969ebfd4d5e3a89fa7b0609450fcb11fcca21` | match |
+| `~/.soma-v2/scripts/soma.cjs` | `03811305235165caf3e1549bd5eb9574c7cb7abd9f8afe9df220723c8e17c80b` | match |
+| `~/.soma-v2/docs/constitution.md` | `234d56532ff8897d5a0bf5e42aec6a2cc413a0ce074a08ac91fd37d4dbd6e5da` | match |
+| `~/.soma-v2/docs/10-step-protocol.md` | `61f566e2b1e153ae5079102d3f7fa7973c0e6334942cea496811f02d64a7e5a3` | match |
+| `~/.soma-v2/docs/00-overview.md` | `e5a24f68a6e7a26fb32ccfb5840c5e3b44c550b97f51222eece00b78a66be594` | match |
+| `~/.soma-v2/manifest.json` | `9c286db3ecdd7af34e395bac7a2d4ea06ab752e485a5d24572a0427253906094` | match |
+| `~/.soma-v2/adapters/claude/install-targets.json` | `90e919611d40d2e1e09956e24b049349a6d8fddef725a27f9047119ca17ddf43` | match |
+
+Installed `sync --dry-run` passed for both Claude and Codex with `All entries in sync. No actions needed.` Installed `doctor --json` exited 0 with no errors or warnings; its sole finding is the expected worktree-local `file_never_installed` notice because this activation preserves the repository `.soma/` directory.
+
+The direct installed entry command was exercised read-only. The initial `entry.cjs --help` and `status` invocation used an invalid direct CLI shape and returned `INVALID_ARGUMENTS`; no project changed. The adapter's mailbox route is the supported surface.
+
+Claude Code smoke used exactly one bounded `claude -p '/soma-run --help'` call in a fresh temporary Git repository. The child ended cleanly and no Claude process remained, but it returned no captured stdout. Therefore discovery of the expected help text is **not evidenced** and no second model call was made.
+
+The deterministic installed-runtime adoption smoke used no model call in `/tmp/soma-adoption-live-Qi9AbK`, which began as a Git project without `.soma`. The entry route returned `READY` (`adopted: true`, `baselineRequired: true`), created `soma-adoption/v1` plus `install-state.json`, and the installed status route returned `STATUS_SHOWN`, `adoption: installed`, and `NO_DURABLE_RUN`.
+
+No rollback occurred. Activation is committed, but the overall live-smoke proof remains blocked solely by the CLI's empty captured response.
