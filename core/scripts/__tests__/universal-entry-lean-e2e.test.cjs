@@ -50,6 +50,20 @@ function mailboxRequest(soma, project, env, sessionId, rawArguments, ownerPid) {
   return { slot, result: runNode(soma, args, project, env) };
 }
 
+function installedAdapterRequest(soma, adapter, project, env, sessionId, rawArguments, ownerPid) {
+  const prepared = expectOk(runNode(soma, ['entry', 'prepare', '--session', sessionId], project, env));
+  const slot = JSON.parse(prepared.stdout);
+  fs.writeFileSync(slot.requestPath, JSON.stringify({
+    $schema: 'soma-entry-request/v1', sessionId, requestId: slot.requestId, rawArguments,
+  }));
+  let commandShape = fs.readFileSync(adapter, 'utf8').match(/```bash\n([^\n]*entry consume[^\n]*)\n```/)[1]
+    .replace('"${HOME}/.soma-v2/scripts/soma.cjs"', `'${soma}'`)
+    .replace("'<validated-session-id>'", `'${sessionId}'`)
+    .replace("'<validated-request-id>'", `'${slot.requestId}'`);
+  if (ownerPid !== undefined) commandShape = commandShape.replace('"$PPID"', String(ownerPid));
+  return { slot, result: command('bash', ['-c', commandShape], { cwd: project, env }) };
+}
+
 test('fake-home install adopts, checkpoints, hands off and resumes the exact next task', (t) => {
   const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), 'soma-lean-vertical-'));
   t.after(() => fs.rmSync(sandbox, { recursive: true, force: true }));
@@ -68,7 +82,7 @@ test('fake-home install adopts, checkpoints, hands off and resumes the exact nex
 
   const sentinel = path.join(project, 'sentinel');
   const hostile = `"objective with $(touch ${sentinel})"`;
-  const started = mailboxRequest(soma, project, { ...env, SOMA_PROJECT_CWD: project }, 'session-start', hostile);
+  const started = installedAdapterRequest(soma, adapter, project, { ...env, SOMA_PROJECT_CWD: project }, 'session-start', hostile);
   expectOk(started.result);
   const ready = JSON.parse(started.result.stdout);
   assert.equal(ready.status, 'READY', JSON.stringify(ready));
@@ -78,6 +92,15 @@ test('fake-home install adopts, checkpoints, hands off and resumes the exact nex
 
   const runId = 'run-lean-vertical';
   expectOk(runNode(soma, ['run', 'state', '--init', '--run', runId], project, env));
+  assert.equal(fs.existsSync(path.join(project, '.soma.lock')), false);
+  expectOk(runNode(soma, ['run', 'gate', '--run', runId, '--step', 'STEP_1A_SPECIFY'], project, env));
+  assert.equal(fs.existsSync(path.join(project, '.soma.lock')), false);
+  const statusBefore = mailboxRequest(soma, project, { ...env, SOMA_PROJECT_CWD: project }, 'session-status-before', '--status');
+  expectOk(statusBefore.result);
+  assert.deepEqual(JSON.parse(statusBefore.result.stdout).run, {
+    runId, currentState: 'IDLE', checkpointSequence: null, handoffGeneration: null,
+    blocker: null, nextDecision: null, nextTask: null,
+  });
   const prompt = path.join(sandbox, 'prompt.md');
   const output = path.join(sandbox, 'output.md');
   const metadata = path.join(sandbox, 'metadata.json');
@@ -104,6 +127,13 @@ test('fake-home install adopts, checkpoints, hands off and resumes the exact nex
   expectOk(runNode(soma, ['run', 'checkpoint', '--run', runId, '--input-file', input], project, env));
   expectOk(runNode(soma, ['run', 'handoff', '--run', runId], project, env));
 
+  const statusAfter = mailboxRequest(soma, project, { ...env, SOMA_PROJECT_CWD: project }, 'session-status-after', '--status');
+  expectOk(statusAfter.result);
+  assert.deepEqual(JSON.parse(statusAfter.result.stdout).run, {
+    runId, currentState: 'IDLE', checkpointSequence: 1, handoffGeneration: 1,
+    blocker: null, nextDecision: null, nextTask: 'T-NEXT',
+  });
+
   const resumed = mailboxRequest(
     soma, project, { ...env, SOMA_PROJECT_CWD: project }, 'session-resume', `--resume ${runId}`, process.pid
   );
@@ -114,6 +144,15 @@ test('fake-home install adopts, checkpoints, hands off and resumes the exact nex
   assert.notEqual(result.nextTask, 'T-BASELINE');
   const handoff = JSON.parse(fs.readFileSync(path.join(project, '.soma', 'handoffs', runId, '1', 'handoff.json')));
   assert.equal(handoff.tasks.find(task => task.id === 'T-BASELINE').status, 'passed');
+
+  fs.writeFileSync(path.join(project, 'README.md'), 'durable git drift\n');
+  const drifted = mailboxRequest(
+    soma, project, { ...env, SOMA_PROJECT_CWD: project }, 'session-drift', `--resume ${runId}`, process.pid
+  );
+  expectOk(drifted.result);
+  const drift = JSON.parse(drifted.result.stdout);
+  assert.equal(drift.status, 'RESUME_DRIFT');
+  assert.equal(fs.existsSync(path.join(project, '.soma', 'diagnostics', `${runId}-resume-drift.json`)), true);
 });
 
 test('negative entry paths preserve durable diagnostics and refuse mutation', (t) => {
@@ -138,4 +177,21 @@ test('negative entry paths preserve durable diagnostics and refuse mutation', (t
   const consumed = runNode(soma, ['entry', 'consume', '--session', 'corrupt-session', '--request-id', prepared.requestId], project, env);
   assert.notEqual(consumed.status, 0);
   assert.match(consumed.stderr, /INVALID_REQUEST_ENVELOPE/);
+});
+
+test('fake-home injected global transaction failure rolls installed targets back', (t) => {
+  const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), 'soma-lean-rollback-'));
+  t.after(() => fs.rmSync(sandbox, { recursive: true, force: true }));
+  const home = path.join(sandbox, 'home');
+  fs.mkdirSync(path.join(home, '.claude', 'commands'), { recursive: true });
+  const target = path.join(home, '.claude', 'commands', 'soma-run.md');
+  fs.writeFileSync(target, 'preexisting adapter\n');
+  const env = {
+    ...process.env, HOME: home, NO_CODEX: '1', SOMA_INSTALL_TESTING: '1',
+    SOMA_INSTALL_FAULT_AFTER: 'CORE_COPIED',
+  };
+  const result = command('bash', [INSTALL, '--force-overwrite'], { env, timeout: 300000 });
+  assert.equal(result.status, 97, `${result.stdout}\n${result.stderr}`);
+  assert.equal(fs.readFileSync(target, 'utf8'), 'preexisting adapter\n');
+  assert.match(result.stderr, /Rolling back transaction/);
 });

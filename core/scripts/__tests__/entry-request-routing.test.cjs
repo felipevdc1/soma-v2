@@ -61,11 +61,102 @@ test('status is read-only across project bytes, mtimes, and Git index mtime', ()
     const result = routeEntryRequest({ mode: 'status', project }, { cwd: os.tmpdir(), home: os.homedir() });
     assert.equal(result.status, 'STATUS_SHOWN');
     assert.equal(result.projectRoot, fs.realpathSync(project));
+    assert.deepEqual(result.run, { state: 'NO_DURABLE_RUN' });
     assert.deepEqual(snapshotFiles(project), before);
     assert.equal(process.cwd(), cwdBefore);
   } finally {
     fs.rmSync(project, { recursive: true, force: true });
   }
+});
+
+test('status reports durable state and handoff facts without changing any byte or mtime', () => {
+  const project = temp('soma-entry-status-facts-');
+  initRepo(project);
+  const runId = 'run-status-facts';
+  const soma = path.join(project, '.soma');
+  fs.mkdirSync(path.join(soma, 'handoffs', runId, '3'), { recursive: true });
+  fs.mkdirSync(path.join(soma, 'checkpoints', runId), { recursive: true });
+  const statePath = path.join(soma, `run-state-${runId}.json`);
+  const stateBytes = JSON.stringify({
+    $schema: 'soma-state/v2', runId, sessionId: 's', startedAt: '2026-08-27T00:00:00Z',
+    currentState: 'PAUSED_DIAGNOSTIC', lastTransitionAt: '2026-08-27T00:01:00Z',
+    activeDispatchIds: [], failureCountsByStep: {}, fixLoopIterations: 0,
+    snapshots: [], humanGatesApproved: {}, decisions: [], reports: [],
+  }) + '\n';
+  fs.writeFileSync(statePath, stateBytes);
+  const identityPath = path.join(soma, 'run-identities', `${runId}.json`);
+  const identityBytes = `${JSON.stringify({ $schema: 'soma-run-identity/v1', runId }, null, 2)}\n`;
+  fs.mkdirSync(path.dirname(identityPath), { recursive: true });
+  fs.writeFileSync(identityPath, identityBytes);
+  const { canonicalJson } = require('../run/checkpoint.cjs');
+  const checkpointPath = path.join(soma, 'checkpoints', runId, '7.json');
+  const checkpointBytes = canonicalJson({
+    $schema: 'soma-checkpoint/v1', runId, sequence: 7, currentState: 'PAUSED_DIAGNOSTIC',
+    blocker: 'tests red', nextDecision: 'repair fixture', nextTask: 'T-9',
+  });
+  fs.writeFileSync(checkpointPath, checkpointBytes);
+  const crypto = require('node:crypto');
+  const hash = value => crypto.createHash('sha256').update(value).digest('hex');
+  const zero = '0'.repeat(64);
+  const handoff = {
+    $schema: 'soma-handoff/v1', runId, generation: 3, currentState: 'PAUSED_DIAGNOSTIC',
+    blocker: 'tests red', nextDecision: 'repair fixture', nextTask: 'T-9',
+    checkpoint: { path: `.soma/checkpoints/${runId}/7.json`, sequence: 7, sha256: hash(checkpointBytes) },
+    commitProofs: [], dispatches: [], git: { dirtyDigest: zero, head: null },
+    lastCompletedTask: 'T-8', proofs: [], resumeCommand: `/soma-run --resume ${runId}`,
+    runIdentity: { path: `.soma/run-identities/${runId}.json`, sha256: hash(identityBytes) },
+    runState: { path: `.soma/run-state-${runId}.json`, sha256: hash(stateBytes) }, tasks: [],
+  };
+  const { renderHandoffMarkdown } = require('../run/handoff-schema.cjs');
+  fs.writeFileSync(path.join(soma, 'handoffs', runId, '3', 'handoff.json'), canonicalJson(handoff));
+  fs.writeFileSync(path.join(soma, 'handoffs', runId, '3', 'handoff.md'), renderHandoffMarkdown(handoff));
+  const index = path.join(project, '.git', 'index');
+  const before = snapshotFiles(project);
+  const indexBefore = fs.statSync(index, { bigint: true }).mtimeNs;
+  try {
+    const result = routeEntryRequest({ mode: 'status', project }, { cwd: project, home: os.homedir() });
+    assert.equal(result.status, 'STATUS_SHOWN');
+    assert.deepEqual(result.run, {
+      runId, currentState: 'PAUSED_DIAGNOSTIC', checkpointSequence: 7, handoffGeneration: 3,
+      blocker: 'tests red', nextDecision: 'repair fixture', nextTask: 'T-9',
+    });
+    assert.deepEqual(snapshotFiles(project), before);
+    assert.equal(fs.statSync(index, { bigint: true }).mtimeNs, indexBefore);
+    const staleState = JSON.parse(stateBytes);
+    staleState.currentState = 'STEP_5_VALIDATE';
+    fs.writeFileSync(statePath, `${JSON.stringify(staleState)}\n`);
+    const staleBefore = snapshotFiles(project);
+    const stale = routeEntryRequest({ mode: 'status', project }, { cwd: project, home: os.homedir() });
+    assert.equal(stale.run.state, 'DURABLE_STATUS_INVALID');
+    assert.match(stale.run.diagnostic, /run state/i);
+    assert.deepEqual(snapshotFiles(project), staleBefore);
+    fs.writeFileSync(statePath, stateBytes);
+    fs.writeFileSync(checkpointPath, `${checkpointBytes}\n`);
+    const corruptBefore = snapshotFiles(project);
+    const corrupt = routeEntryRequest({ mode: 'status', project }, { cwd: project, home: os.homedir() });
+    assert.equal(corrupt.run.state, 'DURABLE_STATUS_INVALID');
+    assert.match(corrupt.run.diagnostic, /checkpoint/i);
+    assert.deepEqual(snapshotFiles(project), corruptBefore);
+  } finally { fs.rmSync(project, { recursive: true, force: true }); }
+});
+
+test('status diagnoses corrupt or ambiguous durable state without guessing or mutating', () => {
+  const project = temp('soma-entry-status-invalid-');
+  initRepo(project);
+  fs.mkdirSync(path.join(project, '.soma'));
+  fs.writeFileSync(path.join(project, '.soma', 'run-state-run-a.json'), '{broken');
+  let before = snapshotFiles(project);
+  let result = routeEntryRequest({ mode: 'status', project }, { cwd: project });
+  assert.equal(result.run.state, 'DURABLE_STATUS_INVALID');
+  assert.match(result.run.diagnostic, /invalid/i);
+  assert.deepEqual(snapshotFiles(project), before);
+  fs.writeFileSync(path.join(project, '.soma', 'run-state-run-a.json'), '{}');
+  fs.writeFileSync(path.join(project, '.soma', 'run-state-run-b.json'), '{}');
+  before = snapshotFiles(project);
+  result = routeEntryRequest({ mode: 'status', project }, { cwd: project });
+  assert.equal(result.run.state, 'DURABLE_STATUS_AMBIGUOUS');
+  assert.deepEqual(snapshotFiles(project), before);
+  fs.rmSync(project, { recursive: true, force: true });
 });
 
 test('start returns PROJECT_UNRESOLVED for an invalid target without throwing', () => {

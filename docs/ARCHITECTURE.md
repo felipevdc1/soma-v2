@@ -33,6 +33,8 @@ The **10-step protocol** (STSD) structures every feature:
 
 Start resolves the project and adopts it when `.soma/` is absent. Adoption never runs project scripts. If a baseline is needed, the orchestration reference makes `T-BASELINE` the first executor dispatch; the coordinator does not execute project code.
 
+The coordinator owns only the control plane: `soma run` primitives, task/agent lifecycle, human gates, routing, consolidation of completed findings, checkpoint and handoff publication. Project exploration or mutation, Git, build, test, validation, integration, audit, correction, commit, push and deploy are executor work. Every executor receives an explicit contract bracketed by durable dispatch-record begin/end artifacts.
+
 After every safe transition, the coordinator publishes an immutable checkpoint and handoff under the project `.soma/` directory. A new session calls `/soma-run --resume <runId>`. Resume validates the handoff pair, referenced checkpoint, closed dispatch records, proof hashes and current Git facts before it acquires the run lock. It returns `RESUME_READY` with the exact next unfinished task or `RESUME_DRIFT` with a durable diagnostic.
 
 Every planned spec and quality reviewer reads the same immutable candidate commit. The coordinator waits for all reviews, consolidates all findings and only then spends the single correction attempt. A residual blocker becomes `PAUSED_DIAGNOSTIC` with `blocker` and `nextDecision` in the checkpoint and handoff.
@@ -150,7 +152,7 @@ Adding a new adapter requires only: new folder `core/adapters/{newtool}/`, valid
 
 ## State machine
 
-The `/soma:run` state machine tracks per-run state in `/tmp/soma-state-{sessionId}.json`. States:
+The `/soma-run` state machine tracks each run durably in `.soma/run-state-{runId}.json`. Immutable checkpoints live in `.soma/checkpoints/{runId}/`; authoritative cross-session handoffs live in `.soma/handoffs/{runId}/`. States:
 
 ```
 IDLE
@@ -167,7 +169,7 @@ IDLE
                                                     └─ DONE
 ```
 
-**Error path:** Any step hitting 3 consecutive failures transitions to `PAUSED_DIAGNOSTIC`. The controller snapshots current state, last successful step, produced artifacts, failure reasons, and an Opus-generated replan suggestion. The user then creates a marker:
+**Error path:** A task receives one initial attempt. After every planned reviewer finishes against the same immutable candidate, the executor may receive one consolidated correction contract. A residual blocker transitions to `PAUSED_DIAGNOSTIC`; the controller persists the candidate, proofs, residual finding, next decision and dispatch reference in checkpoint and handoff. There is no model escalation, third attempt or automatic replacement agent. The user can then choose a documented recovery action:
 
 ```bash
 touch /tmp/soma-diagnostic-{runId}-continue    # resume with hint
@@ -175,10 +177,10 @@ touch /tmp/soma-diagnostic-{runId}-rollback    # revert all commits from this ru
 touch /tmp/soma-diagnostic-{runId}-replan      # return to Step 1 with spec amendments
 ```
 
-**Recovery Protocol (3 layers):**
-1. 1st failure → retry same agent with error context
-2. 2nd failure → escalate model (Sonnet → Opus for that specific task)
-3. 3rd failure → `PAUSED_DIAGNOSTIC` — STOP AND REPLAN, no more automatic retries
+**Recovery Protocol:**
+1. Initial attempt → collect every planned review on one immutable candidate.
+2. If needed, one consolidated correction → revalidate the corrected immutable candidate.
+3. Residual blocker → durable `PAUSED_DIAGNOSTIC`, awaiting a named decision.
 
 ---
 
@@ -187,8 +189,7 @@ touch /tmp/soma-diagnostic-{runId}-replan      # return to Step 1 with spec amen
 SOMA maintains several layers of memory:
 
 **In-session (ephemeral):**
-- `/tmp/soma-state-{sessionId}.json` — state machine state
-- `/tmp/soma-log-{runId}.jsonl` — per-run event log
+- Agent lifecycle and conversational routing only; these are never authoritative continuity state.
 
 **Cross-session (durable):**
 - `~/.claude/CLAUDE.md` — SOMA bootloader anchored block (system rules injected by `soma sync`)
@@ -197,6 +198,9 @@ SOMA maintains several layers of memory:
 - `~/.claude/plans/handoff-{project-slug}.md` — active handoff file with open buckets and resume prompts
 
 **Project-level:**
+- `{project}/.soma/run-state-{runId}.json` — durable current state keyed by run, not session
+- `{project}/.soma/checkpoints/{runId}/{sequence}.json` — immutable transition evidence
+- `{project}/.soma/handoffs/{runId}/{generation}/` — authoritative JSON plus derived Markdown for exact resume
 - `{project}/FAMILY_DOC.md` — persistent cross-run memory shared by all agents on the project. Patterns, pitfalls, decisions, session logs. Every agent receives its relevant sections via `subagent-init.cjs`.
 
 **Optional (MCP-dependent):**
@@ -213,7 +217,7 @@ Approximate token usage per workflow phase (based on v2.1 empirical data — 22+
 | `/soma:specify` | Sonnet | 15–30K | Varies with feature complexity |
 | `/soma:plan-sdd` | Sonnet | 20–40K | Includes contract derivation |
 | WAVES (per wave) | Sonnet | 40–80K | Per executor per wave |
-| `/soma:sonar-audit` | 5× Haiku | 5× 10–20K | Read-only parallel |
+| `/soma:sonar-audit` | 1 integrated reviewer; optional 2nd | Risk-scaled | Second reviewer requires an independent risk declared in the plan |
 | `/soma:quality-check` | Haiku | 5–15K | Fast validation pass |
 
 These are approximate and vary significantly with codebase size and feature scope. The +36% latency cost of the full STSD protocol over ad-hoc implementation is offset by measurable gains in process score and auditability, not raw per-task correctness on isolated small tasks.

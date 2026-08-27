@@ -207,10 +207,16 @@ function normalizeFixturePaths(value) {
 }
 
 function normalizeRuntimeIds(value) {
-  return value
-    .replace(/\bpid-\d+\b/gi, 'pid-<id>')
-    .replace(/\b(opgate-(?:i7-stdin|victim))-\d+-[A-Za-z0-9]+\b/g, '$1-<id>')
-    .replace(/\b(PID|session(?:_id)?|request(?:_id)?|pattern|padrão)(\s*[=:]\s*)[A-Za-z0-9][A-Za-z0-9._:-]*/gi, '$1$2<id>');
+  return value.split('\n').map(line => {
+    if (!/\bopgate-(?:i7-stdin|victim)\b|<tmp>\/opgate/i.test(line)) return line;
+    return line
+      .replace(/\bpid-\d+\b/gi, 'pid-<id>')
+      .replace(/\b(opgate-(?:i7-stdin|victim))-\d+-[A-Za-z0-9]+\b/g, '$1-<id>')
+      .replace(/\bPID(\s*[=:]\s*)\d+\b/g, 'PID$1<id>')
+      .replace(/\b(?:session_id|request_id)(\s*[=:]\s*)(?:session|req)-[A-Za-z0-9._:-]+\b/g, (match, separator) =>
+        `${match.slice(0, match.indexOf(separator))}${separator}<id>`)
+      .replace(/\bpadrão(\s*[=:]\s*)opgate-(?:i7-stdin|victim)-\d+-[A-Za-z0-9]+\b/gi, 'padrão$1<id>');
+  }).join('\n');
 }
 
 function normalizeSlicedDiagnostic(line) {

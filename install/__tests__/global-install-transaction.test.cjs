@@ -188,6 +188,7 @@ test('026 AC-01/10: two project directories converge through the global ledger w
   const watched = [
     ledger,
     path.join(home, '.soma-v2', 'scripts', 'soma.cjs'),
+    path.join(home, '.soma-v2', 'scripts', 'entry', 'status.cjs'),
     path.join(home, '.claude', 'commands', 'soma-run.md'),
   ];
   const firstState = watched.map((file) => ({ file, hash: hashFile(file), mtime: fs.statSync(file).mtimeMs }));

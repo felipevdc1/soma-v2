@@ -109,7 +109,7 @@ SOMA then finalizes the commit and reports back with SHA, files changed, and tes
 | **Gate 1 — Spec Approval** | After spec + plan + tasks are generated, before agents start coding | `/tmp/soma-spec-approved-{runId}` |
 | **Gate 2 — Deploy Approval** | After all tests pass and commit is ready, before deploy to production | `/tmp/soma-deploy-approved-{runId}` |
 
-Everything between the two gates is autonomous. SOMA will pause at `PAUSED_DIAGNOSTIC` if it hits 3 consecutive failures on the same step (see the Recovery Protocol section in `docs/ARCHITECTURE.md`).
+Everything between the two gates is autonomous. Each task gets one initial attempt and, only after all planned reviews of the same immutable candidate finish, one consolidated correction. A residual blocker becomes a durable `PAUSED_DIAGNOSTIC`; there is no third attempt or model escalation.
 
 ---
 
@@ -125,6 +125,7 @@ After a SOMA run, here is what exists on disk:
 | `.soma/checkpoints/{runId}/{sequence}.json` | Immutable transition evidence, task statuses and exact next task |
 | `.soma/handoffs/{runId}/{generation}/handoff.json` | Authoritative cross-session handoff used by `/soma-run --resume` |
 | `.soma/handoffs/{runId}/{generation}/handoff.md` | Human-readable view derived from the authoritative JSON |
+| `.soma/run-state-{runId}.json` | Durable state machine facts for status, checkpoint and exact cross-session resume |
 | `~/.claude/projects/.../memory/` | Project memory: decisions, feedback, patterns accumulated over sessions |
 
 ---
@@ -133,7 +134,7 @@ After a SOMA run, here is what exists on disk:
 
 ### Parallel team dispatch
 
-When your spec has 3+ independent components, `/soma:run` automatically dispatches parallel agents as **named teammates** (`Agent` tool with `name:` — every session has an implicit team; Claude Code 2.1.199 removed `TeamCreate`/`TeamDelete`). Thermal Guard limits simultaneous compile/test agents to 3 to avoid CPU contention.
+When your spec has 3+ independent components, `/soma:run` automatically dispatches parallel agents as **named teammates** (`Agent` tool with `name:` — every session has an implicit team; Claude Code 2.1.199 removed `TeamCreate`/`TeamDelete`). Thermal Guard limits simultaneous compile/test agents to 3 to avoid CPU contention. The coordinator remains concise: it owns only the SOMA control plane, agent lifecycle, routing and durable handoff; project, Git, build, test, validation, audit and commit work belongs to contracted agents with dispatch records.
 
 ### Single targeted dispatch
 

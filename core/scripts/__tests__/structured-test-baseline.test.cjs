@@ -191,6 +191,18 @@ test('parseFailureSet preserves arbitrary numbers, paths, commands, expected val
   }
 });
 
+test('parseFailureSet preserves semantic pattern, session and request labels', () => {
+  const identity = detail => parseFailureSet(
+    fixture(`<testsuite><testcase name="labels" classname="spec"><failure type="Error">${detail}</failure></testcase></testsuite>`),
+    { repoRoot: '/repo' }
+  ).failures[0].failureSha256;
+  for (const [left, right] of [
+    ['pattern=alpha', 'pattern=beta'],
+    ['session=primary', 'session=replica'],
+    ['request_id=invoice-41', 'request_id=invoice-42'],
+  ]) assert.notEqual(identity(left), identity(right), `${left} must differ from ${right}`);
+});
+
 test('parseFailureSet preserves semantic type and location lines outside TAP YAML', () => {
   const identity = detail => parseFailureSet(
     fixture(`<testsuite><testcase name="labels" classname="spec"><failure type="Error">${detail}</failure></testcase></testsuite>`),

@@ -28,18 +28,18 @@ Do not parse, normalize, quote for a shell, interpolate into Bash or execute the
 
 ## 3. Consume or abort
 
-Set `SOMA_SESSION_ID` and `SOMA_REQUEST_ID` only from the validated prepare result. In a `finally` path:
+Separate Bash calls share no model-defined shell variables. After grammar validation, replace each placeholder below with the exact validated identifier rendered as a POSIX single-quoted literal. The accepted grammars contain no single quote, so this rendering is exact and needs no escaping. Never infer, shorten or reformat either value. In a `finally` path:
 
 - after a successful Write, run the fixed consume command;
 - after a failed or rejected Write, or if consume cannot be invoked, run the fixed abort command;
 - never put objective, request path, project path, run ID or argument text into either command.
 
 ```bash
-node "${HOME}/.soma-v2/scripts/soma.cjs" entry consume --session "${SOMA_SESSION_ID}" --request-id "${SOMA_REQUEST_ID}" --owner-pid "$PPID"
+node "${HOME}/.soma-v2/scripts/soma.cjs" entry consume --session '<validated-session-id>' --request-id '<validated-request-id>' --owner-pid "$PPID"
 ```
 
 ```bash
-node "${HOME}/.soma-v2/scripts/soma.cjs" entry abort --session "${SOMA_SESSION_ID}" --request-id "${SOMA_REQUEST_ID}"
+node "${HOME}/.soma-v2/scripts/soma.cjs" entry abort --session '<validated-session-id>' --request-id '<validated-request-id>'
 ```
 
 ## 4. Route once
