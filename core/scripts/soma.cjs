@@ -50,6 +50,10 @@ const SUBCOMMANDS = [
   { name: 'spec-lint', script: 'spec-lint.cjs',  desc: 'Lint spec artifacts for CLI-surface drift and [P] file collisions' },
 ];
 
+const INTERNAL_SUBCOMMANDS = [
+  { name: 'entry', script: 'entry.cjs', desc: 'Internal structured-entry mailbox command' },
+];
+const ALL_SUBCOMMANDS = [...SUBCOMMANDS, ...INTERNAL_SUBCOMMANDS];
 const VALID_NAMES = SUBCOMMANDS.map(s => s.name);
 
 // ── Usage text ────────────────────────────────────────────────────────────────
@@ -97,7 +101,7 @@ if (firstArg === '--version' || firstArg === '-v') {
 }
 
 // Resolve subcommand
-const subcmd = SUBCOMMANDS.find(s => s.name === firstArg);
+const subcmd = ALL_SUBCOMMANDS.find(s => s.name === firstArg);
 
 if (!subcmd) {
   // Unknown subcommand → JSON to stderr, exit 2
