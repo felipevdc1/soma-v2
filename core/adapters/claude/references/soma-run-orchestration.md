@@ -266,8 +266,10 @@ Sempre log o evento (`DISPATCH_RETRY | PAUSE_DIAGNOSTIC`) + append no FAMILY_DOC
 
 **Estado pausado aguardando decisão humana.** Polling 60s em três markers:
 - `/tmp/soma-diagnostic-{runId}-continue` (+ hint opcional) → resume do `lastSuccessfulState` próximo.
-- `/tmp/soma-diagnostic-{runId}-rollback` → `git reset --hard {baselineSha}` → `FAILED_ROLLBACK` (terminal).
+- `/tmp/soma-diagnostic-{runId}-rollback` → o coordinator registra `soma run dispatch-record begin --run <runId>` antes de despachar exatamente um `Agent` com o contrato de rollback abaixo; aguarda seu retorno, registra `soma run dispatch-record end --run <runId>` antes da transição e só então transita para `FAILED_ROLLBACK` (terminal).
 - `/tmp/soma-diagnostic-{runId}-replan` → volta a `STEP_1A_SPECIFY` preservando spec para edição + reset de counters.
+
+**Contrato do executor de rollback:** o executor (nunca o coordinator) é dono de todas as leituras e mutações Git. Ele verifica repository root, o marker de rollback e o expected worktree scope; exige que `baselineSha` corresponda a `/^[0-9a-f]{40}$/`; somente então executa `git reset --hard <baselineSha>`. O retorno contém o `HEAD` resultante e a status proof de `git status --short`. Se qualquer validação ou o executor falhar, a run permanece `PAUSED_DIAGNOSTIC` sem no automatic extra agent.
 
 ---
 

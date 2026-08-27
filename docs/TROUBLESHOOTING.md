@@ -80,11 +80,11 @@ Smoke pack gate 10 (`plugin manifest valid`) confirms this check passes.
 
 ## Runtime issues
 
-### Symptom: Task stuck after 3 agent failures on the same step
+### Symptom: Task stuck after the initial attempt plus one correction
 
-**Cause:** SOMA hit Article X (Stop and Replan) — 3 consecutive failures on the same step triggered `PAUSED_DIAGNOSTIC`. This is expected behavior, not an error in the system.
+**Cause:** The initial attempt plus one correction exhausted the task budget, so SOMA entered `PAUSED_DIAGNOSTIC`. This is expected behavior, not an error in the system.
 
-**Fix:** Check the diagnostic snapshot at `/tmp/soma-state-{sessionId}.json` for `failure_reasons`. Then create a marker to direct the recovery:
+**Fix:** Inspect the durable project evidence first: `.soma/diagnostics`, `.soma/checkpoints/<runId>/`, and `.soma/handoffs/<runId>/`. Then create a marker to direct the recovery:
 
 ```bash
 # Option A — Resume with a hint (add context about what went wrong)

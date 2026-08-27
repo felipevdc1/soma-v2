@@ -58,7 +58,21 @@ function exactRelative(projectRoot, absolutePath) {
   return path.relative(projectRoot, absolutePath).split(path.sep).join('/');
 }
 
-function readHandoffFacts(projectRoot, runId, observedState) {
+function readIdentityFacts(projectRoot, runId) {
+  const file = path.join(projectRoot, '.soma', 'run-identities', `${runId}.json`);
+  const bytes = readRegular(file);
+  let identity;
+  try { identity = JSON.parse(bytes); }
+  catch (error) { throw new Error(`run identity is invalid: ${error.message}`); }
+  const canonical = `${JSON.stringify({ $schema: 'soma-run-identity/v1', runId }, null, 2)}\n`;
+  if (identity.$schema !== 'soma-run-identity/v1' || identity.runId !== runId ||
+      bytes.toString('utf8') !== canonical) {
+    throw new Error('run identity is invalid');
+  }
+  return { bytes, path: exactRelative(projectRoot, file), sha256: sha256(bytes) };
+}
+
+function readHandoffFacts(projectRoot, runId, observedState, observedIdentity) {
   const parent = path.join(projectRoot, '.soma', 'handoffs', runId);
   const generations = numericDirectories(parent);
   if (generations.length === 0) return { checkpointSequence: null, handoffGeneration: null };
@@ -100,18 +114,9 @@ function readHandoffFacts(projectRoot, runId, observedState) {
       handoff.currentState !== observedState.value.currentState) {
     throw new Error('run state hash, path or currentState contradicts the handoff');
   }
-  const expectedIdentityPath = path.join(projectRoot, '.soma', 'run-identities', `${runId}.json`);
-  if (handoff.runIdentity.path !== exactRelative(projectRoot, expectedIdentityPath)) {
-    throw new Error('run identity path contradicts the handoff');
-  }
-  const identityBytes = readRegular(expectedIdentityPath);
-  let identity;
-  try { identity = JSON.parse(identityBytes); }
-  catch (error) { throw new Error(`run identity is invalid: ${error.message}`); }
-  const canonicalIdentity = `${JSON.stringify({ $schema: 'soma-run-identity/v1', runId }, null, 2)}\n`;
-  if (identity.$schema !== 'soma-run-identity/v1' || identity.runId !== runId ||
-      identityBytes.toString('utf8') !== canonicalIdentity ||
-      handoff.runIdentity.sha256 !== sha256(identityBytes)) {
+  if (handoff.runIdentity.path !== observedIdentity.path ||
+      handoff.runIdentity.sha256 !== observedIdentity.sha256 ||
+      sha256(observedIdentity.bytes) !== observedIdentity.sha256) {
     throw new Error('run identity hash or bytes contradict the handoff');
   }
   return {
@@ -150,7 +155,8 @@ function durableStatus(projectRoot) {
     if (state.runId !== candidate.runId || !(validStateV2(state) || validateStateV3(state).valid)) {
       throw new Error('run state schema or identity is invalid');
     }
-    const handoff = readHandoffFacts(projectRoot, candidate.runId, { bytes: stateBytes, value: state });
+    const identity = readIdentityFacts(projectRoot, candidate.runId);
+    const handoff = readHandoffFacts(projectRoot, candidate.runId, { bytes: stateBytes, value: state }, identity);
     return {
       runId: candidate.runId, currentState: state.currentState,
       checkpointSequence: handoff.checkpointSequence, handoffGeneration: handoff.handoffGeneration,
