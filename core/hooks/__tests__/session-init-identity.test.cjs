@@ -64,6 +64,21 @@ function sourceValue(envFile) {
   return result.stdout;
 }
 
+function sourceIdentityState(envFile) {
+  const result = spawnSync('/bin/sh', [
+    '-c',
+    '. "$1"; printf "%s\\n%s\\n%s\\n%s\\n" "${CLAUDE_SESSION_ID+x}" "${CLAUDE_SESSION_ID-}" "${CK_SESSION_ID+x}" "${CK_SESSION_ID-}"',
+    'sh',
+    envFile,
+  ], { encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
+  const [claudePresence, claudeValue, legacyPresence, legacyValue] = result.stdout.split('\n');
+  return {
+    claude: { present: claudePresence === 'x', value: claudeValue },
+    legacy: { present: legacyPresence === 'x', value: legacyValue },
+  };
+}
+
 function identityExports(envFile) {
   return namedExports(envFile, 'CLAUDE_SESSION_ID');
 }
@@ -160,6 +175,95 @@ test('the current export overrides stale identity and repeated exports stay shel
     assert.equal(sourceValue(f.envFile), 'current.session:1');
     assert.equal(identityExports(f.envFile).length, 4);
   } finally {
+    f.cleanup();
+  }
+});
+
+test('invalid or missing current identity neutralizes stale effective identity', async (t) => {
+  for (const [label, data] of [
+    ['clear with invalid identity', { source: 'clear', session_id: 'bad;identity' }],
+    ['compact with missing identity', { source: 'compact' }],
+  ]) {
+    await t.test(label, () => {
+      const f = fixture('soma-session-stale-invalid-');
+      try {
+        const stale = 'export CLAUDE_SESSION_ID="stale.session"\nexport CK_SESSION_ID="stale.session"\n';
+        const result = runHook(f, data, { initialEnv: stale });
+        assert.equal(result.status, 0, result.stderr);
+        assert.equal(result.stderr.trim(), 'SOMA_SESSION_IDENTITY_NOT_EXPORTED reason=INVALID_SESSION_ID');
+        assert.deepEqual(sourceIdentityState(f.envFile), {
+          claude: { present: false, value: '' },
+          legacy: { present: false, value: '' },
+        });
+        assert.deepEqual(fs.readdirSync(f.tmp).filter((name) => name.startsWith('ck-session-')), []);
+      } finally {
+        f.cleanup();
+      }
+    });
+  }
+});
+
+test('duplicate invocations obey the last authoritative session event', () => {
+  const f = fixture('soma-session-event-order-');
+  try {
+    let result = runHook(f, { source: 'clear', session_id: 'bad;identity' }, {
+      initialEnv: 'export CLAUDE_SESSION_ID="stale.session"\nexport CK_SESSION_ID="stale.session"\n',
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(sourceIdentityState(f.envFile), {
+      claude: { present: false, value: '' },
+      legacy: { present: false, value: '' },
+    });
+
+    result = runHook(f, { source: 'compact' }, { createEnvFile: false });
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(sourceIdentityState(f.envFile), {
+      claude: { present: false, value: '' },
+      legacy: { present: false, value: '' },
+    });
+
+    result = runHook(f, { source: 'resume', session_id: 'current.session:2' }, { createEnvFile: false });
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(sourceIdentityState(f.envFile), {
+      claude: { present: true, value: 'current.session:2' },
+      legacy: { present: true, value: 'current.session:2' },
+    });
+    const stateFilesAfterValid = fs.readdirSync(f.tmp).filter((name) => name.startsWith('ck-session-')).sort();
+
+    result = runHook(f, { source: 'clear', session_id: 'still;invalid' }, { createEnvFile: false });
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(sourceIdentityState(f.envFile), {
+      claude: { present: false, value: '' },
+      legacy: { present: false, value: '' },
+    });
+    assert.deepEqual(
+      fs.readdirSync(f.tmp).filter((name) => name.startsWith('ck-session-')).sort(),
+      stateFilesAfterValid,
+      'invalid event must not create temp session state'
+    );
+  } finally {
+    f.cleanup();
+  }
+});
+
+test('failed neutralization leaves the stale identity observable without claiming success', () => {
+  const f = fixture('soma-session-neutralize-failure-');
+  try {
+    fs.writeFileSync(
+      f.envFile,
+      'export CLAUDE_SESSION_ID="stale.session"\nexport CK_SESSION_ID="stale.session"\n'
+    );
+    fs.chmodSync(f.envFile, 0o444);
+    const result = runHook(f, { source: 'clear', session_id: 'bad;identity' }, { createEnvFile: false });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stderr.trim(), 'SOMA_SESSION_IDENTITY_NOT_EXPORTED reason=INVALID_SESSION_ID');
+    assert.deepEqual(sourceIdentityState(f.envFile), {
+      claude: { present: true, value: 'stale.session' },
+      legacy: { present: true, value: 'stale.session' },
+    });
+    assert.deepEqual(fs.readdirSync(f.tmp).filter((name) => name.startsWith('ck-session-')), []);
+  } finally {
+    fs.chmodSync(f.envFile, 0o600);
     f.cleanup();
   }
 });

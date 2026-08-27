@@ -27,6 +27,8 @@ function isSessionId(value) {
   return typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value);
 }
 
+const SESSION_IDENTITY_NEUTRALIZATION = 'unset CLAUDE_SESSION_ID CK_SESSION_ID\n';
+
 /**
  * Safely execute shell command with optional timeout
  * @param {string} cmd - Command to execute
@@ -329,6 +331,13 @@ async function main() {
 
     if (!sessionId) {
       console.error('SOMA_SESSION_IDENTITY_NOT_EXPORTED reason=INVALID_SESSION_ID');
+      if (envFile) {
+        try {
+          fs.appendFileSync(envFile, SESSION_IDENTITY_NEUTRALIZATION);
+        } catch (_) {
+          envWritable = false;
+        }
+      }
     } else if (!envFile) {
       console.error('SOMA_SESSION_IDENTITY_NOT_EXPORTED reason=CLAUDE_ENV_FILE_MISSING');
     } else {
