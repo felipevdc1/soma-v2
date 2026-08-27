@@ -108,6 +108,113 @@ test('parseFailureSet derives stable error identity from a concrete cause instea
   assert.ok(!/TAP boilerplate|duration_ms|test failed/.test(result.failures[0].message));
 });
 
+test('parseFailureSet removes recognized macOS fixture roots, labelled runtime ids, and TAP presentation from the strict identity', () => {
+  const base = fixture(`<testsuite><testcase name="same failure" classname="spec"><failure type="AssertionError">request_id=req-a session_id: session-a PID=123 pid-123 padrão = opgate-victim-123-a1b2c3
+command: rm -rf /var/folders/6k/cache/T/opgate-work-a1B2c3/target
+cause: AssertionError [ERR_ASSERTION]: expected gate rejection
+0 !== 2
+# Subtest: generated runner label
+not ok 41 - generated runner label
+  ---
+  duration_ms: 12.25
+  type: 'test'
+  ...
+  at /repo/core/hooks/__tests__/operator-gate.test.cjs:10:2</failure></testcase></testsuite>`);
+  const final = fixture(`<testsuite><testcase name="same failure" classname="spec"><failure type="AssertionError">request_id=req-b session_id: session-b PID=987 pid-987 padrão = opgate-victim-987-z9y8x7
+command: rm -rf /private/var/folders/zz/other/T/opgate-work-Z9y8X7/target
+cause: AssertionError [ERR_ASSERTION]: expected gate rejection
+0 !== 2
+# Subtest: another generated runner label
+not ok 99 - another generated runner label
+  ---
+  duration_ms: 999.5
+  type: 'test'
+  ...
+  at /repo/core/hooks/__tests__/operator-gate.test.cjs:999:8</failure></testcase></testsuite>`);
+
+  assert.deepEqual(
+    parseFailureSet(base, { repoRoot: '/repo' }).failures,
+    parseFailureSet(final, { repoRoot: '/repo' }).failures
+  );
+});
+
+test('parseFailureSet removes generated /tmp fixture roots from the strict identity', () => {
+  const left = fixture('<testsuite><testcase name="tmp" classname="spec"><failure type="Error">failed at /tmp/soma-case-a1B2c3/output</failure></testcase></testsuite>');
+  const right = fixture('<testsuite><testcase name="tmp" classname="spec"><failure type="Error">failed at /tmp/soma-case-Z9y8X7/output</failure></testcase></testsuite>');
+
+  assert.deepEqual(
+    parseFailureSet(left, { repoRoot: '/repo' }).failures,
+    parseFailureSet(right, { repoRoot: '/repo' }).failures
+  );
+});
+
+test('parseFailureSet removes recognized generated operator-gate session tokens', () => {
+  const left = fixture('<testsuite><testcase name="session" classname="spec"><failure type="Error">session_id do stdin (opgate-i7-stdin-123-1787843642125) was rejected</failure></testcase></testsuite>');
+  const right = fixture('<testsuite><testcase name="session" classname="spec"><failure type="Error">session_id do stdin (opgate-i7-stdin-987-1787843969901) was rejected</failure></testcase></testsuite>');
+
+  assert.deepEqual(
+    parseFailureSet(left, { repoRoot: '/repo' }).failures,
+    parseFailureSet(right, { repoRoot: '/repo' }).failures
+  );
+});
+
+test('parseFailureSet normalizes a sliced installed-test diagnostic prefix but preserves its file name', () => {
+  const identity = detail => parseFailureSet(
+    fixture(`<testsuite><testcase name="diagnostic" classname="spec"><failure type="Error">${detail}</failure></testcase></testsuite>`),
+    { repoRoot: '/repo' }
+  ).failures[0];
+  const left = identity('failure summary\n/.soma-v2/scripts/__tests__/doctor-file-drift.test.cjs\'\n# Node.js v22.15.0\nnull !== 0');
+  const right = identity('failure summary\noma-v2/scripts/__tests__/doctor-file-drift.test.cjs\'\n# Node.js v22.15.0\nnull !== 0');
+
+  assert.equal(left.failureSha256, right.failureSha256);
+  assert.notEqual(
+    left.failureSha256,
+    identity('failure summary\noma-v2/scripts/__tests__/different-semantic.test.cjs\'\n# Node.js v22.15.0\nnull !== 0').failureSha256
+  );
+});
+
+test('parseFailureSet preserves arbitrary numbers, paths, commands, expected values, and semantic text', () => {
+  const identity = detail => parseFailureSet(
+    fixture(`<testsuite><testcase name="meaning" classname="spec"><failure type="Error">${detail}</failure></testcase></testsuite>`),
+    { repoRoot: '/repo' }
+  ).failures[0];
+  const reference = identity('user value 41; path /opt/data/a; command rm -rf; 0 !== 2');
+
+  for (const changed of [
+    'user value 42; path /opt/data/a; command rm -rf; 0 !== 2',
+    'user value 41; path /opt/data/b; command rm -rf; 0 !== 2',
+    'user value 41; path /opt/data/a; command rm -r; 0 !== 2',
+    'user value 41; path /opt/data/a; command rm -rf; 0 !== 3',
+    'user value 41; path /opt/data/a; command rm -rf; 0 !== 2; ticket 123',
+  ]) {
+    assert.notEqual(identity(changed).failureSha256, reference.failureSha256, changed);
+  }
+});
+
+test('parseFailureSet preserves semantic type and location lines outside TAP YAML', () => {
+  const identity = detail => parseFailureSet(
+    fixture(`<testsuite><testcase name="labels" classname="spec"><failure type="Error">${detail}</failure></testcase></testsuite>`),
+    { repoRoot: '/repo' }
+  ).failures[0];
+
+  assert.notEqual(
+    identity('failure context\ntype: semantic-a\nlocation: rack-a').failureSha256,
+    identity('failure context\ntype: semantic-b\nlocation: rack-b').failureSha256
+  );
+});
+
+test('parseFailureSet preserves generated-looking /tmp paths outside recognized test fixture prefixes', () => {
+  const identity = detail => parseFailureSet(
+    fixture(`<testsuite><testcase name="path" classname="spec"><failure type="Error">${detail}</failure></testcase></testsuite>`),
+    { repoRoot: '/repo' }
+  ).failures[0];
+
+  assert.notEqual(
+    identity('archive /tmp/customer-export-a1B2c3/result').failureSha256,
+    identity('archive /tmp/customer-export-Z9y8X7/result').failureSha256
+  );
+});
+
 test('parseFailureSet rejects malformed XML and duplicate normalized identities', () => {
   assert.throws(
     () => parseFailureSet('<testsuites><testcase>', { repoRoot: '/repo' }),

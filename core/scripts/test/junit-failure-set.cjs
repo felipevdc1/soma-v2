@@ -197,16 +197,62 @@ function sourceFrom(testcase, detail, repoRoot) {
   return '';
 }
 
+function normalizeFixturePaths(value) {
+  const generatedPath = /\/(?:private\/var\/folders\/[^/\s'"`|)]+\/[^/\s'"`|)]+\/T|var\/folders\/[^/\s'"`|)]+\/[^/\s'"`|)]+\/T|tmp)\/(?:soma|opgate|cli-contract)[A-Za-z0-9._-]*-[A-Za-z0-9]{6}(?:\/[^\s'"`|)]+)*/g;
+  return value.replace(generatedPath, pathValue => {
+    const relative = pathValue.replace(/^\/(?:private\/)?var\/folders\/[^/]+\/[^/]+\/T\//, '').replace(/^\/tmp\//, '');
+    const segments = relative.split('/');
+    return `<tmp>/${segments.map(segment => segment.replace(/^(.+)-[A-Za-z0-9]{6}$/, '$1-<fixture>')).join('/')}`;
+  });
+}
+
+function normalizeRuntimeIds(value) {
+  return value
+    .replace(/\bpid-\d+\b/gi, 'pid-<id>')
+    .replace(/\b(opgate-(?:i7-stdin|victim))-\d+-[A-Za-z0-9]+\b/g, '$1-<id>')
+    .replace(/\b(PID|session(?:_id)?|request(?:_id)?|pattern|padrão)(\s*[=:]\s*)[A-Za-z0-9][A-Za-z0-9._:-]*/gi, '$1$2<id>');
+}
+
+function normalizeSlicedDiagnostic(line) {
+  const suffix = "scripts/__tests__/doctor-file-drift.test.cjs'";
+  return !/\s/.test(line) && line.endsWith(suffix) ? `<soma-home>/${suffix}` : line;
+}
+
+function removeTapPresentation(lines) {
+  let awaitingYaml = false;
+  let inYaml = false;
+  return lines.filter(line => {
+    if (inYaml) {
+      if (line === '...') inYaml = false;
+      return false;
+    }
+    if (/^#\s*Subtest:/.test(line)) return false;
+    if (/^#\s+(?:Node\.js v|[}\]]$|tests\s+\d+|pass\s+\d+|fail\s+\d+)/.test(line)) return false;
+    if (/^(?:not )?ok\s+\d+\s+-/.test(line)) {
+      awaitingYaml = true;
+      return false;
+    }
+    if (awaitingYaml && line === '---') {
+      awaitingYaml = false;
+      inYaml = true;
+      return false;
+    }
+    awaitingYaml = false;
+    return true;
+  });
+}
+
 function normalizeDetail(detail, repoRoot) {
   const root = canonicalRepoRoot(repoRoot).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return detail
+  const lines = normalizeRuntimeIds(normalizeFixturePaths(detail
     .replace(/\r\n?/g, '\n')
     .replace(new RegExp(root, 'g'), '<repo>')
-    .replace(/((?:[A-Za-z]:)?[\\/][^\n():]*?\.(?:[cm]?js|jsx|tsx?|mjs|cjs)):\d+(?::\d+)?/g, '$1')
+    .replace(/((?:[A-Za-z]:)?[\\/][^\n():]*?\.(?:[cm]?js|jsx|tsx?|mjs|cjs)):\d+(?::\d+)?/g, '$1')))
     .split('\n')
     .map(line => line.trim())
-    .filter(line => line && !/^at\s/.test(line))
-    .join('\n');
+    .map(normalizeSlicedDiagnostic)
+    .filter(line => line && !/^at\s/.test(line));
+  return removeTapPresentation(lines).join('\n');
 }
 
 function compareUtf8(left, right) {
@@ -220,7 +266,7 @@ function sha256(value) {
 function stableMessage(value, repoRoot) {
   return normalizeDetail(value, repoRoot)
     .split('\n')
-    .find(line => !/^(?:#|not ok\b|---$|\.\.\.$|duration_ms:|type:|location:|failureType:|exitCode:|signal:|error:|code:)/.test(line)) || '';
+    .find(line => !/^(?:#|not ok\b|---$|\.\.\.$|failureType:|exitCode:|signal:|error:|code:)/.test(line)) || '';
 }
 
 function errorIdentity(detail, attrs, repoRoot) {
