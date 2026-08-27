@@ -136,30 +136,78 @@ function spoofStat(stat, overrides) {
   });
 }
 
-function withLstatOverride(baseFs, expectedPath, transform) {
+function withStatIdentityOverride(baseFs, expectedPath, transform) {
+  const descriptorPaths = new Map();
+
+  function transformed(file, stat) {
+    return file === expectedPath ? transform(stat) : stat;
+  }
+
+  function wrapFileHandle(handle, file) {
+    if (file !== expectedPath) return handle;
+    return new Proxy(handle, {
+      get(target, property, receiver) {
+        if (property === 'stat') {
+          return async (...args) => transform(await target.stat(...args));
+        }
+        const value = Reflect.get(target, property, receiver);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+  }
+
+  const promises = new Proxy(baseFs.promises, {
+    get(target, property, receiver) {
+      if (property === 'lstat' || property === 'stat') {
+        return async (file, ...args) => transformed(
+          file,
+          await Reflect.apply(target[property], target, [file, ...args])
+        );
+      }
+      if (property === 'open') {
+        return async (file, ...args) => wrapFileHandle(
+          await Reflect.apply(target.open, target, [file, ...args]),
+          file
+        );
+      }
+      const value = Reflect.get(target, property, receiver);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
+
   return new Proxy(baseFs, {
     get(target, property, receiver) {
-      if (property === 'lstatSync') {
-        return file => {
-          const stat = target.lstatSync(file);
-          return file === expectedPath ? transform(stat) : stat;
+      if (property === 'promises') return promises;
+      if (property === 'lstatSync' || property === 'statSync') {
+        return (file, ...args) => transformed(
+          file,
+          Reflect.apply(target[property], target, [file, ...args])
+        );
+      }
+      if (property === 'openSync') {
+        return (file, ...args) => {
+          const descriptor = Reflect.apply(target.openSync, target, [file, ...args]);
+          descriptorPaths.set(descriptor, file);
+          return descriptor;
         };
       }
-      if (property === 'promises') {
-        const promises = target.promises;
-        return new Proxy(promises, {
-          get(promisesTarget, promisesProperty, promisesReceiver) {
-            if (promisesProperty !== 'lstat') {
-              return Reflect.get(promisesTarget, promisesProperty, promisesReceiver);
-            }
-            return async file => {
-              const stat = await promisesTarget.lstat(file);
-              return file === expectedPath ? transform(stat) : stat;
-            };
-          },
-        });
+      if (property === 'fstatSync') {
+        return (descriptor, ...args) => transformed(
+          descriptorPaths.get(descriptor),
+          Reflect.apply(target.fstatSync, target, [descriptor, ...args])
+        );
       }
-      return Reflect.get(target, property, receiver);
+      if (property === 'closeSync') {
+        return descriptor => {
+          try {
+            return Reflect.apply(target.closeSync, target, [descriptor]);
+          } finally {
+            descriptorPaths.delete(descriptor);
+          }
+        };
+      }
+      const value = Reflect.get(target, property, receiver);
+      return typeof value === 'function' ? value.bind(target) : value;
     },
   });
 }
@@ -443,37 +491,114 @@ test('prepare twice never creates a second live slot and may reuse only an empty
   }
 });
 
-test('two same-session prepares released together leave at most one live slot', async () => {
+test('two same-session prepares synchronized at the check/create boundary leave at most one live slot', async () => {
   const runtimeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'soma-entry-concurrent-prepare-'));
+  const controlRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'soma-entry-concurrent-control-'));
   fs.chmodSync(runtimeRoot, 0o700);
   try {
-    const start = path.join(runtimeRoot, 'start');
-    const readyA = path.join(runtimeRoot, 'ready-a');
-    const readyB = path.join(runtimeRoot, 'ready-b');
+    const boundaryA = path.join(controlRoot, 'boundary-a');
+    const boundaryB = path.join(controlRoot, 'boundary-b');
+    const sessionDir = path.join(runtimeRoot, 'soma-entry', String(UID), sha256(SESSION_A));
     const childSource = String.raw`
       'use strict';
-      const fs = require('node:fs');
+      const rawFs = require('node:fs');
+      const path = require('node:path');
       const { createRequestBroker } = require(process.argv[1]);
-      const broker = createRequestBroker({ runtimeRoot: process.argv[2] });
-      fs.writeFileSync(process.argv[4], 'ready', { flag: 'wx' });
-      const timer = setInterval(async () => {
-        if (!fs.existsSync(process.argv[5])) return;
-        clearInterval(timer);
-        try {
-          const prepared = await broker.prepare({ sessionId: process.argv[3] });
-          process.stdout.write(JSON.stringify({ ok: true, prepared }) + '\n');
-        } catch (error) {
-          process.stdout.write(JSON.stringify({ ok: false, code: error.code, message: error.message }) + '\n');
+      const sessionDir = process.argv[4];
+      const ownBoundary = process.argv[5];
+      const peerBoundary = process.argv[6];
+      let boundaryHit = false;
+
+      function isCheckCreateBoundary(operation, args) {
+        const file = args[0];
+        if (typeof file !== 'string' || path.dirname(file) !== sessionDir) return false;
+        if (operation === 'mkdir' || operation === 'mkdirSync') return true;
+        if (operation !== 'open' && operation !== 'openSync') return false;
+        const flags = args[1];
+        if (typeof flags === 'string') return flags.includes('x');
+        return typeof flags === 'number' &&
+          (flags & rawFs.constants.O_CREAT) !== 0 &&
+          (flags & rawFs.constants.O_EXCL) !== 0;
+      }
+
+      function publishBoundary() {
+        if (boundaryHit) return false;
+        boundaryHit = true;
+        rawFs.writeFileSync(ownBoundary, 'ready', { flag: 'wx' });
+        return true;
+      }
+
+      function waitAtBoundarySync() {
+        if (!publishBoundary()) return;
+        const deadline = Date.now() + 5_000;
+        const cell = new Int32Array(new SharedArrayBuffer(4));
+        while (!rawFs.existsSync(peerBoundary)) {
+          if (Date.now() >= deadline) {
+            const error = new Error('peer never reached the check/create boundary');
+            error.code = 'HARNESS_BOUNDARY_TIMEOUT';
+            throw error;
+          }
+          Atomics.wait(cell, 0, 0, 5);
         }
-      }, 5);
+      }
+
+      async function waitAtBoundaryAsync() {
+        if (!publishBoundary()) return;
+        const deadline = Date.now() + 5_000;
+        while (!rawFs.existsSync(peerBoundary)) {
+          if (Date.now() >= deadline) {
+            const error = new Error('peer never reached the check/create boundary');
+            error.code = 'HARNESS_BOUNDARY_TIMEOUT';
+            throw error;
+          }
+          await new Promise(resolve => setTimeout(resolve, 5));
+        }
+      }
+
+      function wrap(target, api) {
+        return new Proxy(target, {
+          get(object, property, receiver) {
+            if (api === 'sync' && property === 'promises') return wrap(rawFs.promises, 'promises');
+            const value = Reflect.get(object, property, receiver);
+            if (typeof value !== 'function') return value;
+            return (...args) => {
+              if (!isCheckCreateBoundary(property, args)) {
+                return Reflect.apply(value, object, args);
+              }
+              if (api === 'promises') {
+                return waitAtBoundaryAsync().then(() => Reflect.apply(value, object, args));
+              }
+              waitAtBoundarySync();
+              return Reflect.apply(value, object, args);
+            };
+          },
+        });
+      }
+
+      const broker = createRequestBroker({
+        runtimeRoot: process.argv[2],
+        fsOps: wrap(rawFs, 'sync'),
+      });
+      Promise.resolve().then(() => broker.prepare({ sessionId: process.argv[3] })).then(
+        prepared => process.stdout.write(JSON.stringify({ ok: true, boundaryHit, prepared }) + '\n'),
+        error => process.stdout.write(JSON.stringify({
+          ok: false,
+          boundaryHit,
+          code: error.code,
+          message: error.message,
+        }) + '\n')
+      );
     `;
-    const first = spawnJsonChild(childSource, [BROKER_MODULE, runtimeRoot, SESSION_A, readyA, start]);
-    const second = spawnJsonChild(childSource, [BROKER_MODULE, runtimeRoot, SESSION_A, readyB, start]);
-    await Promise.all([waitForPath(readyA), waitForPath(readyB)]);
-    fs.writeFileSync(start, 'go', { flag: 'wx' });
+    const first = spawnJsonChild(childSource, [
+      BROKER_MODULE, runtimeRoot, SESSION_A, sessionDir, boundaryA, boundaryB,
+    ]);
+    const second = spawnJsonChild(childSource, [
+      BROKER_MODULE, runtimeRoot, SESSION_A, sessionDir, boundaryB, boundaryA,
+    ]);
     const results = await Promise.all([first.result, second.result]);
 
     for (const result of results) {
+      assert.equal(result.value.boundaryHit, true, `prepare bypassed the controlled boundary: ${result.stdout}`);
       assert.ok(
         result.value.ok || result.value.code === 'BROKER_BUSY',
         `concurrent prepare returned an unexpected result: ${JSON.stringify(results)}`
@@ -484,12 +609,12 @@ test('two same-session prepares released together leave at most one live slot', 
     );
     assert.ok(successfulIds.size <= 1, `two distinct live leases were returned: ${JSON.stringify(results)}`);
 
-    const sessionDir = path.join(runtimeRoot, 'soma-entry', String(UID), sha256(SESSION_A));
     const liveSlots = fs.readdirSync(sessionDir).filter(name => /^[0-9a-f]{32}$/.test(name));
     assert.equal(liveSlots.length, 1, `same-session prepare created ${liveSlots.length} live slots`);
     if (successfulIds.size === 1) assert.equal(liveSlots[0], [...successfulIds][0]);
   } finally {
     fs.rmSync(runtimeRoot, { recursive: true, force: true });
+    fs.rmSync(controlRoot, { recursive: true, force: true });
   }
 });
 
@@ -592,7 +717,7 @@ for (const level of ['broker-root', 'session-directory', 'slot-directory']) {
       const fakeOwnerFs = tracingFs((operation, args) => {
         if (operationIs(operation, 'open')) opened.push(args[0]);
       });
-      const ownerProxy = withLstatOverride(
+      const ownerProxy = withStatIdentityOverride(
         fakeOwnerFs,
         target,
         stat => spoofStat(stat, { uid: UID + 1 })
@@ -667,22 +792,32 @@ test('consume lstat/realpath-authenticates every parent both before claim and be
   }
 });
 
-for (const level of ['broker-root', 'session-directory', 'slot-directory']) {
+for (const level of [
+  'runtime-root',
+  'entry-root',
+  'broker-root',
+  'session-directory',
+  'slot-directory',
+]) {
   test(`post-claim ${level} symlink/canonical escape is rejected before parsing`, async () => {
     const fixture = makeFixture();
     const external = fs.mkdtempSync(path.join(os.tmpdir(), 'soma-entry-postclaim-escape-'));
     fs.chmodSync(external, 0o700);
+    let target;
+    let parked;
+    let swapped = false;
     try {
       fs.writeFileSync(path.join(external, 'sentinel'), 'outside bytes\n');
       const prepared = await fixture.broker.prepare({ sessionId: SESSION_A });
       writeEnvelope(prepared, '--help');
-      const target = {
+      target = {
+        'runtime-root': fixture.runtimeRoot,
+        'entry-root': path.join(fixture.runtimeRoot, 'soma-entry'),
         'broker-root': brokerRootOf(prepared),
         'session-directory': sessionDirOf(prepared),
         'slot-directory': slotDirOf(prepared),
       }[level];
-      const parked = `${target}.authenticated`;
-      let swapped = false;
+      parked = `${target}.authenticated`;
       const swapFs = tracingFs(
         () => {},
         (operation, args) => {
@@ -712,6 +847,10 @@ for (const level of ['broker-root', 'session-directory', 'slot-directory']) {
       assert.equal(parsed, false, `${level} post-claim escape reached the parser: ${error.stack}`);
       assert.equal(fs.readFileSync(path.join(external, 'sentinel'), 'utf8'), 'outside bytes\n');
     } finally {
+      if (swapped && target && parked && fs.existsSync(parked)) {
+        if (fs.lstatSync(target).isSymbolicLink()) fs.unlinkSync(target);
+        fs.renameSync(parked, target);
+      }
       fixture.cleanup();
       fs.rmSync(external, { recursive: true, force: true });
     }
@@ -794,11 +933,29 @@ test('consume rejects wrong-owner lease/request regular files before claim', asy
       const prepared = await fixture.broker.prepare({ sessionId: SESSION_A });
       writeEnvelope(prepared);
       const target = targetName === 'lease' ? leasePathOf(prepared) : prepared.requestPath;
-      const ownerFs = withLstatOverride(
+      // macOS cannot safely assign these fixtures to an arbitrary foreign uid.
+      // Spoof every supported path- and descriptor-stat boundary instead, so a
+      // broker that authenticates an opened descriptor remains a valid design.
+      const ownerFs = withStatIdentityOverride(
         fs,
         target,
         stat => spoofStat(stat, { uid: UID + 1 })
       );
+      const descriptor = ownerFs.openSync(target, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+      try {
+        assert.equal(ownerFs.fstatSync(descriptor).uid, UID + 1);
+      } finally {
+        ownerFs.closeSync(descriptor);
+      }
+      const handle = await ownerFs.promises.open(
+        target,
+        fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW
+      );
+      try {
+        assert.equal((await handle.stat()).uid, UID + 1);
+      } finally {
+        await handle.close();
+      }
       const consumer = createRequestBroker({
         runtimeRoot: fixture.runtimeRoot,
         uid: UID,
@@ -1469,7 +1626,7 @@ test('expired wrong-owner residue is diagnostic evidence and is not scavenged', 
     writeEnvelope(r1, '--help');
     fixture.clock.monotonicMs = readLease(r1).expiresMonotonicMs + 1;
     const target = leasePathOf(r1);
-    const wrongOwnerFs = withLstatOverride(
+    const wrongOwnerFs = withStatIdentityOverride(
       fs,
       target,
       stat => spoofStat(stat, { uid: UID + 1 })
