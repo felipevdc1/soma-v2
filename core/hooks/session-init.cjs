@@ -323,10 +323,11 @@ async function main() {
     const stdin = fs.readFileSync(0, 'utf-8').trim();
     const data = stdin ? JSON.parse(stdin) : {};
     const envFile = process.env.CLAUDE_ENV_FILE;
-    const sessionId = data.session_id || null;
+    const rawSessionId = data.session_id;
+    const sessionId = isSessionId(rawSessionId) ? rawSessionId : null;
     let envWritable = Boolean(envFile);
 
-    if (!isSessionId(sessionId)) {
+    if (!sessionId) {
       console.error('SOMA_SESSION_IDENTITY_NOT_EXPORTED reason=INVALID_SESSION_ID');
     } else if (!envFile) {
       console.error('SOMA_SESSION_IDENTITY_NOT_EXPORTED reason=CLAUDE_ENV_FILE_MISSING');
@@ -394,7 +395,7 @@ async function main() {
 
     if (envWritable) {
       // Session & plan config
-      writeEnv(envFile, 'CK_SESSION_ID', sessionId || '');
+      if (sessionId) writeEnv(envFile, 'CK_SESSION_ID', sessionId);
       writeEnv(envFile, 'CK_PLAN_NAMING_FORMAT', config.plan.namingFormat);
       writeEnv(envFile, 'CK_PLAN_DATE_FORMAT', config.plan.dateFormat);
       writeEnv(envFile, 'CK_PLAN_ISSUE_PREFIX', config.plan.issuePrefix || '');

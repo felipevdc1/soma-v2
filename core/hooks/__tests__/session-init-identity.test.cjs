@@ -15,12 +15,15 @@ function fixture(prefix = 'soma-session-identity-') {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
   const home = path.join(root, 'home');
   const cwd = path.join(root, 'project');
+  const tmp = path.join(root, 'tmp');
   fs.mkdirSync(home);
   fs.mkdirSync(cwd);
+  fs.mkdirSync(tmp);
   return {
     root,
     home,
     cwd,
+    tmp,
     envFile: path.join(root, 'claude-env.sh'),
     cleanup() {
       fs.rmSync(root, { recursive: true, force: true });
@@ -29,7 +32,7 @@ function fixture(prefix = 'soma-session-identity-') {
 }
 
 function hookEnv(f, envFile, hasExplicitEnvFile) {
-  const env = { ...process.env, HOME: f.home };
+  const env = { ...process.env, HOME: f.home, TMPDIR: f.tmp, TMP: f.tmp, TEMP: f.tmp };
   delete env.CLAUDE_SESSION_ID;
   if (hasExplicitEnvFile && envFile === undefined) delete env.CLAUDE_ENV_FILE;
   else env.CLAUDE_ENV_FILE = hasExplicitEnvFile ? envFile : f.envFile;
@@ -62,8 +65,12 @@ function sourceValue(envFile) {
 }
 
 function identityExports(envFile) {
+  return namedExports(envFile, 'CLAUDE_SESSION_ID');
+}
+
+function namedExports(envFile, name) {
   if (!fs.existsSync(envFile) || fs.statSync(envFile).isDirectory()) return [];
-  return fs.readFileSync(envFile, 'utf8').split('\n').filter(line => line.startsWith('export CLAUDE_SESSION_ID='));
+  return fs.readFileSync(envFile, 'utf8').split('\n').filter(line => line.startsWith(`export ${name}=`));
 }
 
 function filesBelow(root) {
@@ -201,6 +208,8 @@ test('missing env channel and missing or invalid identity are nonblocking with s
         assert.equal(result.status, 0);
         assert.equal(result.stderr.trim(), 'SOMA_SESSION_IDENTITY_NOT_EXPORTED reason=INVALID_SESSION_ID');
         assert.deepEqual(identityExports(f.envFile), []);
+        assert.deepEqual(fs.readdirSync(f.tmp).filter((name) => name.startsWith('ck-session-')), []);
+        assert.deepEqual(namedExports(f.envFile, 'CK_SESSION_ID'), []);
       } finally {
         f.cleanup();
       }
