@@ -12,7 +12,7 @@ const { historicalOracleFiles, validateHistoricalOracle } = require('../lib/phas
 const REPO_ROOT = path.resolve(__dirname, '../../..');
 const SOMA_HOME = process.env.SOMA_HOME || path.join(REPO_ROOT, 'core');
 const TESTS_DIR = path.join(SOMA_HOME, 'scripts', '__tests__');
-const NODE_BIN = spawnSync('which', ['node'], { encoding: 'utf8' }).stdout.trim() || 'node';
+const NODE_BIN = process.execPath;
 
 const PHASE2_AND_3_TEST_FILES = historicalOracleFiles(TESTS_DIR);
 
