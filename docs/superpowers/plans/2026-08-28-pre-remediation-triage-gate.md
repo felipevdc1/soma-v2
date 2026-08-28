@@ -24,6 +24,7 @@
 The executor must paste this exact block, without paraphrase, into Article XI in the Constitution, the 1.4.0 amendment, the Claude reference, and the Codex `block.codex.AGENTS.soma-stsd` block:
 
 ```text
+<!-- TRIAGE_CONTRACT_BEGIN -->
 ## Article XI — Triagem pré-remediação
 
 Antes de qualquer remediação, o coordinator dispara triagem quando `totalFailures >= 10` ou quando o predicado herdado/exceção é completo: a full suite não é zero, a comparação semântica registra `shared >= 1`, a integração seria bloqueada pelo gate e o operador considera integrar sem tornar a full suite verde. A triagem usa exatamente um agente, uma tentativa e somente evidências existentes na allowlist: arquivos sob `.soma/diagnostics/<source-run>/` e artefatos de dispatch, checkpoint ou handoff referenciados por esse run. O executor usa apenas parsers locais determinísticos, não executa remediação e só pode escrever o relatório `.soma/diagnostics/<runId>/pre-remediation-triage.json`.
@@ -44,6 +45,7 @@ Tabela decisória de entrada/saída (linhas normativas completas):
 | `shared>=1`, full suite não zero, integração bloqueada e exceção considerada | `TRIAGE_REQUIRED` |
 | até 3 causas independentes, todas `low`/`medium`, sem `HYPOTHESIS`, `unmappedCount=0` | `GO` |
 | 4 ou mais causas, acoplamento `high`, qualquer `HYPOTHESIS` ou `unmappedCount>0` | `DEFER` |
+<!-- TRIAGE_CONTRACT_END -->
 ```
 
 ### Task 1: Contract test RED
@@ -68,22 +70,19 @@ const files = {
 const read = file => fs.readFileSync(file, 'utf8');
 const sources = () => Object.fromEntries(Object.entries(files).map(([key, file]) => [key, read(file)]));
 
-const canonicalContract = [
-  'Antes de qualquer remediação, o coordinator dispara triagem quando `totalFailures >= 10` ou quando o predicado herdado/exceção é completo:',
-  'A triagem usa exatamente um agente, uma tentativa e somente evidências existentes na allowlist:',
-  'O executor usa apenas parsers locais determinísticos, não executa remediação e só pode escrever o relatório `.soma/diagnostics/<runId>/pre-remediation-triage.json`.',
-  'não há novo gate no CLI e o limite global de tokens e a full suite ficam fora do escopo desta regra.',
-  'A chave de cluster é `(componente proprietário, assinatura normalizada, causa candidata)`;',
-  'a soma dos counts fecha `totalFailures` e `unmappedCount` é zero.',
-  'O relatório mínimo contém `runId`, `sourceRunId`, `inputs`, `totalFailures`, `clusters`, `unmappedCount`, `decision` e `blockers`;',
-  'Tabela decisória de entrada/saída (linhas normativas completas):',
-].join('\n');
+const BEGIN = '<!-- TRIAGE_CONTRACT_BEGIN -->';
+const END = '<!-- TRIAGE_CONTRACT_END -->';
+const plan = fs.readFileSync(path.join(ROOT, '..', '..', 'docs', 'superpowers', 'plans', '2026-08-28-pre-remediation-triage-gate.md'), 'utf8');
+const expectedContract = plan.match(/<!-- TRIAGE_CONTRACT_BEGIN -->\n([\s\S]*?)\n<!-- TRIAGE_CONTRACT_END -->/)[1];
+const extract = text => {
+  const match = text.match(new RegExp(`${BEGIN}\\n([\\s\\S]*?)\\n${END}`));
+  assert.ok(match, 'missing canonical triage delimiters');
+  return match[1];
+};
 
 test('triage contract propagates the same canonical contract to every destination', () => {
   const s = sources();
-  for (const [name, text] of Object.entries(s)) {
-    for (const phrase of canonicalContract.split('\n')) assert.ok(text.includes(phrase), `${name}: ${phrase}`);
-  }
+  for (const [name, text] of Object.entries(s)) assert.equal(extract(text), expectedContract, name);
 });
 
 test('triage contract defines deterministic clusters, evidence closure, schema, and decisions', () => {
@@ -134,8 +133,8 @@ test('decision table preserves every complete boundary input/output row', () => 
 
 **Files:** Modify the four canonical documents listed above and refresh `core/manifest.json`.
 
-- [ ] **Step 1: Insert the verbatim normative block, including the complete decision table,** immediately before `## Articles cortados` in `core/docs/constitution.md`, retaining the Article XI heading and adding `(a) Statement`, `(b) Rationale`, `(c) Enforcement mechanism (HARD)`, and `(d) Violation handling)` around the same text. Change the final confirmation exactly from `Constitution v1.3.0 lida; executando sob Articles I-X e XII.` to `Constitution v1.4.0 lida; executando sob Articles I-XII.`
-- [ ] **Step 2: Create `core/docs/constitution-amendments/1.4.0-pre-remediation-triage.md`** with header `# Amendment 1.4.0 — Triagem pré-remediação`, `**Status:** APROVADA — Design 2026-08-28`, `**Bump:** 1.3.0 → 1.4.0`, paste the same complete normative block and decision-table rows verbatim, then include these fields verbatim (the executor must not draft them):
+- [ ] **Step 1: Insert the verbatim normative block, including the complete decision table,** immediately before `## Articles cortados` in `core/docs/constitution.md`, retaining the Article XI heading and adding `(a) Statement`, `(b) Rationale`, `(c) Enforcement mechanism (HARD)`, and `(d) Violation handling)` around the same text. Wrap only the block with `<!-- TRIAGE_CONTRACT_BEGIN -->` and `<!-- TRIAGE_CONTRACT_END -->`. Change the final confirmation exactly from `Constitution v1.3.0 lida; executando sob Articles I-X e XII.` to `Constitution v1.4.0 lida; executando sob Articles I-XII.`
+- [ ] **Step 2: Create `core/docs/constitution-amendments/1.4.0-pre-remediation-triage.md`** with header `# Amendment 1.4.0 — Triagem pré-remediação`, `**Status:** APROVADA — Design 2026-08-28`, `**Bump:** 1.3.0 → 1.4.0`, paste the same complete normative block and decision-table rows verbatim between the same delimiters, then include these fields verbatim (the executor must not draft them):
 
   ```text
   (a) Statement: Adoção obrigatória da triagem pré-remediação antes de qualquer remediação, disparada por `totalFailures >= 10` ou pelo predicado herdado/exceção completo: full suite não zero, `shared >= 1`, integração bloqueada pelo gate e exceção considerada pelo operador.
@@ -145,8 +144,8 @@ test('decision table preserves every complete boundary input/output row', () => 
   ```
 
   Then list propagation and rejected alternatives (new CLI gate, new diagnostic suite, multiple agents/retries, automatic correction, global token criterion).
-- [ ] **Step 3: Insert the same complete normative block and decision-table rows verbatim** immediately before `## 1. STEP_1A_SPECIFY` in `core/adapters/claude/references/soma-run-orchestration.md`; keep the exact output path, require `soma run dispatch-record begin --run <runId>` before the Agent and `... dispatch-record end --run <runId>` before transition, and state that checkpoint/handoff remain later coordinator actions.
-- [ ] **Step 4: Insert the same complete normative block and decision-table rows verbatim** immediately after the Always-On Habits list inside anchor `block.codex.AGENTS.soma-stsd` in `core/adapters/codex/AGENTS.md`; recompute only that anchor's `sha256` with `core/scripts/lib/anchored-blocks.cjs` conventions.
+- [ ] **Step 3: Insert the same complete normative block and decision-table rows verbatim** immediately before `## 1. STEP_1A_SPECIFY` in `core/adapters/claude/references/soma-run-orchestration.md`, between the same delimiters; keep the exact output path, require `soma run dispatch-record begin --run <runId>` before the Agent and `... dispatch-record end --run <runId>` before transition, and state that checkpoint/handoff remain later coordinator actions.
+- [ ] **Step 4: Insert the same complete normative block and decision-table rows verbatim** immediately after the Always-On Habits list inside anchor `block.codex.AGENTS.soma-stsd` in `core/adapters/codex/AGENTS.md`, between the same delimiters; recompute only that anchor's `sha256` with `core/scripts/lib/anchored-blocks.cjs` conventions.
 - [ ] **Step 5: Update the Constitution H1 and date/amendments marker from 1.3.0 to 1.4.0. Refresh only affected `core/manifest.json` hashes with `node core/scripts/manifest.cjs baseline --apply --filter core.constitution` followed by `node core/scripts/manifest.cjs baseline --apply --filter adapter.codex.AGENTS`; each command must report exactly its named entry updated.
 
 ### Task 3: GREEN and deterministic focused checks
@@ -160,4 +159,6 @@ test('decision table preserves every complete boundary input/output row', () => 
 
 ## Self-review result
 
-Coverage maps AC1–AC3 to Task 1/2 trigger and safety assertions; AC4–AC6 to the cluster/evidence/schema assertions; AC7–AC8 to the six exact decision-table rows and the fourth contract test; AC9 to the four-surface parity test and amendment; AC10 to exact version text, out-of-scope text, and focused commands. No placeholders remain in this plan, and the coordinator/executor boundary plus existing dispatch-record authority are preserved.
+Traceability labels: AC-01, AC-02, AC-03, AC-04, AC-05, AC-06, AC-07, AC-08, AC-09, AC-10.
+
+Coverage maps AC-01–AC-03 to Task 1/2 trigger and safety assertions; AC-04–AC-06 to the cluster/evidence/schema assertions; AC-07–AC-08 to the six exact decision-table rows and the fourth contract test; AC-09 to the four-surface parity test and amendment; AC-10 to exact version text, out-of-scope text, and focused commands. No placeholders remain in this plan, and the coordinator/executor boundary plus existing dispatch-record authority are preserved.
