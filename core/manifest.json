@@ -6,7 +6,7 @@
     {
       "id": "core.constitution",
       "path": "docs/constitution.md",
-      "sha256": "234d56532ff8897d5a0bf5e42aec6a2cc413a0ce074a08ac91fd37d4dbd6e5da",
+      "sha256": "a8e0b2f4484bfa48d2351a69691563bc3f9457f0e56291b30774c51f328e33f1",
       "sourceMtime": "2026-05-05T00:00:00Z",
       "sourceSha256": "4ba48405dac980928d9154f7212bc191edfa1cd311df9972ba075862fbace6ae",
       "targets": [
@@ -178,7 +178,7 @@
     {
       "id": "adapter.codex.AGENTS",
       "path": "adapters/codex/AGENTS.md",
-      "sha256": "6ab261ba6c55f3278d5e746948a11a76f10c1bac3e8a5b265198cfdafd3b1389",
+      "sha256": "33365c928215e854c2650ef825f83772f6dfd51cbb25c23579497c7fd7c70244",
       "sourceMtime": "2026-04-24T20:29:13Z",
       "sourceSha256": "3e6a1a8f6c4f0c8dadef714990e292c13b28ae7db16a23701759e8d4e01b384c",
       "targets": [

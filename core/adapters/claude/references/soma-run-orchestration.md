@@ -51,6 +51,31 @@ Depois de cada transição segura, publique um checkpoint com `soma run checkpoi
 
 ---
 
+<!-- TRIAGE_CONTRACT_BEGIN -->
+## Article XI — Triagem pré-remediação
+
+Antes de qualquer remediação, o coordinator dispara triagem quando `totalFailures >= 10` ou quando o predicado herdado/exceção é completo: a full suite não é zero, a comparação semântica registra `shared >= 1`, a integração seria bloqueada pelo gate e o operador considera integrar sem tornar a full suite verde. A triagem usa exatamente um agente, uma tentativa e somente evidências existentes na allowlist: arquivos sob `.soma/diagnostics/<source-run>/` e artefatos de dispatch, checkpoint ou handoff referenciados por esse run. O executor usa apenas parsers locais determinísticos, não executa remediação e só pode escrever o relatório `.soma/diagnostics/<runId>/pre-remediation-triage.json`.
+
+São proibidos rede, mutação Git, package manager, test runner, build, lint, install, product CLI, execução do produto e qualquer arquivo escrito além do relatório. Dispatch, checkpoint e handoff são ações posteriores do coordinator; não há novo gate no CLI e o limite global de tokens e a full suite ficam fora do escopo desta regra.
+
+Cada identidade falha é mapeada exatamente uma vez. A chave de cluster é `(componente proprietário, assinatura normalizada, causa candidata)`; causas só são independentes quando não compartilham essa chave nem uma dependência causal documentada. Cada cluster registra `count`, identidades, prova com `path` e `sha256`, confiança `VERIFIED`, `INFERENCE` ou `HYPOTHESIS`, causa e acoplamento `low`, `medium` ou `high`. Cada prova contém identidade normalizada e `expected`/`actual` ou assinatura de erro; a soma dos counts fecha `totalFailures` e `unmappedCount` é zero.
+
+O relatório mínimo contém `runId`, `sourceRunId`, `inputs`, `totalFailures`, `clusters`, `unmappedCount`, `decision` e `blockers`; cada input registra `path` e `sha256`. Nove falhas não disparam o gatilho numérico; dez falhas disparam. `shared=0` não satisfaz o gatilho herdado; `shared=1` satisfaz quando os demais predicados também são verdadeiros. `GO` só é válido com no máximo três causas independentes, todas conhecidas, com acoplamento `low` ou `medium`, e `unmappedCount=0`. Acoplamento `high`, confiança `HYPOTHESIS` ou `unmappedCount>0` força `DEFER`; qualquer outra condição fora dos limites também força `DEFER`. `DEFER` exige checkpoint e handoff duráveis e proíbe correção automática pelo executor.
+
+Tabela decisória de entrada/saída (linhas normativas completas):
+
+| Entrada | Saída |
+|---|---|
+| `totalFailures=9` e predicado herdado completo ausente | triagem não obrigatória |
+| `totalFailures=10` | `TRIAGE_REQUIRED` |
+| `shared=0` | predicado herdado não satisfeito |
+| `shared>=1`, full suite não zero, integração bloqueada e exceção considerada | `TRIAGE_REQUIRED` |
+| até 3 causas independentes, todas `low`/`medium`, sem `HYPOTHESIS`, `unmappedCount=0` | `GO` |
+| 4 ou mais causas, acoplamento `high`, qualquer `HYPOTHESIS` ou `unmappedCount>0` | `DEFER` |
+<!-- TRIAGE_CONTRACT_END -->
+
+O coordinator executa `soma run dispatch-record begin --run <runId>` antes do Agent de triagem e `soma run dispatch-record end --run <runId>` antes da transição. Checkpoint e handoff continuam ações posteriores do coordinator.
+
 ## 1. STEP_1A_SPECIFY
 
 **Gate:** `soma run gate --run <runId> --step STEP_1A_SPECIFY` — primeiro step report-bearing, sem predecessor, sempre libera; chamada existe por uniformidade com os outros 11 blocos.

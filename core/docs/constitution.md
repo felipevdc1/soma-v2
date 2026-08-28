@@ -1,7 +1,7 @@
-# SOMA Constitution v1.3.0
+# SOMA Constitution v1.4.0
 
-**Versão:** 1.3.0
-**Data:** 2026-08-24 (amendments: 1.1.0 era-Fable; 1.2.0 time implícito; 1.2.1 higiene Fase 0; 1.3.0 orçamento de orquestração — ver `constitution-amendments/`)
+**Versão:** 1.4.0
+**Data:** 2026-08-28 (amendments: 1.1.0 era-Fable; 1.2.0 time implícito; 1.2.1 higiene Fase 0; 1.3.0 orçamento de orquestração; 1.4.0 triagem pré-remediação — ver `constitution-amendments/`)
 **Status:** Ratified 2026-05-05
 **Escopo:** Governa toda run do SOMA Executor Autônomo. Aplica-se ao orchestrator (main model — Fable 5+; antes Opus), aos executores (Sonnet/Haiku) e aos auditores SONAR. Todo dispatch DEVE pinar `model:` explicitamente; omissão herda o modelo da main session (Fable, 2× Opus em custo) — violação.
 
@@ -274,6 +274,43 @@ Referência: CLAUDE.md Recovery Protocol; `feedback_agent_teams_workflow.md` R5;
 
 ---
 
+<!-- TRIAGE_CONTRACT_BEGIN -->
+## Article XI — Triagem pré-remediação
+
+Antes de qualquer remediação, o coordinator dispara triagem quando `totalFailures >= 10` ou quando o predicado herdado/exceção é completo: a full suite não é zero, a comparação semântica registra `shared >= 1`, a integração seria bloqueada pelo gate e o operador considera integrar sem tornar a full suite verde. A triagem usa exatamente um agente, uma tentativa e somente evidências existentes na allowlist: arquivos sob `.soma/diagnostics/<source-run>/` e artefatos de dispatch, checkpoint ou handoff referenciados por esse run. O executor usa apenas parsers locais determinísticos, não executa remediação e só pode escrever o relatório `.soma/diagnostics/<runId>/pre-remediation-triage.json`.
+
+São proibidos rede, mutação Git, package manager, test runner, build, lint, install, product CLI, execução do produto e qualquer arquivo escrito além do relatório. Dispatch, checkpoint e handoff são ações posteriores do coordinator; não há novo gate no CLI e o limite global de tokens e a full suite ficam fora do escopo desta regra.
+
+Cada identidade falha é mapeada exatamente uma vez. A chave de cluster é `(componente proprietário, assinatura normalizada, causa candidata)`; causas só são independentes quando não compartilham essa chave nem uma dependência causal documentada. Cada cluster registra `count`, identidades, prova com `path` e `sha256`, confiança `VERIFIED`, `INFERENCE` ou `HYPOTHESIS`, causa e acoplamento `low`, `medium` ou `high`. Cada prova contém identidade normalizada e `expected`/`actual` ou assinatura de erro; a soma dos counts fecha `totalFailures` e `unmappedCount` é zero.
+
+O relatório mínimo contém `runId`, `sourceRunId`, `inputs`, `totalFailures`, `clusters`, `unmappedCount`, `decision` e `blockers`; cada input registra `path` e `sha256`. Nove falhas não disparam o gatilho numérico; dez falhas disparam. `shared=0` não satisfaz o gatilho herdado; `shared=1` satisfaz quando os demais predicados também são verdadeiros. `GO` só é válido com no máximo três causas independentes, todas conhecidas, com acoplamento `low` ou `medium`, e `unmappedCount=0`. Acoplamento `high`, confiança `HYPOTHESIS` ou `unmappedCount>0` força `DEFER`; qualquer outra condição fora dos limites também força `DEFER`. `DEFER` exige checkpoint e handoff duráveis e proíbe correção automática pelo executor.
+
+Tabela decisória de entrada/saída (linhas normativas completas):
+
+| Entrada | Saída |
+|---|---|
+| `totalFailures=9` e predicado herdado completo ausente | triagem não obrigatória |
+| `totalFailures=10` | `TRIAGE_REQUIRED` |
+| `shared=0` | predicado herdado não satisfeito |
+| `shared>=1`, full suite não zero, integração bloqueada e exceção considerada | `TRIAGE_REQUIRED` |
+| até 3 causas independentes, todas `low`/`medium`, sem `HYPOTHESIS`, `unmappedCount=0` | `GO` |
+| 4 ou mais causas, acoplamento `high`, qualquer `HYPOTHESIS` ou `unmappedCount>0` | `DEFER` |
+<!-- TRIAGE_CONTRACT_END -->
+
+### (a) Statement
+A triagem pré-remediação é obrigatória quando `totalFailures >= 10` ou quando o predicado herdado/exceção completo se aplica. Exatamente um agente faz uma única tentativa, limitado à allowlist e ao relatório definidos no bloco canônico. O coordinator registra `TRIAGE_REQUIRED` quando um gatilho se confirma; o relatório da triagem decide então `GO` ou `DEFER`.
+
+### (b) Rationale
+A triagem evita gasto cego baseado em contagem bruta de falhas, exige evidência semântica antes da remediação e preserva uma retomada durável quando a decisão é `DEFER`.
+
+### (c) Enforcement mechanism (HARD)
+O teste `core/scripts/__tests__/pre-remediation-triage-gate.test.cjs` verifica igualdade textual 4/4 e a tabela decisória completa. O coordinator registra `dispatch-record begin` antes do Agent e `dispatch-record end` antes da transição; `DEFER` bloqueia a remediação e exige checkpoint e handoff posteriores pelo coordinator. Nenhum hook ou novo gate CLI é criado por este Article.
+
+### (d) Violation handling
+Evidência incompleta ou qualquer condição fora dos limites de `GO` força `DEFER`. O coordinator publica checkpoint e handoff duráveis, e o executor não executa correção automática.
+
+---
+
 ## Articles cortados (considerados e rejeitados)
 
 > **Nota de nomenclatura (F0.2, 2026-08-14):** esta seção reusava os rótulos "Article XI/XII" para
@@ -323,7 +360,7 @@ Alinhado com Self-Maintenance Protocol do CLAUDE.md: quando uma correção do us
 
 ## Fim do documento
 
-Ao ler esta Constitution como subagent, confirme no seu output inicial: "Constitution v1.3.0 lida; executando sob Articles I-X e XII."
+Ao ler esta Constitution como subagent, confirme no seu output inicial: "Constitution v1.4.0 lida; executando sob Articles I-XII."
 
 > **Manutenção desta linha (instituído em F0.2, 2026-08-14):** esta linha estava stale desde a v1.1.0 —
 > dizia "v1.0.0 / Articles I-X" enquanto o header do topo já marcava v1.2.0 e o Article XII estava
