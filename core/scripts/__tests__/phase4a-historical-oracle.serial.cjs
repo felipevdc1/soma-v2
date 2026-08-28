@@ -7,6 +7,7 @@ const assert = require('node:assert/strict');
 const { spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
+const { validateHistoricalOracle } = require('../lib/phase4a-historical-oracle-validator.cjs');
 
 const REPO_ROOT = path.resolve(__dirname, '../../..');
 const SOMA_HOME = process.env.SOMA_HOME || path.join(REPO_ROOT, 'core');
@@ -43,23 +44,25 @@ function runTestsBridge(files) {
     encoding: 'utf8', timeout: 300000, maxBuffer: 16 * 1024 * 1024, env,
   });
   const raw = (result.stdout || '') + (result.stderr || '');
-  const testsMatch = raw.match(/# tests (\d+)/);
-  const passMatch = raw.match(/# pass (\d+)/);
-  const failMatch = raw.match(/# fail (\d+)/);
+  const lastTotal = field => {
+    const matches = [...raw.matchAll(new RegExp(`^# ${field} (\\d+)$`, 'gm'))];
+    return matches.length > 0 ? Number(matches[matches.length - 1][1]) : null;
+  };
   return {
-    tests: testsMatch ? parseInt(testsMatch[1]) : null,
-    pass: passMatch ? parseInt(passMatch[1]) : null,
-    fail: failMatch ? parseInt(failMatch[1]) : null,
+    exitCode: result.status,
+    signal: result.signal || null,
+    tests: lastTotal('tests'),
+    pass: lastTotal('pass'),
+    fail: lastTotal('fail'),
+    skipped: lastTotal('skipped'),
+    cancelled: lastTotal('cancelled'),
+    todo: lastTotal('todo'),
     raw,
   };
 }
 
 test('phase4a-regression: fixed Phase 2+3 fixture baseline still passes', { timeout: 300000 }, () => {
-  const p23Files = PHASE2_AND_3_TEST_FILES.filter(f => fs.existsSync(f));
-
-  assert.ok(p23Files.length > 0, 'Phase 2+3 test files must exist');
-
-  const { tests, pass, fail, raw } = runTestsBridge(p23Files, 'Phase 2+3');
-  assert.equal(fail, 0, `Phase 2+3: must have 0 failures. Got fail=${fail}, pass=${pass}, tests=${tests}\n${raw.slice(-500)}`);
-  assert.equal(tests, 198, `Phase 2+3 fixture baseline must remain 198 tests. Got ${tests}`);
+  validateHistoricalOracle({ expectedFiles: PHASE2_AND_3_TEST_FILES, fileExists: fs.existsSync });
+  const result = runTestsBridge(PHASE2_AND_3_TEST_FILES);
+  validateHistoricalOracle({ expectedFiles: PHASE2_AND_3_TEST_FILES, fileExists: fs.existsSync, result });
 });
