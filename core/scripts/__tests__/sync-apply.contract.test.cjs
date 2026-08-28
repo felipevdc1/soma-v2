@@ -39,7 +39,8 @@ const crypto = require('node:crypto');
 
 // ---- Constants ----
 
-const SOMA_HOME = path.join(os.homedir(), '.soma-v2');
+const REPO_ROOT = path.resolve(__dirname, '../../..');
+const SOMA_HOME = path.join(REPO_ROOT, 'core');
 const SANDBOX_PREFIX = '/tmp/soma-v2-test';
 const SYNC_SCRIPT = 'scripts/sync.cjs';
 

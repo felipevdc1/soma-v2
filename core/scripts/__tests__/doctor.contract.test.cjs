@@ -129,11 +129,19 @@ test('doctor: --quiet --verbose returns INVALID_ARGS (exit code 2)', () => {
 // ----- Exit code contract tests -----
 
 test('doctor: exit code 1 when drift detected', () => {
-  // Real ~/.soma-v2 has known drifts (D1/D2/D3)
-  const { somaDir } = createFixture();
+  const { dir, somaDir } = createFixture();
+  const driftTarget = path.join(dir, 'missing-AGENTS.md');
+  const targetsPath = path.join(somaDir, 'adapters', 'codex', 'install-targets.json');
+  const targets = JSON.parse(fs.readFileSync(targetsPath, 'utf8'));
+  targets.entries = [{
+    block_id: 'block.codex.AGENTS.hyd-v2',
+    source_doc: 'docs/hyd-v2.md',
+    target_path: driftTarget,
+    target_anchor_id: 'block.codex.AGENTS.hyd-v2'
+  }];
+  fs.writeFileSync(targetsPath, JSON.stringify(targets));
   const result = runDoctor(['--json'], somaDir);
-  // With real state, drifts exist, should be exit 1
-  assert.equal(result.status, 1, `Expected exit 1 with drifts, got ${result.status}`);
+  assert.equal(result.status, 1, `Expected exit 1 with a fixture drift, got ${result.status}`);
 });
 
 test('doctor: exit code 0 when no drifts (fixture with all in sync)', () => {

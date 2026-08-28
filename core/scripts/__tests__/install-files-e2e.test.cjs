@@ -304,8 +304,12 @@ test('T-09 sanity: the real install-targets.json declares the expected shape bef
   assert.ok(fileEntries.length >= 30, `expected at least 30 real file entries, got ${fileEntries.length}`);
   assert.ok(blockEntries.length >= 3, `expected at least 3 real block entries, got ${blockEntries.length}`);
   assert.ok(
-    !targets.entries.some((e) => e.kind === 'file' && /soma-run\.md$/.test(e.source_path)),
-    'AC-12: soma-run.md must never be a declared file entry'
+    targets.entries.some((e) =>
+      e.kind === 'file' &&
+      e.source_path === 'adapters/claude/commands/soma-run.md' &&
+      e.target_path === '~/.claude/commands/soma-run.md'
+    ),
+    'the approved universal entry must declare soma-run.md'
   );
   for (const entry of fileEntries) {
     const sourceAbs = path.join(REPO_ROOT, 'core', entry.source_path);

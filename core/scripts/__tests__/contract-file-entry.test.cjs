@@ -23,7 +23,7 @@
  * `os.tmpdir()` on this Mac is NOT `/tmp` (it's `/var/folders/...`) —
  * hardcoding `/tmp` would make this pass without testing anything.
  *
- * @spec [SPEC:AC-01] [SPEC:AC-02] [SPEC:AC-05] [SPEC:AC-12]
+ * @spec [SPEC:AC-01] [SPEC:AC-02] [SPEC:AC-05]
  * @contract CONTRACT-FILE-ENTRY-01
  * @task T-02
  */
@@ -186,21 +186,19 @@ test('CONTRACT-FILE-ENTRY-01 caso 6: kind desconhecido ("directory") e REJEITADO
 });
 
 // ── Case 7 ───────────────────────────────────────────────────────────────
-// o conjunto declarado do adapter `claude` NÃO contém `soma-run.md` (AC-12)
-// — read-only inspection of the real adapter file on disk, never written.
+// O rollout universal aprovado em 2026-08-24/27 declara `soma-run.md` como
+// arquivo inteiro do adapter Claude. Inspeciona apenas a declaração real.
 
-test('CONTRACT-FILE-ENTRY-01 caso 7: o conjunto declarado do adapter claude NAO contem soma-run.md', () => {
+test('CONTRACT-FILE-ENTRY-01 caso 7: o conjunto declarado do adapter claude contem soma-run.md para a entrada universal', () => {
   const claudeEntries = readAdapterEntries('claude');
-  for (const entry of claudeEntries) {
-    for (const value of Object.values(entry)) {
-      if (typeof value === 'string') {
-        assert.ok(
-          !value.includes('soma-run.md'),
-          `entry field "${value}" must not reference soma-run.md — AC-12 excludes it by design (see contract §"Exclusao declarada")`
-        );
-      }
-    }
-  }
+  assert.ok(
+    claudeEntries.some((entry) =>
+      entry.kind === 'file' &&
+      entry.source_path === 'adapters/claude/commands/soma-run.md' &&
+      entry.target_path === '~/.claude/commands/soma-run.md'
+    ),
+    'the approved universal entry must declare soma-run.md as a Claude whole-file target'
+  );
 });
 
 // ── Case 8 ───────────────────────────────────────────────────────────────

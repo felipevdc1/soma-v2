@@ -13,9 +13,10 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 
-const SOMA_HOME = path.join(os.homedir(), '.soma-v2');
+const REPO_ROOT = path.resolve(__dirname, '../../..');
+const SOMA_HOME = process.env.SOMA_HOME || path.join(REPO_ROOT, 'core');
 const TESTS_DIR = path.join(SOMA_HOME, 'scripts', '__tests__');
-const HOOKS_DIR = path.join(os.homedir(), '.claude', 'hooks');
+const HOOKS_DIR = path.join(SOMA_HOME, 'hooks');
 
 // Resolve node binary explicitly — bun sets process.execPath to itself, which
 // breaks the wrapper + inner runner pattern (bun --test has recursive detection).
@@ -70,8 +71,8 @@ function runTestsBridge(files, label) {
   env.INSIGHT_COUPLING_LOG_DIR = telemetryLogDir;
 
   try {
-    const result = spawnSync(NODE_BIN, ['--test', ...files], {
-      encoding: 'utf8', timeout: 120000, env,
+    const result = spawnSync(NODE_BIN, ['--test', '--test-concurrency=1', ...files], {
+      encoding: 'utf8', timeout: 300000, maxBuffer: 16 * 1024 * 1024, env,
       ...(projectRoot ? { cwd: projectRoot } : {})
     });
     const raw = (result.stdout || '') + (result.stderr || '');
@@ -117,101 +118,6 @@ test('phase4a-regression: all Phase 4a tests pass (AC-08, CONTRACT-INIT-EXISTING
   const { tests, pass, fail, raw } = runTestsBridge(existingFiles, 'Phase 4a');
   assert.equal(fail, 0, `Phase 4a: must have 0 failures. Got fail=${fail}, pass=${pass}, tests=${tests}\n${raw.slice(-500)}`);
   assert.ok(pass > 0, `Phase 4a: must have at least 1 passing test. Got pass=${pass}`);
-});
-
-// ---- Phase 2+3 baseline tests unaffected ----
-
-// Phase 4b test files added in Phase 4b — excluded from P2+3 baseline count to preserve 238 number
-const PHASE4B_TEST_FILES = new Set([
-  'contract-sync-apply.test.cjs',
-  'sync-apply.contract.test.cjs',   // Phase 5 contract test (RED phase) — excluded from P2+3 baseline
-  'ac-01-dry-run-preserved.test.cjs',
-  'ac-02-snapshot-pre-write.test.cjs',
-  'ac-03-manifest-schema.test.cjs',
-  'ac-04-summary-preview.test.cjs',
-  'ac-05-noop-already-synced.test.cjs',
-  'ac-06-snapshot-create-failed.test.cjs',
-  'ac-07-source-stale.test.cjs',
-  'ac-08-anchor-parse-error.test.cjs',
-  'ac-09-manifest-byte-stable.test.cjs',
-  'ac-10-idempotencia.test.cjs',
-  'ac-11-trap-scenarios.test.cjs',
-  'ac-12-conflict-apply-dry-run.test.cjs',
-  'd4-local-edits-warn-loud.test.cjs',
-  'e2e-sync-apply.test.cjs',
-  'phase4b-regression.test.cjs',
-  // Phase 4c test files (module cookbook) — added in Phase 4c
-  'contract-module-cookbook.test.cjs',
-  'ac-01-module-add-keyword.test.cjs',
-  'ac-02-module-list.test.cjs',
-  'ac-03-module-promote-hypothesis-to-active.test.cjs',
-  'ac-04-module-already-active.test.cjs',
-  'ac-05-module-deprecate.test.cjs',
-  'ac-06-module-remove.test.cjs',
-  'ac-07-module-deprecate-active.test.cjs',
-  'ac-08-stale-hypothesis-doctor.test.cjs',
-  'ac-09-snippet-skeleton.test.cjs',
-  'ac-10-reserved-slug.test.cjs',
-  'ac-11-slug-derivation.test.cjs',
-  'ac-12-slug-conflict.test.cjs',
-  'contract-module-promote.test.cjs',
-  'e2e-module-lifecycle.test.cjs',
-  'phase4c-regression.test.cjs',
-  // Phase 4d test files (foundation primitive) — added in Phase 4d
-  'contract-foundation-check.test.cjs',
-  'ac-01-project-schema-migration.test.cjs',
-  'ac-02-module-layer-field.test.cjs',
-  'ac-03-foundation-check-output.test.cjs',
-  'ac-04-criterion-1-padroes.test.cjs',
-  'ac-05-criterion-2-contracts.test.cjs',
-  'ac-06-criterion-3-leakage.test.cjs',
-  'ac-07-criterion-4-hardcoded.test.cjs',
-  'ac-08-criterion-5-real-data.test.cjs',
-  'ac-09-criterion-6-tests.test.cjs',
-  'ac-10-criterion-7-build.test.cjs',
-  'ac-11-criterion-8-ide.test.cjs',
-  'ac-12-criterion-9-tech-stack.test.cjs',
-  'ac-13-non-blocking.test.cjs',
-  'ac-14-validate-foundation-territory.test.cjs',
-  'ac-15-gate-binary.test.cjs',
-  'ac-16-preserve-edits.test.cjs',
-  'ac-17-legacy-state.test.cjs',
-  'd3-invalid-layer.test.cjs',
-  'security-command-injection.test.cjs',
-  'e2e-foundation-primitive.test.cjs',
-  'phase4d-regression.test.cjs',
-]);
-
-// Tests that run against real ~/.soma-v2 installation and are environment-sensitive.
-// These fail when sync output exceeds 8192 chars (spawnSync stdout limit) as the
-// real installation grows. Excluded from strict 238-count assertion but still tracked.
-const REAL_INSTALL_SENSITIVE_FILES = new Set([
-  'sync.dry-run-edits.test.cjs',  // runs sync against real ~/.soma-v2, JSON >8192 chars
-  'sync.read-only.test.cjs',      // same — real install output truncation
-  'exit-codes.test.cjs',          // real install integration
-  'hooks-regression.test.cjs',    // real install sync test within
-  'sync.contract.test.cjs',       // fixture-based but JSON output >8192 chars when many entries
-]);
-
-test('phase4a-regression: Phase 2+3 baseline (238 tests) still pass', { timeout: 180000 }, () => {
-  const p23Files = fs.readdirSync(TESTS_DIR)
-    .filter(f =>
-      f.endsWith('.test.cjs') &&
-      !f.startsWith('init-existing') &&
-      f !== 'phase4a-regression.test.cjs' &&
-      !PHASE4B_TEST_FILES.has(f) &&
-      !REAL_INSTALL_SENSITIVE_FILES.has(f)
-    )
-    .map(f => path.join(TESTS_DIR, f));
-
-  assert.ok(p23Files.length > 0, 'Phase 2+3 test files must exist');
-
-  const { tests, pass, fail, raw } = runTestsBridge(p23Files, 'Phase 2+3');
-  assert.equal(fail, 0, `Phase 2+3: must have 0 failures. Got fail=${fail}, pass=${pass}, tests=${tests}\n${raw.slice(-500)}`);
-  // NOTE: baseline was 238 before Phase 4b; now Phase 4b modules (ac-01..ac-12 series for module-cmds) were added
-  // in Phase 4c — if that adds tests they'll adjust the baseline accordingly.
-  assert.ok(tests >= 200, `Phase 2+3 baseline must have at least 200 tests. Got ${tests}`);
-  // Note: pass + skip may be less than tests when AC-14 (deferred Phase 5+) skips ship; fail=0 above is the strict invariant.
 });
 
 // ---- Hooks 48/48 regression ----

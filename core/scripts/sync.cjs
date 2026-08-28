@@ -1069,7 +1069,6 @@ function runApplyMode(flags, somaHome, allFindings, totalEntries, adapters, useJ
   // @spec AC-17
   if (process.env.SOMA_SAFE_PATHS_ONLY === '1') {
     const violatingTargets = allFindings
-      .filter(f => f.action === 'insert' || f.action === 'replace' || f.action === 'drift')
       .map(f => f.target_path)
       .filter(tp => tp && !tp.startsWith(SANDBOX_SAFE_PREFIX));
     if (violatingTargets.length > 0) {
